@@ -77,6 +77,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+option(SAO_ENCRYPTED_RUNTIME_BUNDLE
+    "Ship first-party runtime PEs in an authenticated encrypted bundle"
+    ON)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/runtime_names.cmake")
+sao_runtime_initialize()
+
 # The helper keeps its historical build output under bin/<config>/helper for
 # tooling compatibility.  A second, canonical runtime package is staged after
 # a successful helper build so strict bootstrap exercises the same directory
@@ -324,6 +330,17 @@ if (SAO_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
+sao_runtime_apply_output_names()
+foreach (_sao_runtime_name_consumer IN ITEMS
+        sao_plugin_ai_editor
+    sao_ai_editor
+        sao_server_freetier_workshop_client)
+    if (TARGET ${_sao_runtime_name_consumer})
+        target_include_directories(${_sao_runtime_name_consumer} PRIVATE
+            "${SAO_RUNTIME_GENERATED_INCLUDE_DIR}")
+    endif()
+endforeach()
+
 set(_SAO_LAUNCHER_RUNTIME_TARGETS)
 if (TARGET SaoAuto)
     foreach (_sao_launcher_runtime_target IN ITEMS
@@ -344,7 +361,8 @@ if (TARGET SaoAuto)
                 ${_sao_launcher_runtime_target})
         endif()
     endforeach()
-    if (_SAO_LAUNCHER_RUNTIME_TARGETS)
+    if (_SAO_LAUNCHER_RUNTIME_TARGETS AND
+        NOT SAO_ENCRYPTED_RUNTIME_BUNDLE)
         install(TARGETS ${_SAO_LAUNCHER_RUNTIME_TARGETS}
             RUNTIME DESTINATION bin
             COMPONENT ship)
@@ -366,15 +384,16 @@ if (TARGET SaoRtIoHelper)
             "$<TARGET_FILE_DIR:SaoRtIoHelper>"
         COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${SAO_RT_IO_HELPER_CANONICAL_RUNTIME_DIRECTORY}")
-    foreach (_sao_rt_io_helper_runtime_target IN ITEMS
-            sao_license_sdk
-            sao_license_client
-            sao_license_protocol
-            sao_security_driver_loader
-            sao_security_crypto
-            sao_security_anti_debug
-            sao_core)
+    foreach (_sao_rt_io_helper_runtime_target IN LISTS
+            SAO_RUNTIME_HELPER_TARGETS)
         if (TARGET ${_sao_rt_io_helper_runtime_target})
+            get_target_property(_sao_rt_io_helper_runtime_type
+                ${_sao_rt_io_helper_runtime_target} TYPE)
+            if (NOT _sao_rt_io_helper_runtime_type STREQUAL "SHARED_LIBRARY")
+                message(FATAL_ERROR
+                    "Helper runtime stage entry is not a shared DLL: "
+                    "${_sao_rt_io_helper_runtime_target}")
+            endif()
             list(APPEND _SAO_RT_IO_HELPER_RUNTIME_TARGETS
                 ${_sao_rt_io_helper_runtime_target})
             list(APPEND _SAO_RT_IO_HELPER_STAGE_COMMANDS
@@ -392,10 +411,121 @@ if (TARGET SaoRtIoHelper)
             DEPENDS ${_SAO_RT_IO_HELPER_RUNTIME_TARGETS}
             VERBATIM)
         add_dependencies(SaoRtIoHelper sao_rt_io_helper_runtime_stage)
-        install(TARGETS ${_SAO_RT_IO_HELPER_RUNTIME_TARGETS}
-            RUNTIME DESTINATION bin/runtime/helper
-            COMPONENT ship)
+        if (NOT SAO_ENCRYPTED_RUNTIME_BUNDLE)
+            install(TARGETS ${_SAO_RT_IO_HELPER_RUNTIME_TARGETS}
+                RUNTIME DESTINATION bin/runtime/helper
+                COMPONENT ship)
+        endif()
     endif()
+endif()
+
+set(SAO_RUNTIME_BUNDLE_OUTPUT "")
+set(SAO_RUNTIME_BUNDLE_INPUT_TARGETS "")
+set(SAO_RUNTIME_BUNDLE_INPUT_PES "")
+set(SAO_RUNTIME_BUNDLE_FORBIDDEN_SHIP_FILES "")
+set(SAO_RUNTIME_BUNDLE_DEPENDENCY_NAMES "")
+if (SAO_ENCRYPTED_RUNTIME_BUNDLE AND TARGET SaoAuto)
+    if (NOT TARGET SaoBootstrap OR NOT TARGET sao_runtime_pack)
+        message(FATAL_ERROR
+            "Encrypted runtime bundling requires SaoAuto, SaoBootstrap, and sao_runtime_pack")
+    endif()
+
+    set(_sao_runtime_pack_arguments
+        --payload "$<TARGET_FILE:SaoAuto>" "$<TARGET_FILE_NAME:SaoAuto>")
+    set(_sao_runtime_legacy_cleanup_commands)
+    set(SAO_RUNTIME_BUNDLE_INPUT_TARGETS SaoAuto)
+    set(SAO_RUNTIME_BUNDLE_INPUT_PES "$<TARGET_FILE:SaoAuto>")
+    set(SAO_RUNTIME_BUNDLE_FORBIDDEN_SHIP_FILES
+        "bin/$<TARGET_FILE_NAME:SaoAuto>")
+
+    foreach (_sao_runtime_target IN LISTS SAO_RUNTIME_SHARED_TARGETS)
+        if (NOT TARGET ${_sao_runtime_target})
+            message(FATAL_ERROR
+                "Encrypted runtime bundle target is missing: ${_sao_runtime_target}")
+        endif()
+        get_target_property(_sao_runtime_type ${_sao_runtime_target} TYPE)
+        if (NOT _sao_runtime_type STREQUAL "SHARED_LIBRARY")
+            message(FATAL_ERROR
+                "Runtime bundle target is not a shared library: ${_sao_runtime_target}")
+        endif()
+        list(APPEND _sao_runtime_pack_arguments
+            --session "$<TARGET_FILE:${_sao_runtime_target}>"
+                      "$<TARGET_FILE_NAME:${_sao_runtime_target}>")
+        list(APPEND SAO_RUNTIME_BUNDLE_INPUT_TARGETS ${_sao_runtime_target})
+        list(APPEND SAO_RUNTIME_BUNDLE_INPUT_PES
+            "$<TARGET_FILE:${_sao_runtime_target}>")
+        list(APPEND SAO_RUNTIME_BUNDLE_FORBIDDEN_SHIP_FILES
+            "bin/$<TARGET_FILE_NAME:${_sao_runtime_target}>")
+        list(APPEND SAO_RUNTIME_BUNDLE_DEPENDENCY_NAMES
+            "$<TARGET_FILE_NAME:${_sao_runtime_target}>")
+        list(APPEND _sao_runtime_legacy_cleanup_commands
+            COMMAND "${CMAKE_COMMAND}" -E rm -f
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/${_sao_runtime_target}.dll"
+                "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/$<CONFIG>/${_sao_runtime_target}.lib"
+                "${SAO_RT_IO_HELPER_CANONICAL_RUNTIME_DIRECTORY}/${_sao_runtime_target}.dll")
+    endforeach()
+
+    foreach (_sao_helper_target IN LISTS SAO_RUNTIME_HELPER_TARGETS)
+        if (NOT TARGET ${_sao_helper_target})
+            message(FATAL_ERROR
+                "Encrypted helper runtime target is missing: ${_sao_helper_target}")
+        endif()
+        get_target_property(_sao_helper_target_type
+            ${_sao_helper_target} TYPE)
+        if (NOT _sao_helper_target_type STREQUAL "SHARED_LIBRARY")
+            message(FATAL_ERROR
+                "Encrypted helper runtime entry is not a shared DLL: "
+                "${_sao_helper_target}")
+        endif()
+        list(APPEND _sao_runtime_pack_arguments
+            --helper "$<TARGET_FILE:${_sao_helper_target}>"
+                     "$<TARGET_FILE_NAME:${_sao_helper_target}>")
+        list(APPEND SAO_RUNTIME_BUNDLE_INPUT_TARGETS
+            ${_sao_helper_target})
+        list(APPEND SAO_RUNTIME_BUNDLE_FORBIDDEN_SHIP_FILES
+            "bin/runtime/helper/$<TARGET_FILE_NAME:${_sao_helper_target}>")
+    endforeach()
+    list(REMOVE_DUPLICATES SAO_RUNTIME_BUNDLE_INPUT_TARGETS)
+    list(REMOVE_DUPLICATES SAO_RUNTIME_BUNDLE_INPUT_PES)
+    list(REMOVE_DUPLICATES SAO_RUNTIME_BUNDLE_FORBIDDEN_SHIP_FILES)
+    list(REMOVE_DUPLICATES SAO_RUNTIME_BUNDLE_DEPENDENCY_NAMES)
+    list(LENGTH SAO_RUNTIME_BUNDLE_INPUT_TARGETS
+        _sao_runtime_bundle_input_target_count)
+    list(LENGTH SAO_RUNTIME_BUNDLE_INPUT_PES
+        _sao_runtime_bundle_input_pe_count)
+    list(LENGTH SAO_RUNTIME_BUNDLE_DEPENDENCY_NAMES
+        _sao_runtime_bundle_dependency_count)
+    list(LENGTH SAO_RUNTIME_BUNDLE_FORBIDDEN_SHIP_FILES
+        _sao_runtime_bundle_destination_count)
+    if (NOT _sao_runtime_bundle_input_target_count EQUAL 17 OR
+        NOT _sao_runtime_bundle_input_pe_count EQUAL 17 OR
+        NOT _sao_runtime_bundle_dependency_count EQUAL 16 OR
+        NOT _sao_runtime_bundle_destination_count EQUAL 21)
+        message(FATAL_ERROR
+            "Encrypted runtime bundle must contain 17 unique PE inputs and "
+            "21 destination records")
+    endif()
+
+    set(SAO_RUNTIME_BUNDLE_OUTPUT
+        "${CMAKE_BINARY_DIR}/runtime-bundle/$<CONFIG>/${SAO_RUNTIME_BUNDLE_LEAF}")
+    add_custom_command(
+        OUTPUT "${SAO_RUNTIME_BUNDLE_OUTPUT}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${CMAKE_BINARY_DIR}/runtime-bundle/$<CONFIG>"
+        ${_sao_runtime_legacy_cleanup_commands}
+        COMMAND "$<TARGET_FILE:sao_runtime_pack>"
+            --pack "${SAO_RUNTIME_BUNDLE_OUTPUT}"
+            ${_sao_runtime_pack_arguments}
+        COMMAND "$<TARGET_FILE:sao_runtime_pack>"
+            --verify "${SAO_RUNTIME_BUNDLE_OUTPUT}"
+        DEPENDS sao_runtime_pack ${SAO_RUNTIME_BUNDLE_INPUT_TARGETS}
+        COMMENT "Encrypting and authenticating opaque first-party runtime bundle"
+        VERBATIM)
+    add_custom_target(sao_runtime_bundle ALL
+        DEPENDS "${SAO_RUNTIME_BUNDLE_OUTPUT}")
+    install(FILES "${SAO_RUNTIME_BUNDLE_OUTPUT}"
+        DESTINATION bin/runtime
+        COMPONENT ship)
 endif()
 
 # All four roles ship as repository-authoritative SAO2 bundles. The helper
@@ -430,13 +560,23 @@ if (TARGET SaoAuto)
     set(SAO_SHIP_STAGE_DIRECTORY "${CMAKE_BINARY_DIR}/ship" CACHE PATH
         "Temporary install root inspected by sao_release_artifact_audit")
 
-    set(_SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
-        SaoAuto
-        ${_SAO_LAUNCHER_RUNTIME_TARGETS})
+    if (SAO_ENCRYPTED_RUNTIME_BUNDLE)
+        set(_SAO_RELEASE_ENTRY_TARGET SaoBootstrap)
+        set(_SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
+            SaoBootstrap
+            sao_runtime_bundle)
+    else()
+        set(_SAO_RELEASE_ENTRY_TARGET SaoAuto)
+        set(_SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
+            SaoAuto
+            ${_SAO_LAUNCHER_RUNTIME_TARGETS})
+    endif()
     set(_SAO_RELEASE_EXPECTED_FILES
-        "bin/$<TARGET_FILE_NAME:SaoAuto>"
+        "bin/$<TARGET_FILE_NAME:${_SAO_RELEASE_ENTRY_TARGET}>"
         "bin/docs/html/index.html"
         "bin/docs/html/assets/style.css"
+        "bin/docs/html/assets/fonts/SAOUI.ttf"
+        "bin/docs/html/assets/fonts/ZhuZiAYuanJWD.ttf"
         "bin/docs/html/assets/theme.js"
         "bin/docs/html/assets/scrollspy.js"
         "bin/docs/html/assets/particles.js"
@@ -451,6 +591,10 @@ if (TARGET SaoAuto)
         "bin/docs/html/assets/sounds/Popup.SAO.Launcher.wav"
         "bin/docs/html/assets/sounds/Popup.SAO.Menu.wav"
         "bin/docs/html/assets/sounds/Popup.SAO.Panel.wav")
+    if (SAO_ENCRYPTED_RUNTIME_BUNDLE)
+        list(APPEND _SAO_RELEASE_EXPECTED_FILES
+            "bin/runtime/${SAO_RUNTIME_BUNDLE_LEAF}")
+    endif()
     set(_SAO_RELEASE_PLUGIN_ROOT "bin/plugins")
     set(_SAO_RELEASE_EXPECTED_DIRECTORIES
         "${_SAO_RELEASE_PLUGIN_ROOT}")
@@ -467,8 +611,10 @@ if (TARGET SaoAuto)
     if (TARGET sao_plugin_ai_editor)
         list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES
             sao_plugin_ai_editor)
-        list(APPEND _SAO_RELEASE_EXPECTED_FILES
-            "bin/$<TARGET_FILE_NAME:sao_plugin_ai_editor>")
+        if (NOT SAO_ENCRYPTED_RUNTIME_BUNDLE)
+            list(APPEND _SAO_RELEASE_EXPECTED_FILES
+                "bin/$<TARGET_FILE_NAME:sao_plugin_ai_editor>")
+        endif()
     endif()
     if (TARGET sao_ai_editor)
         list(APPEND _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES sao_ai_editor)
@@ -484,6 +630,10 @@ if (TARGET SaoAuto)
             "mcp_management_panel/index.html" "mcp_management_panel/panel.css" "mcp_management_panel/panel.js"
             "workbench/ai_editor_app.html" "workbench/classic-theme.css"
             "workbench/native-bridge.js" "workbench/SOURCE.md")
+        list(APPEND _SAO_AI_EDITOR_REQUIRED_ASSETS
+            "workbench/fonts/SAOUI.ttf" "workbench/fonts/ZhuZiAYuanJWD.ttf"
+            "kernel_map_panel/fonts/SAOUI.ttf" "kernel_map_panel/fonts/ZhuZiAYuanJWD.ttf"
+            "mcp_management_panel/fonts/SAOUI.ttf" "mcp_management_panel/fonts/ZhuZiAYuanJWD.ttf")
         foreach (_sao_ai_editor_asset IN LISTS _SAO_AI_EDITOR_REQUIRED_ASSETS)
             if (_sao_ai_editor_asset STREQUAL "extension_host_shim.js")
                 set(_sao_ai_editor_asset_source "${CMAKE_CURRENT_SOURCE_DIR}/plugins/ai_editor/assets/${_sao_ai_editor_asset}")
@@ -539,27 +689,29 @@ if (TARGET SaoAuto)
         endforeach()
     endif()
     list(REMOVE_DUPLICATES _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES)
-    foreach (_sao_runtime_target IN LISTS _SAO_LAUNCHER_RUNTIME_TARGETS)
-        get_target_property(_sao_runtime_target_type
-            ${_sao_runtime_target} TYPE)
-        if (_sao_runtime_target_type STREQUAL "EXECUTABLE" OR
-            _sao_runtime_target_type STREQUAL "SHARED_LIBRARY" OR
-            _sao_runtime_target_type STREQUAL "MODULE_LIBRARY")
-            list(APPEND _SAO_RELEASE_EXPECTED_FILES
-                "bin/$<TARGET_FILE_NAME:${_sao_runtime_target}>")
-        endif()
-    endforeach()
-    foreach (_sao_helper_runtime_target IN LISTS
-            _SAO_RT_IO_HELPER_RUNTIME_TARGETS)
-        get_target_property(_sao_helper_runtime_target_type
-            ${_sao_helper_runtime_target} TYPE)
-        if (_sao_helper_runtime_target_type STREQUAL "EXECUTABLE" OR
-            _sao_helper_runtime_target_type STREQUAL "SHARED_LIBRARY" OR
-            _sao_helper_runtime_target_type STREQUAL "MODULE_LIBRARY")
-            list(APPEND _SAO_RELEASE_EXPECTED_FILES
-                "bin/runtime/helper/$<TARGET_FILE_NAME:${_sao_helper_runtime_target}>")
-        endif()
-    endforeach()
+    if (NOT SAO_ENCRYPTED_RUNTIME_BUNDLE)
+        foreach (_sao_runtime_target IN LISTS _SAO_LAUNCHER_RUNTIME_TARGETS)
+            get_target_property(_sao_runtime_target_type
+                ${_sao_runtime_target} TYPE)
+            if (_sao_runtime_target_type STREQUAL "EXECUTABLE" OR
+                _sao_runtime_target_type STREQUAL "SHARED_LIBRARY" OR
+                _sao_runtime_target_type STREQUAL "MODULE_LIBRARY")
+                list(APPEND _SAO_RELEASE_EXPECTED_FILES
+                    "bin/$<TARGET_FILE_NAME:${_sao_runtime_target}>")
+            endif()
+        endforeach()
+        foreach (_sao_helper_runtime_target IN LISTS
+                _SAO_RT_IO_HELPER_RUNTIME_TARGETS)
+            get_target_property(_sao_helper_runtime_target_type
+                ${_sao_helper_runtime_target} TYPE)
+            if (_sao_helper_runtime_target_type STREQUAL "EXECUTABLE" OR
+                _sao_helper_runtime_target_type STREQUAL "SHARED_LIBRARY" OR
+                _sao_helper_runtime_target_type STREQUAL "MODULE_LIBRARY")
+                list(APPEND _SAO_RELEASE_EXPECTED_FILES
+                    "bin/runtime/helper/$<TARGET_FILE_NAME:${_sao_helper_runtime_target}>")
+            endif()
+        endforeach()
+    endif()
 
     set(SAO_AUDIT_PROJECT_OWNED_PES)
     function(sao_append_audit_project_owned_executable target destination)
@@ -591,7 +743,7 @@ if (TARGET SaoAuto)
     endfunction()
 
     foreach (_sao_project_owned_executable IN ITEMS
-            SaoAuto SaoAutoUpdateHelper SaoKernelMapMcpServer)
+            ${_SAO_RELEASE_ENTRY_TARGET} SaoAutoUpdateHelper SaoKernelMapMcpServer)
         sao_append_audit_project_owned_executable(
             ${_sao_project_owned_executable} "bin")
     endforeach()
@@ -602,16 +754,18 @@ if (TARGET SaoAuto)
         sao_append_audit_project_owned_executable(
             SaoRtIoHelper "bin/runtime/helper")
     endif()
-    foreach (_sao_project_owned_target IN LISTS _SAO_LAUNCHER_RUNTIME_TARGETS)
-        sao_append_audit_project_owned_library(
-            ${_sao_project_owned_target} "bin")
-    endforeach()
-    foreach (_sao_project_owned_target IN LISTS _SAO_RT_IO_HELPER_RUNTIME_TARGETS)
-        sao_append_audit_project_owned_library(
-            ${_sao_project_owned_target} "bin/runtime/helper")
-    endforeach()
-    if (TARGET sao_plugin_ai_editor)
-        sao_append_audit_project_owned_library(sao_plugin_ai_editor "bin")
+    if (NOT SAO_ENCRYPTED_RUNTIME_BUNDLE)
+        foreach (_sao_project_owned_target IN LISTS _SAO_LAUNCHER_RUNTIME_TARGETS)
+            sao_append_audit_project_owned_library(
+                ${_sao_project_owned_target} "bin")
+        endforeach()
+        foreach (_sao_project_owned_target IN LISTS _SAO_RT_IO_HELPER_RUNTIME_TARGETS)
+            sao_append_audit_project_owned_library(
+                ${_sao_project_owned_target} "bin/runtime/helper")
+        endforeach()
+        if (TARGET sao_plugin_ai_editor)
+            sao_append_audit_project_owned_library(sao_plugin_ai_editor "bin")
+        endif()
     endif()
     list(REMOVE_DUPLICATES SAO_AUDIT_PROJECT_OWNED_PES)
     list(APPEND _SAO_RELEASE_EXPECTED_FILES ${SAO_AUDIT_PROJECT_OWNED_PES})
@@ -627,18 +781,42 @@ if (TARGET SaoAuto)
         VERBATIM
     )
 
-    set(_SAO_RELEASE_AUDIT_DEPENDENCIES sao_release_ship_stage)
-
     get_filename_component(_sao_linker_directory "${CMAKE_LINKER}" DIRECTORY)
     find_program(SAO_DUMPBIN_EXECUTABLE NAMES dumpbin.exe dumpbin
         HINTS "${_sao_linker_directory}")
 
+    set(_SAO_RELEASE_AUDIT_DEPENDENCIES sao_release_ship_stage)
+    if (SAO_ENCRYPTED_RUNTIME_BUNDLE)
+        add_custom_target(sao_runtime_bundle_audit
+            COMMAND "$<TARGET_FILE:sao_runtime_pack>"
+                --verify-inputs "${SAO_RUNTIME_BUNDLE_OUTPUT}"
+                ${_sao_runtime_pack_arguments}
+            COMMAND "${CMAKE_COMMAND}"
+                "-DSAO_RUNTIME_AUDIT_PACKER=$<TARGET_FILE:sao_runtime_pack>"
+                "-DSAO_RUNTIME_AUDIT_BUNDLE=${SAO_RUNTIME_BUNDLE_OUTPUT}"
+                "-DSAO_RUNTIME_AUDIT_SHIP_DIRECTORY=${SAO_SHIP_STAGE_DIRECTORY}"
+                "-DSAO_RUNTIME_AUDIT_BUILD_BOOTSTRAP=$<TARGET_FILE:SaoBootstrap>"
+                "-DSAO_RUNTIME_AUDIT_BOOTSTRAP=${SAO_SHIP_STAGE_DIRECTORY}/bin/$<TARGET_FILE_NAME:SaoBootstrap>"
+                "-DSAO_RUNTIME_AUDIT_PES=${SAO_RUNTIME_BUNDLE_INPUT_PES}"
+                "-DSAO_RUNTIME_AUDIT_FORBIDDEN_SHIP_FILES=${SAO_RUNTIME_BUNDLE_FORBIDDEN_SHIP_FILES}"
+                "-DSAO_RUNTIME_AUDIT_EXPECTED_BUNDLE_LEAF=${SAO_RUNTIME_BUNDLE_LEAF}"
+                "-DSAO_RUNTIME_AUDIT_EXPECTED_PAYLOAD_LEAF=$<TARGET_FILE_NAME:SaoAuto>"
+                "-DSAO_RUNTIME_AUDIT_DUMPBIN=${SAO_DUMPBIN_EXECUTABLE}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/audit_runtime_bundle.cmake"
+            DEPENDS sao_release_ship_stage sao_runtime_bundle
+            COMMENT "Auditing encrypted runtime bundle and opaque PE imports"
+            VERBATIM)
+        set(_SAO_RELEASE_AUDIT_DEPENDENCIES sao_runtime_bundle_audit)
+    endif()
+
     add_custom_target(sao_release_artifact_audit
         COMMAND "${CMAKE_COMMAND}"
-                "-DSAO_AUDIT_BINARY=${SAO_SHIP_STAGE_DIRECTORY}/bin/$<TARGET_FILE_NAME:SaoAuto>"
+                "-DSAO_AUDIT_BINARY=${SAO_SHIP_STAGE_DIRECTORY}/bin/$<TARGET_FILE_NAME:${_SAO_RELEASE_ENTRY_TARGET}>"
                 "-DSAO_AUDIT_SHIP_DIRECTORY=${SAO_SHIP_STAGE_DIRECTORY}"
                 "-DSAO_AUDIT_EXPECTED_FILES=${_SAO_RELEASE_EXPECTED_FILES}"
                 "-DSAO_AUDIT_PROJECT_OWNED_PES=${SAO_AUDIT_PROJECT_OWNED_PES}"
+                "-DSAO_AUDIT_ENCRYPTED_DEPENDENCIES=${SAO_RUNTIME_BUNDLE_DEPENDENCY_NAMES}"
+                "-DSAO_AUDIT_EXPECTED_VERSION=${CMAKE_PROJECT_VERSION}.0"
                 "-DSAO_AUDIT_REQUIRED_DIRECTORIES=${_SAO_RELEASE_EXPECTED_DIRECTORIES}"
                 "-DSAO_AUDIT_INSTALL_MANIFEST=${CMAKE_BINARY_DIR}/install_manifest_ship.txt"
                 "-DSAO_AUDIT_PROVIDER_CONFIG=${SAO_SHIP_STAGE_DIRECTORY}/bin/SaoAuto.provider.json"

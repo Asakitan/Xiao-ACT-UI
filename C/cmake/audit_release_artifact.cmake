@@ -7,6 +7,30 @@ endif()
 if (NOT DEFINED SAO_AUDIT_BINARY OR NOT EXISTS "${SAO_AUDIT_BINARY}")
     message(FATAL_ERROR "SAO_AUDIT_BINARY must name the staged SaoAuto PE")
 endif()
+if (NOT DEFINED SAO_AUDIT_EXPECTED_VERSION OR
+    "${SAO_AUDIT_EXPECTED_VERSION}" STREQUAL "")
+    message(FATAL_ERROR
+        "SAO_AUDIT_EXPECTED_VERSION must name the exact SaoAuto file version")
+endif()
+cmake_path(CONVERT "${SAO_AUDIT_BINARY}" TO_CMAKE_PATH_LIST
+    _SAO_AUDIT_ENTRY_BINARY NORMALIZE)
+string(TOLOWER "${_SAO_AUDIT_ENTRY_BINARY}"
+    _SAO_AUDIT_ENTRY_BINARY_KEY)
+file(STRINGS "${SAO_AUDIT_BINARY}" _sao_entry_version_strings
+    ENCODING UTF-16LE
+    LENGTH_MINIMUM 4
+    LENGTH_MAXIMUM 256)
+foreach (_sao_expected_version_string IN ITEMS
+    "SAO Auto - native C++ launcher" "SAO Auto" "SaoAuto.exe"
+    "${SAO_AUDIT_EXPECTED_VERSION}")
+    list(FIND _sao_entry_version_strings
+        "${_sao_expected_version_string}" _sao_version_string_index)
+    if (_sao_version_string_index EQUAL -1)
+        message(FATAL_ERROR
+            "SaoAuto VERSIONINFO is missing or malformed: "
+            "${_sao_expected_version_string}")
+    endif()
+endforeach()
 
 if (NOT DEFINED SAO_AUDIT_EXPECTED_FILES OR
     "${SAO_AUDIT_EXPECTED_FILES}" STREQUAL "")
@@ -18,6 +42,32 @@ if (NOT DEFINED SAO_AUDIT_PROJECT_OWNED_PES OR
     "${SAO_AUDIT_PROJECT_OWNED_PES}" STREQUAL "")
     message(FATAL_ERROR
         "SAO_AUDIT_PROJECT_OWNED_PES must provide explicit project-owned PE paths")
+endif()
+
+set(_SAO_AUDIT_ENCRYPTED_DEPENDENCIES "")
+if (DEFINED SAO_AUDIT_ENCRYPTED_DEPENDENCIES)
+    foreach (_sao_encrypted_dependency IN LISTS SAO_AUDIT_ENCRYPTED_DEPENDENCIES)
+        string(TOLOWER "${_sao_encrypted_dependency}"
+            _sao_encrypted_dependency_lower)
+        get_filename_component(_sao_encrypted_dependency_stem
+            "${_sao_encrypted_dependency}" NAME_WE)
+        get_filename_component(_sao_encrypted_dependency_extension
+            "${_sao_encrypted_dependency}" EXT)
+        string(LENGTH "${_sao_encrypted_dependency_stem}"
+            _sao_encrypted_dependency_stem_length)
+        if (NOT "${_sao_encrypted_dependency}" STREQUAL
+                "${_sao_encrypted_dependency_lower}" OR
+            NOT _sao_encrypted_dependency_stem_length EQUAL 16 OR
+            NOT "${_sao_encrypted_dependency_stem}" MATCHES "^[0-9a-f]+$" OR
+            NOT "${_sao_encrypted_dependency_extension}" STREQUAL ".dll")
+            message(FATAL_ERROR
+                "Encrypted dependency is not an opaque 16-hex DLL basename: "
+                "${_sao_encrypted_dependency}")
+        endif()
+        list(APPEND _SAO_AUDIT_ENCRYPTED_DEPENDENCIES
+            "${_sao_encrypted_dependency_lower}")
+    endforeach()
+    list(REMOVE_DUPLICATES _SAO_AUDIT_ENCRYPTED_DEPENDENCIES)
 endif()
 
 set(_sao_helper_binary
@@ -447,6 +497,11 @@ set(_SAO_WINDOWS_SYSTEM_DLLS
     wininet.dll winmm.dll wintrust.dll windowsapp.dll ws2_32.dll wtsapi32.dll
     normaliz.dll mswsock.dll nsi.dll ucrtbase.dll xaudio2_9.dll)
 
+string(CONCAT _SAO_BOOTSTRAP_DYNAMIC_CRT_REGEX
+    "^(api-ms-win-crt-[a-z0-9-]+\\.dll|ucrtbase\\.dll|msvcrt\\.dll|"
+    "vcruntime[0-9a-z_]*\\.dll|msvcp[0-9a-z_]*\\.dll|"
+    "concrt[0-9a-z_]*\\.dll)$")
+
 function(sao_audit_is_system_dependency dependency out_is_system)
     string(TOLOWER "${dependency}" _sao_dependency)
     list(FIND _SAO_WINDOWS_SYSTEM_DLLS "${_sao_dependency}" _sao_system_index)
@@ -493,6 +548,27 @@ function(sao_audit_dependency_closure binary_path parent_chain)
     foreach (_sao_dependency_row IN LISTS _sao_dependency_rows)
         string(STRIP "${_sao_dependency_row}" _sao_dependency)
         string(TOLOWER "${_sao_dependency}" _sao_dependency_lower)
+        cmake_path(CONVERT "${binary_path}" TO_CMAKE_PATH_LIST
+            _sao_dependency_binary NORMALIZE)
+        string(TOLOWER "${_sao_dependency_binary}"
+            _sao_dependency_binary_key)
+        if ("${_sao_dependency_binary_key}" STREQUAL
+            "${_SAO_AUDIT_ENTRY_BINARY_KEY}")
+            if (_sao_dependency_lower MATCHES
+                "${_SAO_BOOTSTRAP_DYNAMIC_CRT_REGEX}")
+                message(FATAL_ERROR
+                    "SaoAuto bootstrap imports a dynamic CRT: "
+                    "${_sao_dependency}")
+            endif()
+            sao_audit_is_system_dependency(
+                "${_sao_dependency_lower}" _sao_bootstrap_system_dependency)
+            if (NOT _sao_bootstrap_system_dependency)
+                message(FATAL_ERROR
+                    "SaoAuto bootstrap imports a non-system DLL: "
+                    "${_sao_dependency}")
+            endif()
+            continue()
+        endif()
         sao_audit_find_staged_dependency(
             "${binary_path}" "${_sao_dependency_lower}"
             _sao_staged_dependency)
@@ -500,6 +576,11 @@ function(sao_audit_dependency_closure binary_path parent_chain)
             sao_audit_dependency_closure(
                 "${_sao_staged_dependency}"
                 "${parent_chain} -> ${_sao_dependency}")
+            continue()
+        endif()
+        list(FIND _SAO_AUDIT_ENCRYPTED_DEPENDENCIES
+            "${_sao_dependency_lower}" _sao_encrypted_dependency_index)
+        if (NOT _sao_encrypted_dependency_index EQUAL -1)
             continue()
         endif()
         sao_audit_is_system_dependency(

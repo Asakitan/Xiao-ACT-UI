@@ -18,7 +18,7 @@
 
 #define SAO_VER_COMPANY    "SAO Auto Project"
 #define SAO_VER_PRODUCT_NM "SAO Auto"
-#define SAO_VER_DESC       "SAO Auto — native C++ launcher"
+#define SAO_VER_DESC       "SAO Auto - native C++ launcher"
 #define SAO_VER_COPYRIGHT  "(c) SAO Auto Contributors. All rights reserved."
 #define SAO_VER_INTERNAL   "SaoAuto"
 #define SAO_VER_ORIGINAL   "SaoAuto.exe"
