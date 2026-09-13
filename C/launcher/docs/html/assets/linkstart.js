@@ -84,6 +84,7 @@
     timers.push(id);
   }
   function onPointerDown(e) {
+    if (e.target.closest('[data-guide-close]')) { return; }
     if (!e.isPrimary || e.button !== 0) { return; }
     pressedPointer = e.pointerId;
     e.preventDefault();
@@ -99,8 +100,12 @@
     if (!disposed) { finish(true); }
   }
   function onKeydown(e) {
+    if (e.target.closest('[data-guide-close]') && (e.key === 'Enter' || e.key === ' ')) { return; }
     e.stopPropagation();
-    if (e.key === 'Tab') { e.preventDefault(); }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      overlay.querySelector('[data-guide-close]').focus();
+    }
     if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       finish(true);

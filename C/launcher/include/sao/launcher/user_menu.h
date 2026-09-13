@@ -32,6 +32,8 @@ class UserMenu final {
 
     bool create(const wchar_t* base_dir) noexcept;
     void destroy() noexcept;
+    void beginExit() noexcept;
+    bool sessionEnding() const noexcept { return session_ending_; }
     void bind_hotkey_owner(hotkey::Owner* owner) noexcept;
     void unbind_hotkey_owner(hotkey::Owner* owner) noexcept;
     void processCommandLine(const wchar_t* command_line, bool show_menu_when_empty = true) noexcept;
@@ -44,6 +46,7 @@ class UserMenu final {
     bool addNotificationIcon() noexcept;
     void showContextMenu(const POINT* activation_point = nullptr) noexcept;
     static void menuAction(const char*, const uint8_t*, std::size_t, void*) noexcept;
+    static void menuEvent(int32_t event, void* data) noexcept;
     void openUserGuide() noexcept;
     void showMenuUnavailableError() const noexcept;
     void showUserGuideUnavailableError() const noexcept;
@@ -57,6 +60,8 @@ class UserMenu final {
     bool window_class_registered_ = false;
     std::wstring docs_index_path_;
     hotkey::Owner* hotkey_owner_ = nullptr;
+    bool exiting_ = false;
+    bool session_ending_ = false;
 };
 
 } // namespace sao::launcher

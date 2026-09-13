@@ -2,6 +2,7 @@
 #include "sao/launcher/user_guide_webview.h"
 
 #include "sao/ui/sound.h"
+#include "sao/ui/streaming_flow.h"
 #include "settings_owner_internal.h"
 #include "settings_profiles.h"
 #include "settings_theme_internal.h"
@@ -208,14 +209,6 @@ Json card_node(std::string title, Json children, std::string_view accent = "cyan
                 {"children", std::move(children)}};
 }
 
-Json status_strip_node(std::string label, std::string message, std::string_view accent) {
-    return card_node(
-        "Status / 状态",
-        Json::array({row_node(Json::array(
-            {badge_node(std::move(label), accent), text_node(std::move(message), accent, 24)}))}),
-        accent);
-}
-
 bool key_contains(std::string_view key, std::string_view part) {
     return key.find(part) != std::string_view::npos;
 }
@@ -231,12 +224,15 @@ bool is_numeric_control(std::string_view key) {
 }
 
 int section_index(std::string_view key, const Json& value) {
+    if (key == "streaming_mode" || key_contains(key, "anti_screencap") ||
+        key_contains(key, "capture"))
+        return 4;
     if (key == "panel_themes" || key_contains(key, "theme") || key_contains(key, "appearance") ||
         key_contains(key, "display"))
         return 1;
     if (is_audio_key(key))
         return 3;
-    if (value.is_boolean())
+    if (value.is_boolean() && key != "streaming_mode")
         return 2;
     if (value.is_object() || value.is_array())
         return 4;
@@ -282,6 +278,7 @@ std::string humanize_key(std::string_view key) {
 
 std::string setting_label(std::string_view key) {
     if (key == "sound_enabled") return "UI sound / 界面音效";
+    if (key == "streaming_mode") return "Streaming mode / 直播防截图";
     if (key == "sound_volume") return "Sound volume / 音效音量";
     if (key == "master_volume") return "Master volume / 主音量";
     if (key == "audio_volume" || key == "volume") return "Audio volume / 音频音量";
@@ -334,20 +331,13 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     const std::string_view overview_accent =
         status_code == SAO_STATUS_OK ? (dirty ? "gold" : "ok") : "danger";
     Json overview = Json::array();
-    overview.push_back(status_strip_node(
-        status_code != SAO_STATUS_OK
-            ? "Action failed / 操作失败"
-            : dirty ? "Unsaved draft / 草稿未保存" : "No pending changes / 无待处理更改",
-        std::string(status), overview_accent));
+    overview.push_back(row_node(Json::array({text_node("偏好设置", "title", 40),
+        badge_node(status_code != SAO_STATUS_OK ? "操作失败" : dirty ? "未保存" : "已保存", overview_accent),
+        text_node(std::string(status), "muted", 28)})));
     overview.push_back(text_node(
-        dirty ? "Changes are previewed live but are not saved yet. Apply saves this draft; "
-                "Discard restores the last committed values. / 更改已实时预览但尚未保存；应用会保存草稿，"
-                "丢弃会恢复上次提交的值。"
-              : "Edits are previewed immediately and become a draft until applied. / "
-                "编辑会立即预览，并在应用前保留为草稿。",
-        dirty ? "warn" : "muted", 42));
-    if (!path.empty())
-        overview.push_back(text_node("Settings file / 设置文件: " + std::string(path), "mono", 24));
+        dirty ? "更改已实时预览。应用以保存，或丢弃草稿恢复原值。"
+              : "让 SAO 适合你的工作方式。选择分类调整外观、行为与声音。",
+        dirty ? "warn" : "muted", 28));
 
     settings_theme::PanelTheme theme = settings_theme::PanelTheme::light;
     if (const auto panel_themes = snapshot.find("panel_themes");
@@ -484,27 +474,30 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     }
 
     Json actions = Json::array();
-    actions.push_back(button_node("settings.apply", "应用更改", "settings.apply",
-                                  Json::object(), "primary", false, !dirty));
-    actions.push_back(button_node("settings.cancel", "丢弃草稿", "settings.cancel",
-                                  Json::object(), "ghost", false, !dirty));
     actions.push_back(button_node("settings.defaults", "恢复默认",
                                   "settings.defaults", Json::object(), "ghost"));
     actions.push_back(button_node("settings.refresh", "刷新", kSettingsActionRefresh,
                                   Json::object(), "ghost"));
+    actions.push_back(Json{{"type", "spacer"}, {"weight", 1.0}, {"height", 1}});
+    actions.push_back(button_node("settings.cancel", "丢弃草稿", "settings.cancel",
+                                  Json::object(), "ghost", false, !dirty));
     actions.push_back(button_node("settings.close", "关闭", kSettingsActionClose,
                                   Json::object(), "ghost"));
+    actions.push_back(button_node("settings.apply", "应用更改", "settings.apply",
+                                  Json::object(), "primary", false, !dirty));
     Json footer = row_node(std::move(actions));
     footer["id"] = "settings-footer";
     footer["dock"] = "bottom";
-    footer["height"] = 52;
-    footer["padding"] = 8;
+    footer["height"] = 64;
+    footer["padding"] = 12;
 
     Json nodes = Json::array();
-    Json header = card_node("设置", std::move(overview), overview_accent);
+    Json header = section_node("", std::move(overview), overview_accent);
     header["id"] = "settings-header";
     header["dock"] = "top";
-    header["height"] = 142;
+    header["height"] = 104;
+    header["padding"] = 12;
+    header["gap"] = 4;
     header["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
     nodes.push_back(std::move(header));
     nodes.push_back(std::move(footer));
@@ -513,11 +506,11 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
         navigation.push_back(button_node(
             "settings.section." + std::to_string(index), std::string(kSections[index]),
             "settings.section.select", {{"section", index}},
-            index == selected_section ? "primary" : "ghost", index == selected_section));
-    Json rail = section_node("设置分类", std::move(navigation), "gold");
+                index == selected_section ? "nav-active" : "nav", index == selected_section));
+            Json rail = section_node("PREFERENCES", std::move(navigation), "gold");
     rail["id"] = "settings-category-rail";
-    rail["width"] = 190;
-    rail["min_width"] = 160;
+    rail["width"] = 208;
+    rail["min_width"] = 176;
     rail["min_height"] = 96;
     rail["weight"] = 0;
     rail["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
@@ -538,7 +531,9 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     if (section_children[selected_section].empty())
         section_children[selected_section].push_back(
             text_node("选择分类查看对应设置；切换分类不会丢弃当前草稿。", "muted", 42));
-    Json content = card_node(std::string(kSections[selected_section]),
+    if (selected_section == 0U && !path.empty())
+        section_children[0].push_back(text_node("设置位置  " + std::string(path), "muted", 40));
+    Json content = section_node(std::string(kSections[selected_section]),
                              std::move(section_children[selected_section]),
                              selected_section == 5U ? "gold" : "cyan");
     content["id"] = "settings-category-content";
@@ -551,6 +546,8 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
                          {"layout", "horizontal"},
                          {"dock", "fill"},
                          {"orientation", "horizontal"},
+                         {"padding", 8},
+                         {"gap", 16},
                          {"fallback", {{"layout", "vertical"}, {"threshold_width", 760}}},
                          {"children", Json::array({std::move(rail), std::move(content)})}});
     const auto use_semantic_controls = [](auto&& self, Json& items) -> void {
@@ -887,10 +884,41 @@ sao_status_t restore_runtime_sound(const Json& snapshot) noexcept {
 #endif
 }
 
+#if defined(SAO_SETTINGS_PANEL_UI)
+sao_status_t apply_streaming_mode_runtime(bool enabled) noexcept {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    bool applied = false;
+    const sao_sdk_status_t status =
+        sao_sdk_platform_apply_streaming_mode(enabled ? 1 : 0, &applied);
+    if (applied && status == SAO_SDK_OK)
+        return SAO_STATUS_OK;
+#endif
+    const uint64_t generation = sao_streaming_flow_set_mode(enabled);
+    if (generation == 0 && !sao_streaming_flow_get_mode() && !enabled)
+        return SAO_STATUS_OK;
+    if (generation == 0 || sao_streaming_flow_get_mode() != enabled)
+        return SAO_STATUS_ERR_TIMEOUT;
+    return SAO_STATUS_OK;
+}
+#endif
+
+sao_status_t restore_runtime_streaming(const Json& snapshot) noexcept {
+#if defined(SAO_SETTINGS_PANEL_UI)
+    const auto value = snapshot.find("streaming_mode");
+    if (value != snapshot.end() && !value->is_boolean())
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    return apply_streaming_mode_runtime(value != snapshot.end() && value->get<bool>());
+#else
+    (void)snapshot;
+    return SAO_STATUS_OK;
+#endif
+}
+
 sao_status_t restore_runtime_settings(const Json& snapshot) noexcept {
     const sao_status_t theme_status = restore_runtime_theme(snapshot);
     const sao_status_t sound_status = restore_runtime_sound(snapshot);
-    return first_error(theme_status, sound_status);
+    const sao_status_t streaming_status = restore_runtime_streaming(snapshot);
+    return first_error(theme_status, first_error(sound_status, streaming_status));
 }
 
 sao_status_t rollback_draft_mutation(const settings_owner::SettingsOwner::Lease& owner_lease,
@@ -1282,9 +1310,9 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         const auto current = snapshot.find(key);
         if (current != snapshot.end() && !current->is_boolean())
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid setting");
-        if (current == snapshot.end() && key != "sound_enabled")
+        if (current == snapshot.end() && key != "sound_enabled" && key != "streaming_mode")
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid setting");
-        const bool next = !(current == snapshot.end() ? true : current->get<bool>());
+        const bool next = current == snapshot.end() ? key == "sound_enabled" : !current->get<bool>();
         status = owner_lease->set_value(key, next);
         if (status == SAO_STATUS_OK) {
             sync_draft_snapshot(owner_lease);
@@ -1301,6 +1329,13 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                     status = first_error(runtime_status, rollback_status);
                 } else if (next) {
                     (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
+                }
+            } else if (key == "streaming_mode") {
+                const sao_status_t runtime_status = apply_streaming_mode_runtime(next);
+                if (runtime_status != SAO_STATUS_OK) {
+                    const sao_status_t rollback_status = rollback_draft_mutation(
+                        owner_lease, snapshot, owner_dirty_before, dirty);
+                    status = first_error(runtime_status, rollback_status);
                 }
             }
         }

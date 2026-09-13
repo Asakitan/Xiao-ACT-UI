@@ -15,6 +15,7 @@
 #include "sao/ui/compositor.h"
 #include "sao/ui/dialog.h"
 #include "sao/ui/panel.h"
+#include "menu_panel_toggle.h"
 #endif
 
 #include <cstddef>
@@ -161,6 +162,8 @@ UserMenu::~UserMenu() noexcept {
 
 bool UserMenu::create(const wchar_t* base_dir) noexcept {
     destroy();
+    exiting_ = false;
+    session_ending_ = false;
     if (!base_dir || !*base_dir)
         return false;
     if (!buildUserDocsIndexPath(base_dir, docs_index_path_))
@@ -204,6 +207,7 @@ void UserMenu::destroy() noexcept {
     if (menu_panel_) {
         auto panel = static_cast<sao_ui_panel_handle_t>(menu_panel_);
         (void)sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+        (void)sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
         sao_ui_panel_destroy(panel);
         menu_panel_ = nullptr;
     }
@@ -241,7 +245,7 @@ void UserMenu::unbind_hotkey_owner(hotkey::Owner* owner) noexcept {
 }
 
 void UserMenu::processCommandLine(const wchar_t* command_line, bool show_menu_when_empty) noexcept {
-    if (!window_ || command_line == nullptr)
+    if (exiting_ || !window_ || command_line == nullptr)
         return;
     AppState command_state{};
     bool should_exit = false;
@@ -280,6 +284,18 @@ LRESULT CALLBACK UserMenu::windowProc(HWND window, UINT message, WPARAM w_param,
 
 LRESULT UserMenu::handleMessage(HWND window, UINT message, WPARAM w_param,
                                 LPARAM l_param) noexcept {
+    if (message == WM_QUERYENDSESSION) {
+        session_ending_ = true;
+        return TRUE;
+    }
+    if (message == WM_ENDSESSION) {
+        session_ending_ = w_param != 0;
+        if (session_ending_) PostQuitMessage(0);
+        return 0;
+    }
+    if (exiting_ && (message == WM_COPYDATA || message == kNotificationMessage ||
+                    message == taskbar_created_message_ || message == WM_CLOSE))
+        return 0;
     if (message == WM_COPYDATA) {
         const auto* copy = reinterpret_cast<const COPYDATASTRUCT*>(l_param);
         if (copy == nullptr || copy->dwData != kSingleInstanceCopyDataTag ||
@@ -382,14 +398,27 @@ bool UserMenu::addNotificationIcon() noexcept {
 }
 
 void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
+    if (exiting_) return;
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
     const auto compositor = borrow_platform_compositor();
     if (!compositor) { showMenuUnavailableError(); return; }
     auto panel = static_cast<sao_ui_panel_handle_t>(menu_panel_);
+    if (panel) {
+        SaoPanelState state{};
+        if (sao_ui_panel_get_state(panel, &state) == SAO_STATUS_OK && state.visible) {
+            if (sao_ui_panel_set_visible(panel, false) != SAO_STATUS_OK)
+                showMenuUnavailableError();
+#ifndef NDEBUG
+            if (sao_ui_panel_get_state(panel, &state) == SAO_STATUS_OK)
+                std::fprintf(stderr, "USER_MENU_VISIBLE=%d reason=toggle\n", state.visible ? 1 : 0);
+#endif
+            return;
+        }
+    }
     if (!panel) {
         SaoPanelConfig config{};
         config.panel_id_utf8 = "sao.user-menu"; config.title_utf8 = "SAO Auto";
-        config.default_width = 400; config.default_height = 390;
+        config.default_width = 400; config.default_height = 440;
         config.min_width = 340; config.min_height = 340;
         config.show_titlebar = true; config.show_close_button = true;
         config.movable = true; config.single_instance = true;
@@ -403,11 +432,14 @@ void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
           {"type":"button","id":"user.hotkeys","label":"快捷键  /  录入与冲突检查","action":"hotkeys","height":46},
           {"type":"button","id":"user.guide","label":"用户指南  /  离线手册","action":"guide","height":46},
           {"type":"text","text":"关闭此面板不会退出 SAO Auto。","style":"muted","height":32},
+          {"type":"button","id":"user.close","label":"关闭菜单","action":"close","height":40},
           {"type":"button","id":"user.exit","label":"退出 SAO Auto","action":"exit","style":"danger","height":40}
         ]})";
         if (sao_ui_panel_set_action_handler(panel, &UserMenu::menuAction, this) != SAO_STATUS_OK ||
+            sao_ui_panel_set_event_handler(panel, &UserMenu::menuEvent, this) != SAO_STATUS_OK ||
             sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(spec), sizeof(spec) - 1) != SAO_STATUS_OK) {
             (void)sao_ui_panel_set_action_handler(panel, nullptr, nullptr);
+            (void)sao_ui_panel_set_event_handler(panel, nullptr, nullptr);
             sao_ui_panel_destroy(panel);
             showMenuUnavailableError(); return;
         }
@@ -420,27 +452,58 @@ void UserMenu::showContextMenu(const POINT* activation_point) noexcept {
     if (sao_ui_overlay_host_get_client_rect(sao_ui_compositor_host(compositor), &client) == SAO_STATUS_OK) {
         (void)sao_ui_panel_set_position(panel,
             std::clamp(static_cast<int>(cursor.x - client.x), 0, std::max(0, client.width - 400)),
-            std::clamp(static_cast<int>(cursor.y - client.y - 390), 0, std::max(0, client.height - 390)));
+            std::clamp(static_cast<int>(cursor.y - client.y - 440), 0, std::max(0, client.height - 440)));
     }
     (void)sao_ui_layer_set_z_order(sao_ui_panel_layer(panel), 2100);
     if (sao_ui_panel_set_visible(panel, true) != SAO_STATUS_OK) showMenuUnavailableError();
+#ifndef NDEBUG
+    SaoPanelState shown{};
+    if (sao_ui_panel_get_state(panel, &shown) == SAO_STATUS_OK)
+        std::fprintf(stderr, "USER_MENU_VISIBLE=%d x=%d y=%d width=%d height=%d\n",
+            shown.visible ? 1 : 0, shown.x, shown.y, shown.width, shown.height);
+#endif
 #else
     (void)activation_point;
     showMenuUnavailableError();
 #endif
 }
 
+void UserMenu::beginExit() noexcept {
+    exiting_ = true;
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (menu_panel_)
+        (void)sao_ui_panel_set_visible(static_cast<sao_ui_panel_handle_t>(menu_panel_), false);
+#endif
+}
+
 void UserMenu::menuAction(const char* action, const uint8_t*, std::size_t, void* data) noexcept {
     auto& menu = *static_cast<UserMenu*>(data);
+    if (menu.exiting_) return;
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
     if (menu.menu_panel_) (void)sao_ui_panel_set_visible(static_cast<sao_ui_panel_handle_t>(menu.menu_panel_), false);
+#ifndef NDEBUG
+    SaoPanelState hidden{};
+    if (menu.menu_panel_ && sao_ui_panel_get_state(static_cast<sao_ui_panel_handle_t>(menu.menu_panel_), &hidden) == SAO_STATUS_OK)
+        std::fprintf(stderr, "USER_MENU_VISIBLE=%d reason=%s\n", hidden.visible ? 1 : 0, action ? action : "none");
 #endif
-    if (!action) return;
+#endif
+    if (!action || std::strcmp(action, "close") == 0) return;
     if (std::strcmp(action, "settings") == 0) {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+        g_settings_menu_status = toggle_menu_panel(settings::kSettingsPanelId,
+            [] { return settings::open_config_panel_status(); }, [] { return settings::close_for_testing(); });
+#else
         g_settings_menu_status = settings::open_config_panel_status();
+#endif
         if (g_settings_menu_status != SAO_STATUS_OK) show_menu_open_failure(menu.window_, "Settings", g_settings_menu_status);
     } else if (std::strcmp(action, "hotkeys") == 0) {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+        g_hotkey_menu_status = toggle_menu_panel(hotkey::kPanelId,
+            [&] { return hotkey::open_config_panel_status(menu.hotkey_owner_); },
+            [&] { return menu.hotkey_owner_ ? menu.hotkey_owner_->close() : SAO_STATUS_ERR_NOT_INITIALIZED; });
+#else
         g_hotkey_menu_status = hotkey::open_config_panel_status(menu.hotkey_owner_);
+#endif
         if (g_hotkey_menu_status != SAO_STATUS_OK) show_menu_open_failure(menu.window_, "Hotkeys", g_hotkey_menu_status);
     } else if (std::strcmp(action, "guide") == 0) {
         menu.openUserGuide();
@@ -449,7 +512,17 @@ void UserMenu::menuAction(const char* action, const uint8_t*, std::size_t, void*
     }
 }
 
+void UserMenu::menuEvent(int32_t event, void* data) noexcept {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (event == SAO_UI_PANEL_EVENT_CLOSE) menuAction("close", nullptr, 0, data);
+#else
+    (void)event; (void)data;
+#endif
+}
+
 void UserMenu::openUserGuide() noexcept {
+    if (exiting_) return;
+    if (userGuideWebViewVisible()) { hideUserGuideWebView(); return; }
     if (!openExistingUserDocsIndex(docs_index_path_.c_str(), window_, false)) {
         showUserGuideUnavailableError();
     }

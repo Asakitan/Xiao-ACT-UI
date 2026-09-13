@@ -10,7 +10,9 @@
 #include <shellapi.h>
 
 #include "hotkey_config_panel.h"
+#include "menu_panel_toggle.h"
 #include "hotkey_manager.h"
+#include "memory_viewer_panel_internal.h"
 #include "plugin_manager_panel_internal.h"
 #include "process_selector_panel_internal.h"
 #include "settings_config_panel.h"
@@ -67,6 +69,7 @@ constexpr int32_t kOpenProcessSelector = 1006;
 constexpr int32_t kOpenLicense = 1007;
 constexpr int32_t kOpenUserMenu = 1008;
 constexpr int32_t kOpenAboutGuide = 1009;
+constexpr int32_t kOpenMemoryViewer = 1010;
 
 void require(sao_status_t status,
              const std::source_location source = std::source_location::current()) {
@@ -106,6 +109,7 @@ struct Options {
     bool local_backend_fixture{};
     bool intro{};
     bool intro_audition{};
+    bool outro{};
     std::filesystem::path workspace{std::filesystem::current_path()};
     std::filesystem::path backend;
     std::filesystem::path settings;
@@ -226,6 +230,8 @@ Options options() {
                 throw std::runtime_error("Unknown production UI page");
         } else if (arg == L"--intro")
             value.intro = true;
+        else if (arg == L"--outro")
+            value.outro = true;
         else if (arg == L"--intro-audition") {
             value.intro = true;
             value.intro_audition = true;
@@ -271,9 +277,15 @@ Options options() {
             throw std::runtime_error(
                 "Usage: sao_ui_preview [--main|--ai-main|--ai-settings] [--page "
                 "root|settings|hotkeys|plugins|workshop|process|license|user|about|link-start] "
-                "[--offline] [--backend EXE|--local-backend] [--intro|--intro-audition] [--workspace PATH] "
+                "[--offline] [--backend EXE|--local-backend] [--intro|--intro-audition|--outro] [--workspace PATH] "
                 "[--settings PATH] [--frame-out BMP_PATH|- --frame-ms MILLISECONDS --offline] "
                 "[--frame-count COUNT]");
+    }
+    if (value.outro && value.intro)
+        throw std::runtime_error("--outro cannot be combined with --intro, --intro-audition, or --page link-start");
+    if (value.outro) {
+        value.offline = true;
+        value.offline_explicit = true;
     }
     if (value.backend_explicit && !value.offline_explicit)
         value.offline = false;
@@ -302,6 +314,7 @@ struct Host {
     sao_ui_fisheye_backdrop_handle_t backdrop{};
     sao_ui_input_router_deep_handle_t keyboard{};
     sao_ui_linkstart_handle_t intro{};
+    bool startup_menu_pending{};
     sao_ai_editor_settings_panel_t ai_settings{};
     sao_ai_editor_main_panel_t ai_main{};
     sao_ai_editor_launcher_t backend{};
@@ -310,6 +323,7 @@ struct Host {
     std::unique_ptr<sao::launcher::hotkey::Owner> hotkey_owner;
     std::unique_ptr<sao::launcher::plugin_manager_panel::Owner> plugin_manager;
     std::unique_ptr<sao::launcher::process_selector_panel::Owner> process_selector;
+    std::unique_ptr<sao::launcher::memory_viewer_panel::Owner> memory_viewer;
     std::unique_ptr<sao::launcher::workshop_panel::Owner> workshop;
 #if defined(SAO_LAUNCHER_LICENSE_PANEL)
     std::unique_ptr<sao::launcher::license_panel::Owner> license;
@@ -322,6 +336,12 @@ struct Host {
     ULONGLONG intro_started{};
     int32_t audition_phase{-1};
     bool audition_flight_reported{};
+    int32_t outro_phase{-1};
+    ULONGLONG outro_elapsed{};
+    bool outro_completed{};
+    bool outro_failed{};
+    uint32_t frame_width{};
+    uint32_t frame_height{};
     bool sdk_bound{};
     bool closing{};
 
@@ -351,6 +371,8 @@ struct Host {
             return host->open_workshop();
         case kOpenProcessSelector:
             return host->open_process_selector();
+        case kOpenMemoryViewer:
+            return host->open_memory_viewer();
         case kOpenLicense:
             return host->open_license();
         case kOpenUserMenu:
@@ -370,12 +392,21 @@ struct Host {
     }
 
     sao_status_t open_launcher_settings() noexcept {
-        return sao::launcher::settings::open_config_panel_status();
+        return sao::launcher::toggle_menu_panel(sao::launcher::settings::kSettingsPanelId,
+            [] { return sao::launcher::settings::open_config_panel_status(); },
+            [] { return sao::launcher::settings::close_for_testing(); });
     }
     sao_status_t open_hotkeys() noexcept {
-        return hotkey_owner ? hotkey_owner->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+        return hotkey_owner ? sao::launcher::toggle_menu_panel(sao::launcher::hotkey::kPanelId,
+            [&] { return hotkey_owner->open(); }, [&] { return hotkey_owner->close(); }) : SAO_STATUS_ERR_NOT_INITIALIZED;
     }
     sao_status_t open_ai_settings() noexcept {
+        if (ai_settings) {
+            bool visible = false;
+            const auto status = sao_ai_editor_settings_panel_is_visible(ai_settings, &visible);
+            if (status != SAO_STATUS_OK) return status;
+            if (visible) return sao_ai_editor_settings_panel_hide(ai_settings);
+        }
         if (ai_settings == nullptr) {
             const sao_status_t status =
                 sao_ai_editor_settings_panel_create(compositor, backend, &ai_settings);
@@ -388,6 +419,12 @@ struct Host {
         return status;
     }
     sao_status_t open_ai_main() noexcept {
+        if (ai_main) {
+            bool visible = false;
+            const auto status = sao_ai_editor_main_panel_is_visible(ai_main, &visible);
+            if (status != SAO_STATUS_OK) return status;
+            if (visible) return sao_ai_editor_main_panel_hide(ai_main);
+        }
         sao::launcher::hideUserGuideWebView();
         if (ai_main == nullptr) {
             const sao_status_t status =
@@ -401,17 +438,25 @@ struct Host {
         return status;
     }
     sao_status_t open_plugin_manager() noexcept {
-        return plugin_manager ? plugin_manager->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+        return plugin_manager ? sao::launcher::toggle_menu_panel(sao::launcher::plugin_manager_panel::kPanelId.data(),
+            [&] { return plugin_manager->open(); }, [&] { return plugin_manager->close(); }) : SAO_STATUS_ERR_NOT_INITIALIZED;
     }
     sao_status_t open_workshop() noexcept {
-        return workshop ? workshop->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+        return workshop ? sao::launcher::toggle_menu_panel(sao::launcher::workshop_panel::kPanelId,
+            [&] { return workshop->open(); }, [&] { return workshop->hide(); }) : SAO_STATUS_ERR_NOT_INITIALIZED;
     }
     sao_status_t open_process_selector() noexcept {
-        return process_selector ? process_selector->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+        return process_selector ? sao::launcher::toggle_menu_panel(sao::launcher::process_selector_panel::kPanelId,
+            [&] { return process_selector->open(); }, [&] { return process_selector->close(); }) : SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    sao_status_t open_memory_viewer() noexcept {
+        return memory_viewer ? sao::launcher::toggle_menu_panel(sao::launcher::memory_viewer_panel::kPanelId,
+            [&] { return memory_viewer->open(); }, [&] { return memory_viewer->close(); }) : SAO_STATUS_ERR_NOT_INITIALIZED;
     }
     sao_status_t open_license() noexcept {
 #if defined(SAO_LAUNCHER_LICENSE_PANEL)
-        return license ? license->open() : SAO_STATUS_ERR_NOT_INITIALIZED;
+        return license ? sao::launcher::toggle_menu_panel(sao::launcher::license_panel::kPanelId,
+            [&] { return license->open(); }, [&] { return license->close(); }) : SAO_STATUS_ERR_NOT_INITIALIZED;
 #else
         return SAO_STATUS_ERR_NOT_INITIALIZED;
 #endif
@@ -423,6 +468,10 @@ struct Host {
         return SAO_STATUS_OK;
     }
     sao_status_t open_about_guide() noexcept {
+        if (sao::launcher::userGuideWebViewVisible()) {
+            sao::launcher::hideUserGuideWebView();
+            return SAO_STATUS_OK;
+        }
         return sao::launcher::openUserDocsIndex(base_dir.c_str(), window)
                    ? SAO_STATUS_OK
                    : SAO_STATUS_ERR_NOT_FOUND;
@@ -495,6 +544,12 @@ struct Host {
             if (status != SAO_STATUS_OK)
                 return status;
             workshop.reset();
+        }
+        if (memory_viewer != nullptr) {
+            const sao_status_t status = memory_viewer->take_offline();
+            if (status != SAO_STATUS_OK)
+                return status;
+            memory_viewer.reset();
         }
         if (process_selector != nullptr) {
             const sao_status_t status = process_selector->take_offline();
@@ -575,9 +630,12 @@ struct Host {
     void sync_backdrop(uint32_t elapsed) {
         if (!backdrop || !entity)
             return;
+        bool intro_active = false;
+        if (intro != nullptr)
+            require(sao_ui_linkstart_is_active(intro, &intro_active));
         SaoUiEntityShellSnapshot snapshot{};
         require(sao_ui_entity_shell_get_snapshot(entity, &snapshot));
-        if (snapshot.menu_visible && snapshot.overlay_visible) {
+        if (!intro_active && snapshot.menu_visible && snapshot.overlay_visible) {
             RECT rect{};
             if (GetClientRect(window, &rect) && rect.right > 0 && rect.bottom > 0) {
                 SaoUiFisheyeBackdropRect bounds{0, 0, rect.right, rect.bottom};
@@ -650,6 +708,7 @@ struct Host {
             {"AI 设置", "sao:settings", kOpenAiSettings, true, {false, false, false}},
             {"创意工坊", "sao:workshop", kOpenWorkshop, true, {false, false, false}},
             {"进程选择", "sao:process", kOpenProcessSelector, true, {false, false, false}},
+            {"内存查看器", "sao:process", kOpenMemoryViewer, true, {false, false, false}},
         };
         static constexpr SaoUiMenuItem plugins[] = {
             {"插件管理", "sao:plugins", kOpenPluginManager, true, {false, false, false}},
@@ -657,12 +716,12 @@ struct Host {
         };
         static constexpr SaoUiMenuItem appearance[] = {
             {"经典浅色",
-             "sao:home",
+             "sao:sun",
              SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT,
              true,
              {false, false, false}},
             {"经典深色",
-             "sao:lock",
+             "sao:moon",
              SAO_UI_ENTITY_ACTION_SET_ALL_DARK,
              true,
              {false, false, false}},
@@ -728,7 +787,53 @@ struct Host {
         require(sao_ui_entity_shell_set_roots(entity, roots, std::size(roots)));
     }
 
+    void show_linkstart() {
+        RECT rect{};
+        GetClientRect(window, &rect);
+        SaoUiLinkStartConfig start{sizeof(SaoUiLinkStartConfig),
+                                   static_cast<uint32_t>(rect.right),
+                                   static_cast<uint32_t>(rect.bottom), 0, nullptr};
+        require(sao_ui_linkstart_create(compositor, nullptr, &start, &intro));
+        require(sao_ui_linkstart_resize(intro, static_cast<uint32_t>(rect.right),
+                                        static_cast<uint32_t>(rect.bottom),
+                                        sao_ui_overlay_host_current_dpi(overlay)));
+        require(config.outro ? sao_ui_linkstart_show_outro(intro)
+                             : sao_ui_linkstart_show(intro));
+        intro_started = GetTickCount64();
+        report_outro(0);
+    }
+
+    void report_outro(uint32_t elapsed) {
+        if (!config.outro || intro == nullptr || outro_completed)
+            return;
+        outro_elapsed += elapsed;
+        SaoUiLinkStartPhase phase = SAO_UI_LINKSTART_PHASE_HIDDEN;
+        float progress = 0.0F;
+        require(sao_ui_linkstart_get_phase(intro, &phase, &progress));
+        if (outro_phase != phase) {
+            std::fprintf(stderr, "outro phase=%d elapsed_ms=%llu wall_ms=%llu\n",
+                         static_cast<int>(phase), outro_elapsed, GetTickCount64() - intro_started);
+            outro_phase = phase;
+        }
+        bool active = false;
+        require(sao_ui_linkstart_is_active(intro, &active));
+        if (!active) {
+            SaoUiLinkStartCompletionReason reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+            require(sao_ui_linkstart_poll_completion(intro, &reason));
+            outro_completed = true;
+            outro_failed = outro_failed || reason != SAO_UI_LINKSTART_COMPLETION_OUTRO;
+            std::fprintf(stderr, "outro completion=%d elapsed_ms=%llu wall_ms=%llu failed=%d\n",
+                         static_cast<int>(reason), outro_elapsed,
+                         GetTickCount64() - intro_started, outro_failed ? 1 : 0);
+            if (config.frame_out.empty())
+                closing = true;
+        }
+        std::fflush(stderr);
+    }
+
     void initialize() {
+        if (config.outro)
+            require(sao_ui_sound_set_enabled(false));
         if (config.backend_explicit && !config.offline) {
             std::filesystem::path backend_workspace = config.workspace;
             if (config.local_backend_fixture) {
@@ -759,6 +864,14 @@ struct Host {
         host.title_utf16 = L"SAO Classic — production UI shell";
         require(sao_ui_overlay_host_create(&host, &overlay));
         require(sao_ui_compositor_create(overlay, nullptr, &compositor));
+        if (config.outro) {
+            resize();
+            show_linkstart();
+            last_tick = GetTickCount64();
+            if (!SetTimer(window, kUiService, 16, nullptr))
+                throw std::runtime_error("UI timer unavailable");
+            return;
+        }
         require(sao_ui_fisheye_backdrop_create(compositor, &backdrop));
         require_sdk(sao_sdk_platform_bind_ui_compositor(compositor));
         sdk_bound = true;
@@ -768,6 +881,7 @@ struct Host {
         plugin_manager = std::make_unique<sao::launcher::plugin_manager_panel::Owner>(compositor);
         process_selector =
             std::make_unique<sao::launcher::process_selector_panel::Owner>(compositor, nullptr);
+        memory_viewer = std::make_unique<sao::launcher::memory_viewer_panel::Owner>(compositor);
         workshop = std::make_unique<sao::launcher::workshop_panel::Owner>(
             compositor, config.workspace, detached_workshop_operations());
 #if defined(SAO_LAUNCHER_LICENSE_PANEL)
@@ -816,7 +930,7 @@ struct Host {
             require(open_process_selector());
         if (config.initial_surface == InitialSurface::license)
             require(open_license());
-        if (config.initial_surface == InitialSurface::user)
+        if (config.initial_surface == InitialSurface::user && !config.intro)
             require(open_user_menu());
         if (config.initial_surface == InitialSurface::files) {
             require(sao_ui_file_picker_create(compositor, &file_picker));
@@ -827,8 +941,12 @@ struct Host {
         }
         if (config.initial_surface == InitialSurface::about)
             require(open_about_guide());
-        if (config.initial_surface == InitialSurface::root)
+        if (config.initial_surface == InitialSurface::root && !config.intro)
             require(sao_ui_entity_shell_home(entity));
+        if (config.intro) {
+            startup_menu_pending = true;
+            require(sao_ui_entity_shell_insert(entity));
+        }
         resize();
         if (config.intro) {
             if (!config.frame_out.empty())
@@ -838,42 +956,67 @@ struct Host {
                 require(sao_ui_sound_set_volume(55));
             } else
                 require(sao_ui_sound_set_enabled(intro_sound_enabled));
-            RECT rect{};
-            GetClientRect(window, &rect);
-            SaoUiLinkStartConfig start{sizeof(SaoUiLinkStartConfig),
-                                       static_cast<uint32_t>(rect.right),
-                                       static_cast<uint32_t>(rect.bottom), 0, nullptr};
-            require(sao_ui_linkstart_create(compositor, nullptr, &start, &intro));
-            require(sao_ui_linkstart_resize(intro, static_cast<uint32_t>(rect.right),
-                                            static_cast<uint32_t>(rect.bottom),
-                                            sao_ui_overlay_host_current_dpi(overlay)));
-            require(sao_ui_linkstart_show(intro));
-            intro_started = GetTickCount64();
+            show_linkstart();
         }
         last_tick = GetTickCount64();
         if (!SetTimer(window, kUiService, 16, nullptr))
             throw std::runtime_error("UI timer unavailable");
     }
 
+    void complete_startup_menu() {
+        if (config.outro || !startup_menu_pending || intro == nullptr)
+            return;
+        bool active = false;
+        require(sao_ui_linkstart_is_active(intro, &active));
+        if (active)
+            return;
+        SaoUiLinkStartCompletionReason reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+        require(sao_ui_linkstart_poll_completion(intro, &reason));
+        startup_menu_pending = false;
+        if (reason != SAO_UI_LINKSTART_COMPLETION_NATURAL &&
+            reason != SAO_UI_LINKSTART_COMPLETION_SKIPPED)
+            return;
+        require(sao_ui_entity_shell_insert(entity));
+        if (!config.intro_audition) {
+            if (config.initial_surface == InitialSurface::user)
+                require(open_user_menu());
+            else if (config.initial_surface == InitialSurface::root)
+                require(sao_ui_entity_shell_home(entity));
+        }
+#ifndef NDEBUG
+        std::fprintf(stderr, "STARTUP_MENU_AFTER_INTRO reason=%d\n", static_cast<int>(reason));
+#endif
+    }
+
     void export_frame() {
         for (int32_t remaining = config.frame_ms; remaining > 0;) {
-            const int32_t step = std::min(remaining, 1000);
-            require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
+            const int32_t step = std::min(remaining, intro != nullptr ? 16 : 1000);
+            if (entity != nullptr)
+                require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
+            if (intro != nullptr) {
+                bool active = false;
+                require(sao_ui_linkstart_is_active(intro, &active));
+                if (active)
+                    require(sao_ui_linkstart_tick(intro, step));
+                report_outro(active ? static_cast<uint32_t>(step) : 0);
+                complete_startup_menu();
+            }
             sync_backdrop(static_cast<uint32_t>(step));
             remaining -= step;
         }
-        if (intro != nullptr && config.frame_ms > 0)
-            require(sao_ui_linkstart_tick(intro, config.frame_ms));
         for (int32_t index = 0; index < config.frame_count; ++index) {
             if (index > 0) {
                 const int32_t step = index * 1000 / 60 - (index - 1) * 1000 / 60;
-                require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
+                if (entity != nullptr)
+                    require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
                 sync_backdrop(static_cast<uint32_t>(step));
                 if (intro != nullptr) {
                     bool active = false;
                     require(sao_ui_linkstart_is_active(intro, &active));
                     if (active)
                         require(sao_ui_linkstart_tick(intro, step));
+                    report_outro(active ? static_cast<uint32_t>(step) : 0);
+                    complete_startup_menu();
                 }
             }
             write_frame();
@@ -887,11 +1030,25 @@ struct Host {
             compositor, nullptr, 0, &width, &height, &bytes);
         if (query != SAO_STATUS_ERR_BUFFER_TOO_SMALL)
             require(query);
+        const bool empty_outro = config.outro && outro_completed && !outro_failed && bytes == 0;
+        if (empty_outro) {
+            RECT client{};
+            if (!GetClientRect(window, &client)) throw std::runtime_error("Outro frame bounds unavailable");
+            width = frame_width != 0 ? frame_width : static_cast<uint32_t>(std::max(0L, client.right));
+            height = frame_height != 0 ? frame_height : static_cast<uint32_t>(std::max(0L, client.bottom));
+            const uint64_t required = static_cast<uint64_t>(width) * height * 4u;
+            if (required > UINT32_MAX - sizeof(BITMAPFILEHEADER) - sizeof(BITMAPINFOHEADER))
+                throw std::runtime_error("Outro frame bounds too large");
+            bytes = static_cast<size_t>(required);
+        }
         if (bytes == 0 || bytes > UINT32_MAX - sizeof(BITMAPFILEHEADER) - sizeof(BITMAPINFOHEADER))
             throw std::runtime_error("Invalid native frame dimensions");
         std::vector<uint8_t> pixels(bytes);
-        require(sao_ui_compositor_snapshot_bgra(compositor, pixels.data(), pixels.size(),
-                                                 &width, &height, &bytes));
+        if (!empty_outro)
+            require(sao_ui_compositor_snapshot_bgra(compositor, pixels.data(), pixels.size(),
+                                                     &width, &height, &bytes));
+        frame_width = width;
+        frame_height = height;
         BITMAPFILEHEADER file{};
         file.bfType = 0x4d42;
         file.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
@@ -950,8 +1107,10 @@ struct Host {
             return;
         }
         const uint32_t elapsed = static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, 1000U));
-        sao::launcher::tickUserGuideWebView();
-        require(sao_ui_entity_shell_tick(entity, elapsed));
+        if (!config.outro)
+            sao::launcher::tickUserGuideWebView();
+        if (entity != nullptr)
+            require(sao_ui_entity_shell_tick(entity, elapsed));
         sync_backdrop(elapsed);
         if (now - last_service >= 50) {
             if (ai_settings != nullptr)
@@ -962,6 +1121,8 @@ struct Host {
                 require_active(plugin_manager->service_ui());
             if (process_selector != nullptr)
                 require_active(process_selector->service_ui());
+            if (memory_viewer != nullptr)
+                require_active(memory_viewer->service_ui());
             if (workshop != nullptr)
                 require_active(workshop->service_ui());
 #if defined(SAO_LAUNCHER_LICENSE_PANEL)
@@ -975,9 +1136,18 @@ struct Host {
             require(sao_ui_linkstart_is_active(intro, &active));
             const auto intro_elapsed = static_cast<int32_t>(
                 std::min<ULONGLONG>(now - last_tick, static_cast<ULONGLONG>(INT32_MAX)));
-            if (active &&
-                sao_ui_linkstart_tick(intro, intro_elapsed) != SAO_STATUS_OK)
-                (void)sao_ui_linkstart_dismiss(intro);
+            if (active) {
+                const sao_status_t status = sao_ui_linkstart_tick(intro, intro_elapsed);
+                if (status != SAO_STATUS_OK) {
+                    if (config.outro) {
+                        outro_failed = true;
+                        std::fprintf(stderr, "outro tick_failed status=%d\n", status);
+                    }
+                    (void)sao_ui_linkstart_dismiss(intro);
+                }
+            }
+            report_outro(active ? static_cast<uint32_t>(intro_elapsed) : 0);
+            complete_startup_menu();
             if (config.intro_audition) {
                 SaoUiLinkStartPhase phase = SAO_UI_LINKSTART_PHASE_HIDDEN;
                 float progress = 0.0F;
@@ -1006,6 +1176,11 @@ struct Host {
         if (!IsIconic(window)) {
             sao_status_t status = sao_ui_compositor_tick(compositor);
             if (status != SAO_STATUS_OK && intro != nullptr) {
+                if (config.outro) {
+                    outro_failed = true;
+                    std::fprintf(stderr, "outro present_failed status=%d\n", status);
+                    std::fflush(stderr);
+                }
                 (void)sao_ui_linkstart_dismiss(intro);
                 status = sao_ui_compositor_tick(compositor);
             }
@@ -1032,6 +1207,11 @@ struct Host {
     }
 
     bool key(const MSG& message) {
+        if (config.outro &&
+            (message.message == WM_KEYDOWN || message.message == WM_KEYUP ||
+             message.message == WM_CHAR || message.message == WM_HOTKEY ||
+             message.message == SAO_UI_NATIVE_TEXT_TAB_MESSAGE))
+            return true;
         if (intro != nullptr &&
             (message.message == WM_KEYDOWN || message.message == WM_KEYUP ||
              message.message == WM_CHAR || message.message == WM_HOTKEY ||
@@ -1041,6 +1221,8 @@ struct Host {
             if (intro_active)
                 return true;
         }
+        if (message.message == WM_HOTKEY && sao::launcher::userGuideWebViewVisible())
+            return true;
         if (message.message == WM_HOTKEY)
             return sao::launcher::hotkey::dispatch_by_native_id(static_cast<int>(message.wParam));
         if (message.message == sao::launcher::hotkey::kCaptureCompletionMessage &&
@@ -1054,6 +1236,11 @@ struct Host {
         const HWND render = static_cast<HWND>(sao_ui_compositor_host_hwnd(compositor));
         if (GetFocus() != render && GetFocus() != window)
             return false;
+        if (sao::launcher::userGuideWebViewVisible()) {
+            if (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE)
+                sao::launcher::hideUserGuideWebView();
+            return true;
+        }
         bool consumed = false;
         const sao_status_t status = sao_ui_input_router_feed_raw_win32(
             keyboard, message.message, message.wParam, message.lParam, &consumed);
@@ -1124,6 +1311,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         std::fprintf(stderr, "Production UI message %u: %s\n", message, error.what());
         std::fflush(stderr);
         SetWindowTextA(window, error.what());
+        if (host->config.outro)
+            host->outro_failed = true;
         host->closing = true;
     }
     return DefWindowProcW(window, message, wp, lp);
@@ -1172,7 +1361,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             if (frame_export) {
                 host.export_frame();
                 require(host.drain_close());
-                code = 0;
+                code = host.outro_failed ? 1 : 0;
             } else {
                 ShowWindow(window, show);
                 MSG message{};
@@ -1190,7 +1379,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                     }
                 }
                 require(host.drain_close());
-                code = received == 0 ? 0 : 1;
+                code = received == 0 && !host.outro_failed ? 0 : 1;
             }
             if (IsWindow(window))
                 DestroyWindow(window);

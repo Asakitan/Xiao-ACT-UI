@@ -261,11 +261,24 @@ bool parseShell(const json& root, const fs::path& base,
     output.enabled = sectionEnabled(*section);
     if (!output.enabled) return true;
     const auto metadata = section->find("metadata");
-    if (metadata == section->end() || !metadata->is_string() ||
-        metadata->get_ref<const std::string&>().empty()) {
+    const auto metadata_path = section->find("metadata_path");
+    if (metadata == section->end() && metadata_path == section->end()) return false;
+    const auto valid_path = [&](const json::const_iterator& value) {
+        return value != section->end() && value->is_string() &&
+            !value->get_ref<const std::string&>().empty();
+    };
+    if ((metadata != section->end() && !valid_path(metadata)) ||
+        (metadata_path != section->end() && !valid_path(metadata_path))) {
         return false;
     }
-    output.metadata_path = resolvePath(base, metadata->get<std::string>()).wstring();
+    const auto selected =
+        metadata_path != section->end() ? metadata_path : metadata;
+    const auto resolved = resolvePath(base, selected->get<std::string>());
+    if (metadata != section->end() && metadata_path != section->end() &&
+        resolvePath(base, metadata->get<std::string>()) != resolved) {
+        return false;
+    }
+    output.metadata_path = resolved.wstring();
     return true;
 }
 
@@ -391,7 +404,6 @@ sao_status_t parseProviderConfigurationFile(
         !parsePlugins(root, path.parent_path(), output.plugins)) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
-    if (output.shell.enabled) return SAO_STATUS_NOT_IMPLEMENTED;
     return SAO_STATUS_OK;
 }
 

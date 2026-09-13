@@ -147,6 +147,8 @@ class App {
     bool user_guide_skip_intro_ = false;
     ULONGLONG user_guide_next_retry_ = 0;
     void serviceFirstRunGuide() noexcept;
+    int playExitAnimation(int exit_code) noexcept;
+    bool exit_animation_started_ = false;
     bool stopAutoUpdate() noexcept;
     HANDLE single_instance_mutex_ = nullptr;
     HANDLE dual_run_driver_mutex_ = nullptr;
@@ -156,6 +158,8 @@ class App {
     bool security_initialized_ = false;
     bool smoke_ready_printed_ = false;
     bool shutdown_called_ = false;
+    bool command_line_exit_requested_ = false;
+    int command_line_exit_code_ = SAO_EXIT_OK;
 };
 
 } // namespace sao::launcher

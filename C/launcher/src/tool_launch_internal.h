@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sao/core/status.h"
+#include "sao/rt_io/proxy.h"
 
 #include <cstdint>
 #include <memory>
@@ -50,6 +51,7 @@ class AiEditorProcessOwner final {
     // child. A failed teardown keeps its gate closed until take_offline()
     // succeeds on a later retry.
     sao_status_t open() noexcept;
+    sao_status_t toggle() noexcept;
     // Owner-thread service for the compositor-backed AI Editor panel. Call
     // from the SaoAuto UI tick after the platform compositor is bound.
     sao_status_t service_ui() noexcept;
@@ -58,6 +60,11 @@ class AiEditorProcessOwner final {
     // compositor owner-thread check is completed before teardown state is
     // mutated.
     sao_status_t take_offline() noexcept;
+    sao_status_t bind_memory_target(sao_rt_io_proxy_handle_t proxy,
+                                    std::uint32_t pid,
+                                    std::uint64_t start_time_100ns,
+                                    std::uint64_t selection_generation) noexcept;
+    sao_status_t clear_memory_target() noexcept;
     // Observation only: updates the published launch/exit snapshot without
     // retiring panel or launcher ownership.
     sao_status_t snapshot(AiEditorLaunchSnapshot& out) const noexcept;

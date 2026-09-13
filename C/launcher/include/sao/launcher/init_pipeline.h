@@ -205,6 +205,9 @@ sao_status_t sao_ui_intro_publish_bootstrap(sao_platform_ctx* ctx,
                                             const SaoUiLinkStartBootstrap* state);
 sao_status_t sao_ui_intro_release_bootstrap(sao_platform_ctx* ctx, int32_t failed);
 sao_status_t sao_ui_intro_pump(sao_platform_ctx* ctx);
+sao_status_t sao_ui_outro_show(sao_platform_ctx* ctx);
+sao_status_t sao_ui_outro_pump(sao_platform_ctx* ctx, int32_t* out_active);
+sao_status_t sao_ui_outro_cancel(sao_platform_ctx* ctx);
 
 // ---------------------------------------------------------------------------
 // RT I/O operator flow.

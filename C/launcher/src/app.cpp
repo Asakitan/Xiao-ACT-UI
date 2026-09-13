@@ -23,6 +23,7 @@
 #ifdef SAO_STATUS_OK
 #undef SAO_STATUS_OK
 #endif
+#include "sao/ui/input_router.h"
 #include "sao/ui/linkstart_intro.h"
 
 #include "launcher_lifecycle.h"
@@ -152,6 +153,8 @@ void logStartupConfiguration(const AppState& state) noexcept {
 
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
 
+constexpr int kBootstrapQuitRequested = -1000;
+
 // Driver/engine bootstrap stages rendered on the Link Start rail while the
 // launcher is still initialising.  Ordering is the historical bring-up order:
 // driver chain, engine surfaces, capture shield, tagWND scrub, plugin
@@ -174,8 +177,13 @@ class IntroBootstrapWorker {
             stages_[stage_count_++] = Stage{caption, step, user_data};
     }
 
-    void start() noexcept {
-        thread_ = std::thread([this] { execute(); });
+    sao_status_t start() noexcept {
+        try {
+            thread_ = std::thread([this] { execute(); });
+            return SAO_STATUS_OK;
+        } catch (...) {
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
     }
 
     void join() noexcept {
@@ -201,11 +209,16 @@ class IntroBootstrapWorker {
 
     void execute() noexcept {
         sao_status_t status = SAO_STATUS_OK;
-        for (uint32_t index = 0; index < stage_count_; ++index) {
-            status = stages_[index].step != nullptr ? stages_[index].step(stages_[index].user_data)
-                                                    : SAO_STATUS_OK;
-            if (status != SAO_STATUS_OK)
-                break;
+        try {
+            for (uint32_t index = 0; index < stage_count_; ++index) {
+                status = stages_[index].step != nullptr
+                             ? stages_[index].step(stages_[index].user_data)
+                             : SAO_STATUS_OK;
+                if (status != SAO_STATUS_OK)
+                    break;
+            }
+        } catch (...) {
+            status = SAO_STATUS_ERR_UNKNOWN;
         }
         result_.store(status, std::memory_order_relaxed);
         finished_.store(true, std::memory_order_release);
@@ -239,7 +252,7 @@ sao_status_t bootstrap_step_wnd_scrub(void* user_data) {
 }
 
 // Publishes the stage currently being bootstrapped to the intro rail.
-void publish_intro_bootstrap(sao_platform_ctx* ctx, uint32_t stage_index, bool failed) {
+sao_status_t publish_intro_bootstrap(sao_platform_ctx* ctx, uint32_t stage_index, bool failed) {
     SaoUiLinkStartBootstrap state{};
     state.struct_size = sizeof(state);
     state.stage_index = stage_index;
@@ -248,34 +261,37 @@ void publish_intro_bootstrap(sao_platform_ctx* ctx, uint32_t stage_index, bool f
     state.flags = failed ? SAO_UI_LINKSTART_BOOTSTRAP_FLAG_FAILED : 0u;
     state.caption_utf8 = stage_index < kBootstrapStageCount ? kBootstrapCaptions[stage_index]
                                                             : kBootstrapCaptions[0];
-    (void)sao_ui_intro_publish_bootstrap(ctx, &state);
+    return sao_ui_intro_publish_bootstrap(ctx, &state);
 }
 
-// Drains the owner-thread window queue and advances the intro one frame.
-// Returns false once WM_QUIT was seen; the quit request is pushed back so the
-// later runMessageLoop() still observes it.
-bool pump_intro_frame(sao_platform_ctx* ctx) {
+// WM_QUIT is pushed back so the later message loop still observes it.
+struct IntroPumpResult {
+    sao_status_t status = SAO_STATUS_OK;
     bool alive = true;
+};
+
+IntroPumpResult pump_intro_frame(sao_platform_ctx* ctx) {
+    IntroPumpResult result{};
     MSG msg{};
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_QUIT) {
             PostQuitMessage(static_cast<int>(msg.wParam));
-            alive = false;
-            continue;
+            result.alive = false;
+            break;
         }
         int32_t handled = 0;
-        if (sao_ui_handle_message(ctx, msg.message, msg.wParam, msg.lParam, &handled) !=
-            SAO_STATUS_OK) {
-            handled = 0;
-        }
+        result.status =
+            sao_ui_handle_message(ctx, msg.message, msg.wParam, msg.lParam, &handled);
+        if (result.status != SAO_STATUS_OK)
+            return result;
         if (!handled) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
-    if (alive)
-        (void)sao_ui_intro_pump(ctx);
-    return alive;
+    if (result.alive)
+        result.status = sao_ui_intro_pump(ctx);
+    return result;
 }
 
 #endif // SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER
@@ -297,6 +313,9 @@ int App::run() {
     int rc = parseCommandLine();
     if (rc != SAO_EXIT_OK) {
         return rc;
+    }
+    if (command_line_exit_requested_) {
+        return command_line_exit_code_;
     }
     smokePrint(state_, "STAGE_ARGS");
     logStartupConfiguration(state_);
@@ -467,6 +486,17 @@ int App::run() {
     // 8.5 + 9 — the driver chain, the engine surfaces, the plugin runtimes and
     // the plugin engines bootstrap underneath the intro animation.
     rc = runBootstrapUnderIntro();
+    if (rc == kBootstrapQuitRequested) {
+        int quit_code = SAO_EXIT_OK;
+        MSG quit_message{};
+        if (PeekMessageW(&quit_message, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE)) {
+            quit_code = static_cast<int>(quit_message.wParam);
+            PostQuitMessage(quit_code);
+        }
+        if (!shutdown())
+            return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown_pending");
+        return finish(quit_code, "bootstrap_quit");
+    }
     if (rc != SAO_EXIT_OK) {
         return fail(rc, L"bootstrap_under_intro", "bootstrap_under_intro");
     }
@@ -577,12 +607,13 @@ int App::run() {
 int App::parseCommandLine() {
     bool should_exit = false;
     int exit_code = SAO_EXIT_OK;
+    command_line_exit_requested_ = false;
+    command_line_exit_code_ = SAO_EXIT_OK;
     if (!::sao::launcher::parseCommandLine(state_, should_exit, exit_code)) {
         return SAO_EXIT_BAD_ARGS;
     }
-    if (should_exit) {
-        return exit_code;
-    }
+    command_line_exit_requested_ = should_exit;
+    command_line_exit_code_ = exit_code;
     return SAO_EXIT_OK;
 }
 
@@ -731,52 +762,92 @@ int App::runBootstrapUnderIntro() {
     // Smoke/operator/safe runs keep the historical order and never present the
     // overlay surface; only an interactive launch is covered by the intro.
     const bool headless = state_.smoke_mode || state_.rt_io_operator || state_.safe_mode;
-    const bool cover_with_intro = !headless && sao_ui_intro_show(platform, 1) == SAO_STATUS_OK;
+    const bool cover_with_intro =
+        !headless && sao_ui_intro_show(platform, 1) == SAO_STATUS_OK;
     bool quit_requested = false;
-    const auto release_intro = [&](bool failed) {
+    const auto release_intro = [&](bool failed) -> sao_status_t {
         if (cover_with_intro && platform != nullptr)
-            (void)sao_ui_intro_release_bootstrap(platform, failed ? 1 : 0);
+            return sao_ui_intro_release_bootstrap(platform, failed ? 1 : 0);
+        return SAO_STATUS_OK;
     };
-    const auto advance_intro = [&]() {
-        if (!quit_requested)
-            quit_requested = !pump_intro_frame(platform);
+    const auto quit_bootstrap = [&]() -> int {
+        return release_intro(true) == SAO_STATUS_OK
+                   ? kBootstrapQuitRequested
+                   : SAO_EXIT_PLATFORM_INIT_FAIL;
+    };
+    const auto fail_bootstrap = [&](int exit_code) -> int {
+        return release_intro(true) == SAO_STATUS_OK
+                   ? exit_code
+                   : SAO_EXIT_PLATFORM_INIT_FAIL;
+    };
+    const auto advance_intro = [&]() -> sao_status_t {
+        if (quit_requested)
+            return SAO_STATUS_OK;
+        const IntroPumpResult result = pump_intro_frame(platform);
+        quit_requested = !result.alive;
+        return result.status;
+    };
+    const auto prepare_intro_stage = [&](uint32_t stage_index) -> sao_status_t {
+        if (cover_with_intro) {
+            const sao_status_t status = publish_intro_bootstrap(platform, stage_index, false);
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+        return advance_intro();
     };
 
     // Stage 1 — driver chain, off the owner thread while the intro animates.
     BootstrapStageContext context{};
     context.cfg = &cfg;
     context.platform = platform;
-    sao_status_t stage_status = SAO_STATUS_OK;
-    if (cover_with_intro) {
+    sao_status_t stage_status = prepare_intro_stage(0u);
+    if (stage_status == SAO_STATUS_OK && quit_requested)
+        return quit_bootstrap();
+    if (stage_status == SAO_STATUS_OK && cover_with_intro) {
         IntroBootstrapWorker worker;
         worker.add(kBootstrapCaptions[0], &bootstrap_step_drivers, &context);
-        publish_intro_bootstrap(platform, 0u, false);
-        worker.start();
-        while (!worker.finished()) {
-            if (quit_requested)
-                Sleep(1u);
-            else
-                advance_intro();
+        stage_status = worker.start();
+        if (stage_status == SAO_STATUS_OK) {
+            sao_status_t pump_status = SAO_STATUS_OK;
+            while (!worker.finished()) {
+                if (quit_requested || pump_status != SAO_STATUS_OK)
+                    Sleep(1u);
+                else
+                    pump_status = advance_intro();
+            }
+            worker.join();
+            stage_status = worker.result();
+            if (stage_status == SAO_STATUS_OK)
+                stage_status = pump_status;
         }
-        worker.join();
-        stage_status = worker.result();
-    } else {
+    } else if (stage_status == SAO_STATUS_OK) {
         stage_status = sao_platform_bringup_drivers(&cfg, platform);
     }
     if (stage_status != SAO_STATUS_OK) {
         // The driver stage leaves rollback to the owner thread: dismiss the
         // intro here and let shutdown() tear the context down.
-        release_intro(true);
         state_.platform_ctx = platform;
-        return SAO_EXIT_PLATFORM_INIT_FAIL;
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
     }
     state_.platform_ctx = platform;
+    if (!quit_requested) {
+        stage_status = advance_intro();
+        if (stage_status != SAO_STATUS_OK) {
+            return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+        }
+    }
+    if (quit_requested) {
+        return quit_bootstrap();
+    }
 
     // Stage 2 — engine surfaces (panels, window-rect registration, capture
     // shield, entity shell).  Owner thread only.
-    if (cover_with_intro) {
-        publish_intro_bootstrap(platform, 1u, false);
-        advance_intro();
+    stage_status = prepare_intro_stage(1u);
+    if (stage_status != SAO_STATUS_OK) {
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+    }
+    if (quit_requested) {
+        return quit_bootstrap();
     }
     sao_platform_ctx* surface_rolled_back_to = nullptr;
     stage_status = sao_platform_bringup_engines(&cfg, platform, &surface_rolled_back_to);
@@ -784,65 +855,88 @@ int App::runBootstrapUnderIntro() {
         // A clean rollback destroyed the context; only a failed teardown hands
         // it back for shutdown() to retry.
         platform = surface_rolled_back_to;
-        release_intro(true);
         state_.platform_ctx = platform;
-        return SAO_EXIT_PLATFORM_INIT_FAIL;
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
     }
     state_.platform_ctx = platform;
 
     // Stage 3 — capture shield: the anti-screencap chain over every window the
     // process owns, plus the tagWND rcWindow/ExStyle scrub.  Both need the
     // overlay HWNDs, so they follow the engine stage.
-    if (cover_with_intro) {
-        publish_intro_bootstrap(platform, 2u, false);
-        advance_intro();
+    stage_status = prepare_intro_stage(2u);
+    if (stage_status != SAO_STATUS_OK) {
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+    }
+    if (quit_requested) {
+        return quit_bootstrap();
     }
     stage_status = sao_platform_bringup_capture_shield(&cfg, platform);
     if (stage_status != SAO_STATUS_OK) {
-        release_intro(true);
-        return SAO_EXIT_PLATFORM_INIT_FAIL;
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
     }
 
-    if (cover_with_intro) {
-        publish_intro_bootstrap(platform, 3u, false);
-        advance_intro();
+    stage_status = prepare_intro_stage(3u);
+    if (stage_status != SAO_STATUS_OK) {
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+    }
+    if (quit_requested) {
+        return quit_bootstrap();
     }
     stage_status = sao_platform_bringup_wnd_scrub(&cfg, platform);
     if (stage_status != SAO_STATUS_OK) {
-        release_intro(true);
-        return SAO_EXIT_PLATFORM_INIT_FAIL;
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
     }
 
     // Stage 4 — configured plugin runtimes.
-    if (cover_with_intro) {
-        publish_intro_bootstrap(platform, 4u, false);
-        advance_intro();
+    stage_status = prepare_intro_stage(4u);
+    if (stage_status != SAO_STATUS_OK) {
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+    }
+    if (quit_requested) {
+        return quit_bootstrap();
     }
     if (ensureConfiguredPluginRuntimes(state_, plugins_configuration) != SAO_STATUS_OK) {
-        release_intro(true);
-        return SAO_EXIT_PLUGIN_LOAD_FAIL;
+        return fail_bootstrap(SAO_EXIT_PLUGIN_LOAD_FAIL);
     }
 
     // Stage 5 — plugin engines.  In safe mode plugin discovery is skipped.
     if (!state_.safe_mode && plugins_configuration.enabled) {
-        if (cover_with_intro) {
-            publish_intro_bootstrap(platform, 5u, false);
-            advance_intro();
+        stage_status = prepare_intro_stage(5u);
+        if (stage_status != SAO_STATUS_OK) {
+            return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+        }
+        if (quit_requested) {
+            return quit_bootstrap();
         }
         const int plugin_exit = discoverPlugins();
         if (plugin_exit != SAO_EXIT_OK) {
-            release_intro(true);
-            return plugin_exit;
+            return fail_bootstrap(plugin_exit);
         }
     }
 
-    // Late windows (guide host, AI editor, plugin panels) exist by now: repeat
-    // the registration sweep so the shield covers them too.
-    (void)sao_platform_bringup_capture_sweep(platform);
+    stage_status = advance_intro();
+    if (stage_status != SAO_STATUS_OK)
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+    if (quit_requested)
+        return quit_bootstrap();
+
+    // Plugin discovery may create windows after the initial protection sweep.
+    stage_status = sao_platform_bringup_capture_sweep(platform);
+    if (stage_status != SAO_STATUS_OK) {
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+    }
+
+    stage_status = advance_intro();
+    if (stage_status != SAO_STATUS_OK)
+        return fail_bootstrap(SAO_EXIT_PLATFORM_INIT_FAIL);
+    if (quit_requested)
+        return quit_bootstrap();
 
     // Bootstrap done: release the hold so the CONNECTED → fade tail plays out
     // and the intro completes on the normal end edge.
-    release_intro(false);
+    stage_status = release_intro(false);
+    if (stage_status != SAO_STATUS_OK)
+        return SAO_EXIT_PLATFORM_INIT_FAIL;
     return SAO_EXIT_OK;
 }
 #endif // SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER
@@ -883,6 +977,10 @@ int App::bringUpUi() {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
     user_menu_.processCommandLine(GetCommandLineW(), false);
+    if (!state_.safe_mode && sao_platform_bringup_capture_sweep(static_cast<sao_platform_ctx*>(
+                                 state_.platform_ctx)) != SAO_STATUS_OK) {
+        return SAO_EXIT_UI_ONLINE_FAIL;
+    }
     return SAO_EXIT_OK;
 }
 
@@ -948,11 +1046,66 @@ int App::runMessageLoop() {
     KillTimer(nullptr, timer_id);
     if (result < 0)
         return SAO_EXIT_UI_ONLINE_FAIL;
-    return static_cast<int>(msg.wParam);
+    return playExitAnimation(static_cast<int>(msg.wParam));
+}
+
+int App::playExitAnimation(int exit_code) noexcept {
+#if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    if (exit_code != SAO_EXIT_OK || exit_animation_started_ || shutdown_called_ ||
+        !state_.ui_online || state_.platform_ctx == nullptr || state_.smoke_mode ||
+        state_.safe_mode || state_.rt_io_operator || state_.exit_after_init ||
+        user_menu_.sessionEnding() || GetSystemMetrics(SM_SHUTTINGDOWN))
+        return exit_code;
+    exit_animation_started_ = true;
+    user_guide_open_pending_ = false;
+    user_guide_open_accepted_ = false;
+    user_menu_.beginExit();
+    const bool prompt_closed = boot_residency_close_prompt();
+    const bool guide_closed = shutdownUserGuideWebView();
+    if (!prompt_closed || !guide_closed)
+        return exit_code;
+    auto* ctx = static_cast<sao_platform_ctx*>(state_.platform_ctx);
+    if (sao_ui_outro_show(ctx) != SAO_STATUS_OK) {
+        (void)sao_ui_outro_cancel(ctx);
+        return exit_code;
+    }
+    const ULONGLONG deadline = GetTickCount64() + 1500u;
+    while (GetTickCount64() < deadline && !user_menu_.sessionEnding() &&
+           !GetSystemMetrics(SM_SHUTTINGDOWN)) {
+        MSG pending{};
+        for (unsigned count = 0; count < 64u && GetTickCount64() < deadline &&
+             !user_menu_.sessionEnding() &&
+             PeekMessageW(&pending, nullptr, 0, 0, PM_REMOVE); ++count) {
+            if (pending.message == WM_QUIT) {
+                if (pending.wParam != 0) {
+                    exit_code = static_cast<int>(pending.wParam);
+                    break;
+                }
+                continue;
+            }
+            if ((pending.message >= WM_KEYFIRST && pending.message <= WM_KEYLAST) ||
+                (pending.message >= WM_MOUSEFIRST && pending.message <= WM_MOUSELAST) ||
+                pending.message == WM_HOTKEY || pending.message == WM_COMMAND ||
+                pending.message == WM_SYSCOMMAND || pending.message == WM_CLOSE ||
+                pending.message == WM_TIMER || pending.message == SAO_UI_NATIVE_TEXT_TAB_MESSAGE)
+                continue;
+            TranslateMessage(&pending);
+            DispatchMessageW(&pending);
+        }
+        if (exit_code != SAO_EXIT_OK || user_menu_.sessionEnding() ||
+            GetSystemMetrics(SM_SHUTTINGDOWN) || GetTickCount64() >= deadline) break;
+        int32_t active = 0;
+        if (sao_ui_outro_pump(ctx, &active) != SAO_STATUS_OK || active == 0)
+            break;
+        (void)MsgWaitForMultipleObjectsEx(0, nullptr, kUiFrameIntervalMs, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    }
+    (void)sao_ui_outro_cancel(ctx);
+#endif
+    return exit_code;
 }
 
 void App::serviceFirstRunGuide() noexcept {
-    if (!first_run_ || state_.platform_ctx == nullptr)
+    if (exit_animation_started_ || !first_run_ || state_.platform_ctx == nullptr)
         return;
     if (!user_guide_open_pending_ && !user_guide_open_accepted_) {
         int32_t finished = 0;

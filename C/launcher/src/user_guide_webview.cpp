@@ -34,10 +34,13 @@ using nlohmann::json;
 using CreateEnvironmentFn = HRESULT(WINAPI*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*,
     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
 
+constexpr int32_t kGuideModalZ = 1700000000;
+
 struct GuideState {
     sao_ui_compositor_handle_t compositor{};
     sao_ui_composition_slot_handle_t slot{};
     sao_ui_panel_handle_t status_panel{};
+    sao_ui_layer_handle_t input_barrier{};
     sao_ui_sound_group_t sound_group{};
     HWND parent{};
     DWORD owner{};
@@ -45,6 +48,7 @@ struct GuideState {
     CreateEnvironmentFn create_environment{};
     bool com_initialized{}, ready{}, presented{}, failed{}, closing{}, retry_requested{};
     bool visible{true};
+    bool modal_active{}, web_shown{};
     bool native_intro_completed{}, profile_retried{};
     uint32_t pending_async{}, callback_depth{}, mouse_buttons{};
     POINT mouse{};
@@ -57,9 +61,9 @@ struct GuideState {
     ComPtr<ICoreWebView2Controller3> controller3;
     ComPtr<ICoreWebView2> view;
     EventRegistrationToken navigation_starting{}, navigation_completed{}, web_message{};
-    EventRegistrationToken cursor_changed{}, process_failed{}, new_window{};
+    EventRegistrationToken cursor_changed{}, process_failed{}, new_window{}, move_focus{};
     bool navigation_starting_set{}, navigation_completed_set{}, web_message_set{};
-    bool cursor_changed_set{}, process_failed_set{}, new_window_set{};
+    bool cursor_changed_set{}, process_failed_set{}, new_window_set{}, move_focus_set{};
     int32_t width{}, height{}, host_x{}, host_y{};
     uint32_t dpi{96};
 
@@ -144,20 +148,53 @@ void cancel_mouse(GuideState& state) noexcept {
         COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, 0, POINT{});
 }
 
+void fail(GuideState& state, const std::source_location location = std::source_location::current()) noexcept;
+
 void apply_visibility(GuideState& state) noexcept {
+    CallbackScope scope(state);
+    const bool active = state.visible && !state.closing;
+    if (!active) state.retry_requested = false;
     const bool shown = state.visible && state.ready && !state.failed && !state.closing &&
                        state.target_generation != 0;
+    const bool activate = active && !state.modal_active && state.input_barrier;
+    state.modal_active = active && state.input_barrier;
+    if (activate) {
+        (void)sao_ui_compositor_dispatch_mouse(state.compositor, WM_CANCELMODE, 0, 0, -1, 0);
+        if (GetCapture() == state.parent) (void)ReleaseCapture();
+        (void)SetFocus(state.parent);
+    }
     if (!shown) cancel_mouse(state);
+    if (state.input_barrier)
+        (void)sao_ui_layer_set_visible(state.input_barrier, active);
     sao_status_t status = SAO_STATUS_OK;
     if (state.slot) {
         status = sao_ui_composition_slot_set_input_policy(state.slot, shown, true);
         if (status == SAO_STATUS_OK) status = sao_ui_composition_slot_set_visible(state.slot, shown);
     }
     const HRESULT visible_status = state.controller ? state.controller->put_IsVisible(shown ? TRUE : FALSE) : S_OK;
-    if (shown && status == SAO_STATUS_OK && SUCCEEDED(visible_status)) state.presented = true;
+    const bool web_shown = shown && status == SAO_STATUS_OK && SUCCEEDED(visible_status);
+    if (shown && !web_shown) {
+        if (state.slot) {
+            (void)sao_ui_composition_slot_set_input_policy(state.slot, false, true);
+            (void)sao_ui_composition_slot_set_visible(state.slot, false);
+        }
+        if (state.controller) (void)state.controller->put_IsVisible(FALSE);
+        if (FAILED(visible_status) || !transient(status)) { fail(state); return; }
+        cancel_mouse(state);
+    }
+    if (web_shown) {
+        state.presented = true;
+        if (!state.web_shown)
+            (void)state.controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    }
+    if (!web_shown && state.web_shown) {
+        const HWND focus = GetFocus();
+        if (focus == state.parent || IsChild(state.parent, focus)) (void)SetFocus(state.parent);
+    }
+    state.web_shown = web_shown;
     if (state.status_panel)
-        (void)sao_ui_panel_set_visible(state.status_panel, state.visible && !state.ready && !state.closing);
-    if (!shown && state.sound_group) (void)sao_ui_sound_group_stop(state.sound_group);
+        (void)sao_ui_panel_set_visible(state.status_panel, active && !state.web_shown);
+    if (!web_shown && state.sound_group) (void)sao_ui_sound_group_stop(state.sound_group);
 }
 
 void status_body(GuideState& state, bool failure) {
@@ -178,7 +215,7 @@ void status_body(GuideState& state, bool failure) {
         reinterpret_cast<const uint8_t*>(text.data()), text.size());
 }
 
-void fail(GuideState& state, const std::source_location location = std::source_location::current()) noexcept {
+void fail(GuideState& state, const std::source_location location) noexcept {
     if (state.closing || state.failed) return;
     state.failed = true;
     std::fprintf(stderr, "Guide composition failed at %s:%u\n", location.function_name(), location.line());
@@ -292,10 +329,15 @@ sao_status_t sync_target(GuideState& state) noexcept {
     if (status != SAO_STATUS_OK) return status;
     const int width = std::max(1, client.width), height = std::max(1, client.height);
     if (width != state.width || height != state.height) {
+        if (state.input_barrier) {
+            status = sao_ui_layer_set_geometry(state.input_barrier, 0, 0, width, height);
+            if (status != SAO_STATUS_OK) return status;
+        }
+        if (!state.slot) return SAO_STATUS_OK;
         status = sao_ui_composition_slot_set_geometry(state.slot, 0, 0, width, height);
         if (status != SAO_STATUS_OK) return status;
-        state.width = width; state.height = height;
         if (state.controller && FAILED(state.controller->put_Bounds(RECT{0, 0, width, height}))) return SAO_STATUS_ERR_OS_CALL_FAILED;
+        state.width = width; state.height = height;
     }
     if (state.controller && (state.host_x != client.x || state.host_y != client.y))
         (void)state.controller->NotifyParentWindowPositionChanged();
@@ -305,7 +347,7 @@ sao_status_t sync_target(GuideState& state) noexcept {
     if (state.controller3 && state.dpi != dpi &&
         FAILED(state.controller3->put_RasterizationScale(static_cast<double>(dpi) / 96.0))) return SAO_STATUS_ERR_OS_CALL_FAILED;
     state.dpi = dpi;
-    if (!state.composition) return SAO_STATUS_OK;
+    if (!state.composition || state.failed) return SAO_STATUS_OK;
     SaoUiCompositionTarget target{};
     target.struct_size = sizeof(target);
     status = sao_ui_composition_slot_get_target(state.slot, &target);
@@ -318,6 +360,7 @@ sao_status_t sync_target(GuideState& state) noexcept {
         if (status != SAO_STATUS_OK && !transient(status)) return status;
         apply_visibility(state);
     }
+    if (state.visible && state.ready && !state.web_shown) apply_visibility(state);
     return SAO_STATUS_OK;
 }
 
@@ -341,6 +384,19 @@ HRESULT setup_controller(const std::shared_ptr<GuideState>& state, ICoreWebView2
     (void)settings->put_IsStatusBarEnabled(FALSE);
     ComPtr<ICoreWebView2Settings3> settings3;
     if (SUCCEEDED(settings.As(&settings3))) (void)settings3->put_AreBrowserAcceleratorKeysEnabled(FALSE);
+    auto move_focus = Microsoft::WRL::Callback<ICoreWebView2MoveFocusRequestedEventHandler>(
+        [state](ICoreWebView2Controller* sender, ICoreWebView2MoveFocusRequestedEventArgs* args) -> HRESULT {
+            CallbackScope scope(*state);
+            if (!state->visible || !state->ready || state->failed || state->closing) return S_OK;
+            HRESULT result = args->put_Handled(TRUE);
+            if (FAILED(result)) return result;
+            COREWEBVIEW2_MOVE_FOCUS_REASON reason{};
+            result = args->get_Reason(&reason);
+            if (FAILED(result)) return result;
+            return sender->MoveFocus(reason);
+        });
+    if (FAILED(hr = state->controller->add_MoveFocusRequested(move_focus.Get(), &state->move_focus))) return hr;
+    state->move_focus_set = true;
     auto starting = Microsoft::WRL::Callback<ICoreWebView2NavigationStartingEventHandler>(
         [state](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
             CallbackScope scope(*state);
@@ -479,7 +535,11 @@ bool destroy_state(const std::shared_ptr<GuideState>& state) noexcept {
         (void)state->composition->put_RootVisualTarget(nullptr);
         if (state->slot) (void)sao_ui_composition_slot_commit(state->slot);
     }
-    if (state->controller) (void)state->controller->Close();
+    if (state->controller) {
+        if (state->move_focus_set) (void)state->controller->remove_MoveFocusRequested(state->move_focus);
+        state->move_focus_set = false;
+        (void)state->controller->Close();
+    }
     state->view.Reset(); state->controller3.Reset(); state->controller.Reset();
     state->composition.Reset(); state->environment.Reset();
     if (state->slot) {
@@ -492,6 +552,10 @@ bool destroy_state(const std::shared_ptr<GuideState>& state) noexcept {
         (void)sao_ui_panel_set_event_handler(state->status_panel, nullptr, nullptr);
         sao_ui_panel_destroy(state->status_panel);
         state->status_panel = nullptr;
+    }
+    if (state->input_barrier) {
+        sao_ui_layer_destroy(state->input_barrier);
+        state->input_barrier = nullptr;
     }
     return true;
 }
@@ -521,6 +585,14 @@ bool openUserGuideInWebView(const wchar_t* path, bool native_intro_completed) no
                 apply_visibility(*state);
                 return true;
             }
+            if (state->failed && !state->closing && state->path == path &&
+                (state->pending_async || state->callback_depth)) {
+                state->visible = true;
+                state->native_intro_completed = state->native_intro_completed || native_intro_completed;
+                state->retry_requested = true;
+                apply_visibility(*state);
+                return true;
+            }
             if (!destroy_state(state)) return false;
             g_guide.store(nullptr);
             state.reset();
@@ -545,14 +617,26 @@ bool openUserGuideInWebView(const wchar_t* path, bool native_intro_completed) no
         panel.show_close_button = true; panel.single_instance = true;
         if (sao_ui_panel_create(compositor, &panel, &state->status_panel) != SAO_STATUS_OK) return false;
         g_guide.store(state);
+        (void)sao_ui_layer_set_z_order(sao_ui_panel_layer(state->status_panel), kGuideModalZ + 1);
         (void)sao_ui_panel_set_action_handler(state->status_panel, status_action, state.get());
         (void)sao_ui_panel_set_event_handler(state->status_panel, status_event, state.get());
         status_body(*state, false);
+        SaoLayerConfig barrier{};
+        barrier.struct_size = sizeof(barrier);
+        barrier.name_utf8 = "sao.user-guide.input-barrier";
+        barrier.width = std::max(1, client.width); barrier.height = std::max(1, client.height);
+        barrier.z_order = kGuideModalZ;
+        barrier.rect_hit = true;
+        if (sao_ui_layer_create(compositor, &barrier, &state->input_barrier) != SAO_STATUS_OK) {
+            (void)destroy_state(state);
+            g_guide.store(nullptr);
+            return false;
+        }
         apply_visibility(*state);
         SaoUiCompositionSlotConfig slot{};
         slot.struct_size = sizeof(slot); slot.name_utf8 = "sao.user-guide";
         slot.width = std::max(1, client.width); slot.height = std::max(1, client.height);
-        slot.z_order = 2000; slot.band = SAO_UI_COMPOSITION_BAND_BELOW_NATIVE;
+        slot.z_order = 2000; slot.band = SAO_UI_COMPOSITION_BAND_ABOVE_NATIVE;
         slot.opacity = 1.0F; slot.focusable = true;
         if (sao_ui_composition_slot_create(compositor, &slot, &state->slot) != SAO_STATUS_OK ||
             sao_ui_composition_slot_set_mouse_handler(state->slot, mouse_input, state.get()) != SAO_STATUS_OK) {
@@ -597,15 +681,15 @@ void tickUserGuideWebView() noexcept {
 #if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
     auto state = g_guide.load();
     if (!state || state->owner != GetCurrentThreadId()) return;
-    if (state->retry_requested) {
+    if (state->retry_requested && !state->pending_async && !state->callback_depth) {
         try {
             const auto path = state->path;
             if (openUserGuideInWebView(path.c_str(), state->native_intro_completed)) state->retry_requested = false;
         } catch (...) { fail(*state); }
         return;
     }
-    if (state->closing || state->failed) return;
-    if (!state->ready && GetTickCount64() >= state->startup_deadline) { fail(*state); return; }
+    if (state->closing) return;
+    if (!state->failed && !state->ready && GetTickCount64() >= state->startup_deadline) { fail(*state); return; }
     const sao_status_t status = sync_target(*state);
     if (status != SAO_STATUS_OK && !transient(status)) fail(*state);
 #endif
@@ -625,6 +709,15 @@ bool userGuideWebViewReady() noexcept {
 #if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
     const auto state = g_guide.load();
     return state && state->owner == GetCurrentThreadId() && state->presented;
+#else
+    return false;
+#endif
+}
+
+bool userGuideWebViewVisible() noexcept {
+#if defined(SAO_LAUNCHER_HAS_WEBVIEW2) && defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    const auto state = g_guide.load();
+    return state && state->owner == GetCurrentThreadId() && state->visible && !state->closing;
 #else
     return false;
 #endif

@@ -26,10 +26,33 @@ inline constexpr char kPanelTitle[] = "Process Selector";
 inline constexpr char kRefreshAction[] = "process_selector.refresh";
 inline constexpr char kFilterAction[] = "process_selector.filter";
 inline constexpr char kAttachAction[] = "process_selector.attach";
+inline constexpr char kDetachAction[] = "process_selector.detach";
+inline constexpr char kSearchAction[] = "process_selector.search";
+inline constexpr char kSortAction[] = "process_selector.sort";
+inline constexpr char kViewModeAction[] = "process_selector.view_mode";
+inline constexpr char kAutoRefreshAction[] = "process_selector.auto_refresh";
+inline constexpr char kExpandCollapseAction[] = "process_selector.expand_collapse";
+inline constexpr char kOpenMemoryViewerAction[] = "process_selector.open_memory_viewer";
 
 enum class FilterMode : std::uint8_t {
     all,
     likely_game,
+};
+
+enum class SortColumn : std::uint8_t {
+    name,
+    pid,
+    parent_pid,
+};
+
+enum class SortDirection : std::uint8_t {
+    ascending,
+    descending,
+};
+
+enum class ViewMode : std::uint8_t {
+    flat,
+    tree,
 };
 
 struct ProcessIdentity {
@@ -57,6 +80,13 @@ struct Operations {
     std::function<sao_status_t(std::vector<ProcessRecord>&)> enumerate_snapshot;
     std::function<sao_status_t(std::uint32_t, ProcessRecord&)> query_process;
     std::function<sao_status_t(std::uint32_t)> attach;
+    std::function<sao_status_t()> detach;
+    std::function<sao_status_t()> before_attach;
+    std::function<sao_status_t(const ProcessRecord&, std::uint64_t)> on_attached;
+    std::function<sao_status_t()> on_detached;
+    // Owner hook: open (bring to front) the native memory viewer panel for
+    // the current attachment. Optional; the action is hidden when unset.
+    std::function<sao_status_t()> open_memory_viewer;
     std::uint32_t current_process_id{};
 };
 
@@ -67,13 +97,27 @@ struct Snapshot {
     bool visible{};
     bool loading{};
     FilterMode filter{FilterMode::all};
+    std::string search_query;
+    SortColumn sort_column{SortColumn::name};
+    SortDirection sort_direction{SortDirection::ascending};
+    ViewMode view_mode{ViewMode::flat};
+    bool auto_refresh{};
+    std::uint32_t auto_refresh_interval_ms{};
     std::size_t page_index{};
     bool attach_available{};
     sao_status_t last_status{SAO_STATUS_OK};
     std::string status_text;
     std::vector<ProcessRecord> all_processes;
     std::vector<ProcessRecord> visible_processes;
+    // Parallel to visible_processes (same size). Tree mode: indent depth in
+    // steps, whether the row has visible children, whether it is collapsed.
+    // Flat mode: all zeros.
+    std::vector<std::uint8_t> visible_depths;
+    std::vector<std::uint8_t> visible_has_children;
+    std::vector<std::uint8_t> visible_collapsed;
+    std::uint32_t visible_root_count{};
     std::optional<ProcessRecord> attached_process;
+    bool memory_viewer_available{};
     std::string rendered_spec_json;
 };
 
@@ -108,6 +152,8 @@ class Owner final {
     sao_status_t refresh() noexcept;
     sao_status_t set_filter(FilterMode filter) noexcept;
     sao_status_t attach(ProcessIdentity identity) noexcept;
+    sao_status_t detach() noexcept;
+    sao_status_t open_memory_viewer() noexcept;
     sao_status_t dispatch_action(std::string_view action_id,
                                  std::string_view payload_json = {}) noexcept;
     sao_status_t snapshot(Snapshot& out) const noexcept;
@@ -128,6 +174,11 @@ class Owner final {
     sao_status_t publish() noexcept;
     sao_status_t enqueue_refresh() noexcept;
     sao_status_t set_page(std::size_t page_index) noexcept;
+    sao_status_t set_search_query(std::string_view query) noexcept;
+    sao_status_t set_sort(SortColumn column, std::optional<bool> direction_ascending) noexcept;
+    sao_status_t set_view_mode(ViewMode mode) noexcept;
+    sao_status_t set_auto_refresh(bool enabled) noexcept;
+    sao_status_t toggle_expanded(std::uint32_t parent_pid) noexcept;
 
     static void SAO_UI_CALL panel_action_callback(const char* action_id_utf8,
                                                   const std::uint8_t* payload_json_utf8,

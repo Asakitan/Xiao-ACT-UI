@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -25,7 +26,10 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -43,7 +47,18 @@ constexpr std::size_t kMaximumBaseNameBytes = 1024U;
 constexpr std::size_t kProcessesPerPage = 32U;
 constexpr std::string_view kPreviousPageAction = "process_selector.page.previous";
 constexpr std::string_view kNextPageAction = "process_selector.page.next";
+constexpr std::size_t kMaximumSearchQueryBytes = 512U;
+constexpr std::size_t kMaximumCollapsedPidSet = 4096U;
+constexpr std::uint32_t kAutoRefreshIntervalMs = 5000U;
 constexpr int kEnumerationAttempts = 3;
+
+struct VisibleView {
+    std::vector<ProcessRecord> processes;
+    std::vector<std::uint8_t> depths;
+    std::vector<std::uint8_t> has_children;
+    std::vector<std::uint8_t> collapsed;
+    std::uint32_t root_count{};
+};
 
 bool valid_utf8(std::string_view value) noexcept {
     std::size_t offset = 0;
@@ -209,20 +224,185 @@ std::vector<ProcessRecord> normalize_snapshot(std::vector<ProcessRecord> records
     return normalized;
 }
 
-std::vector<ProcessRecord> select_visible(const std::vector<ProcessRecord>& processes,
-                                          FilterMode filter) {
-    if (filter == FilterMode::all)
-        return processes;
-    std::vector<ProcessRecord> visible;
-    visible.reserve(processes.size());
-    std::ranges::copy_if(processes, std::back_inserter(visible), is_likely_game_process);
-    return visible;
+std::string search_terms_of(const ProcessRecord& record) {
+    std::string terms = lower_ascii(record.base_name_utf8);
+    terms.push_back(' ');
+    terms += lower_ascii(record.image_path_utf8);
+    terms.push_back(' ');
+    terms += std::to_string(record.pid);
+    terms.push_back(' ');
+    terms += "0x";
+    std::array<char, 8> digits{};
+    const auto converted = std::to_chars(digits.data(), digits.data() + digits.size(),
+                                         record.pid, 16);
+    if (converted.ec == std::errc{})
+        terms.append(digits.data(), converted.ptr);
+    return terms;
 }
 
-std::size_t selected_process_count(const std::vector<ProcessRecord>& processes, FilterMode filter) {
-    if (filter == FilterMode::all)
+bool matches_search(const ProcessRecord& record, std::string_view needle_lower, bool has_needle) {
+    if (!has_needle)
+        return true;
+    return search_terms_of(record).find(needle_lower) != std::string::npos;
+}
+
+bool matches_filter(const ProcessRecord& record, FilterMode filter) {
+    return filter == FilterMode::all || is_likely_game_process(record);
+}
+
+bool any_descendant_matches(const std::unordered_map<std::uint32_t, std::vector<std::size_t>>&
+                                children_by_parent,
+                            const std::vector<ProcessRecord>& sorted,
+                            std::uint32_t pid, std::string_view needle_lower, FilterMode filter) {
+    const auto children = children_by_parent.find(pid);
+    if (children == children_by_parent.end())
+        return false;
+    for (const std::size_t child_index : children->second) {
+        const ProcessRecord& child = sorted[child_index];
+        if (matches_filter(child, filter) &&
+            matches_search(child, needle_lower, !needle_lower.empty())) {
+            return true;
+        }
+        if (any_descendant_matches(children_by_parent, sorted, child.pid, needle_lower, filter))
+            return true;
+    }
+    return false;
+}
+
+VisibleView select_visible(const std::vector<ProcessRecord>& processes, FilterMode filter,
+                           std::string_view search_query_lower, SortColumn sort_column,
+                           SortDirection sort_direction, ViewMode view_mode,
+                           const std::unordered_set<std::uint32_t>& collapsed_parents) {
+    VisibleView view{};
+    const bool has_search = !search_query_lower.empty();
+    if (view_mode == ViewMode::flat) {
+        view.processes.reserve(processes.size());
+        for (const ProcessRecord& record : processes) {
+            if (matches_filter(record, filter) &&
+                matches_search(record, search_query_lower, has_search)) {
+                view.processes.push_back(record);
+            }
+        }
+        const bool descending = sort_direction == SortDirection::descending;
+        const auto comparator = [sort_column, descending](const ProcessRecord& left,
+                                                          const ProcessRecord& right) {
+            bool less = false;
+            switch (sort_column) {
+            case SortColumn::name: {
+                const std::string left_name = lower_ascii(left.base_name_utf8);
+                const std::string right_name = lower_ascii(right.base_name_utf8);
+                if (left_name != right_name)
+                    less = left_name < right_name;
+                else if (left.pid != right.pid)
+                    less = left.pid < right.pid;
+                else
+                    less = left.start_time_100ns < right.start_time_100ns;
+                break;
+            }
+            case SortColumn::pid:
+                if (left.pid != right.pid)
+                    less = left.pid < right.pid;
+                else
+                    less = left.start_time_100ns < right.start_time_100ns;
+                break;
+            case SortColumn::parent_pid:
+                if (left.parent_pid != right.parent_pid)
+                    less = left.parent_pid < right.parent_pid;
+                else if (left.pid != right.pid)
+                    less = left.pid < right.pid;
+                else
+                    less = left.start_time_100ns < right.start_time_100ns;
+                break;
+            }
+            return descending ? !less && (left != right) : less;
+        };
+        std::ranges::sort(view.processes, comparator);
+        view.root_count = static_cast<std::uint32_t>(view.processes.size());
+        return view;
+    }
+
+    std::vector<ProcessRecord> sorted = processes;
+    std::ranges::sort(sorted, [](const ProcessRecord& left, const ProcessRecord& right) {
+        const std::string left_name = lower_ascii(left.base_name_utf8);
+        const std::string right_name = lower_ascii(right.base_name_utf8);
+        if (left_name != right_name)
+            return left_name < right_name;
+        if (left.pid != right.pid)
+            return left.pid < right.pid;
+        return left.start_time_100ns < right.start_time_100ns;
+    });
+    std::unordered_map<std::uint32_t, std::size_t> index_by_pid;
+    index_by_pid.reserve(sorted.size());
+    for (std::size_t index = 0; index < sorted.size(); ++index)
+        index_by_pid.emplace(sorted[index].pid, index);
+    std::unordered_map<std::uint32_t, std::vector<std::size_t>> children_by_parent;
+    std::unordered_set<std::uint32_t> known_pids;
+    known_pids.reserve(sorted.size());
+    for (const ProcessRecord& record : sorted)
+        known_pids.insert(record.pid);
+    std::vector<std::size_t> roots;
+    for (std::size_t index = 0; index < sorted.size(); ++index) {
+        const ProcessRecord& record = sorted[index];
+        if (record.parent_pid == 0U || known_pids.find(record.parent_pid) == known_pids.end() ||
+            record.parent_pid == record.pid) {
+            roots.push_back(index);
+        } else {
+            children_by_parent[record.parent_pid].push_back(index);
+        }
+    }
+    const auto emit_subtree = [&](auto&& self, std::size_t index, std::uint8_t depth) -> void {
+        const ProcessRecord& record = sorted[index];
+        const bool matches =
+            matches_filter(record, filter) && matches_search(record, search_query_lower, has_search);
+        if (has_search || filter != FilterMode::all) {
+            if (!matches &&
+                !any_descendant_matches(children_by_parent, sorted, record.pid,
+                                        search_query_lower, filter)) {
+                return;
+            }
+        }
+        const bool collapsed = collapsed_parents.find(record.pid) != collapsed_parents.end();
+        const std::size_t row_index = view.processes.size();
+        view.processes.push_back(record);
+        view.depths.push_back(depth);
+        view.has_children.push_back(0U);
+        view.collapsed.push_back(collapsed ? 1U : 0U);
+        if (collapsed)
+            return;
+        const auto children = children_by_parent.find(record.pid);
+        if (children == children_by_parent.end())
+            return;
+        std::size_t emitted = 0;
+        for (const std::size_t child_index : children->second) {
+            const std::size_t before = view.processes.size();
+            self(self, child_index, static_cast<std::uint8_t>(
+                                        depth < 8U ? depth + 1U : 8U));
+            emitted += view.processes.size() - before;
+        }
+        if (emitted != 0U)
+            view.has_children[row_index] = 1U;
+    };
+    for (const std::size_t root_index : roots) {
+        const std::size_t before = view.processes.size();
+        emit_subtree(emit_subtree, root_index, 0U);
+        if (view.processes.size() > before)
+            ++view.root_count;
+    }
+    return view;
+}
+
+std::size_t selected_process_count(const std::vector<ProcessRecord>& processes, FilterMode filter,
+                                   std::string_view search_query_lower) {
+    if (filter == FilterMode::all && search_query_lower.empty())
         return processes.size();
-    return static_cast<std::size_t>(std::ranges::count_if(processes, is_likely_game_process));
+    std::size_t count = 0;
+    for (const ProcessRecord& record : processes) {
+        if (matches_filter(record, filter) &&
+            matches_search(record, search_query_lower, !search_query_lower.empty())) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 Json text_node(std::string text, std::string_view style = "value", int height = 24) {
@@ -325,6 +505,18 @@ Json status_strip_node(SnapshotState state) {
                                       text_node(std::string(summary), accent, 24)}))}),
                      accent);
 }
+std::string_view sort_column_label(SortColumn column) noexcept {
+    switch (column) {
+    case SortColumn::name:
+        return "名称";
+    case SortColumn::pid:
+        return "PID";
+    case SortColumn::parent_pid:
+        return "父进程";
+    }
+    return "名称";
+}
+
 std::string build_panel_spec(const Snapshot& snapshot) {
     const SnapshotState state = snapshot_state(snapshot);
     const bool attach_allowed = state == SnapshotState::fresh && snapshot.attach_available;
@@ -337,6 +529,7 @@ std::string build_panel_spec(const Snapshot& snapshot) {
     Json nodes = Json::array();
     nodes.push_back(status_strip_node(state));
     Json filters = Json::array();
+    filters.push_back(text_node("进程浏览器", "title", 36));
     Json actions = Json::array();
     actions.push_back(button_node("process.refresh", snapshot.loading ? "正在刷新…" : "刷新",
                                   kRefreshAction, Json::object(), "primary", snapshot.loading));
@@ -346,6 +539,52 @@ std::string build_panel_spec(const Snapshot& snapshot) {
         button_node("process.filter.game", "可能的游戏", kFilterAction, {{"mode", "likely_game"}},
                     snapshot.filter == FilterMode::likely_game ? "primary" : "ghost"));
     filters.push_back(row_node(std::move(actions)));
+    Json controls = Json::array();
+    Json search_input{{"type", "input"},
+                      {"id", "process.search"},
+                      {"value", snapshot.search_query},
+                      {"action", kSearchAction},
+                      {"payload", Json::object()},
+                      {"height", 38},
+                      {"weight", 1.0},
+                      {"min_width", 180}};
+    controls.push_back(std::move(search_input));
+    Json sort_items = Json::array();
+    const std::array<SortColumn, 3> columns{SortColumn::name, SortColumn::pid,
+                                            SortColumn::parent_pid};
+    for (std::size_t column_index = 0; column_index < columns.size(); ++column_index) {
+        sort_items.push_back({{"id", static_cast<std::int32_t>(column_index + 1)},
+                              {"label", std::string(sort_column_label(columns[column_index]))},
+                              {"value", column_index == 0 ? "name"
+                                        : column_index == 1 ? "pid"
+                                                            : "ppid"}});
+    }
+    controls.push_back(Json{{"type", "dropdown"},
+                            {"id", "process.sort.column"},
+                            {"action", kSortAction},
+                            {"payload", Json::object()},
+                            {"items", std::move(sort_items)},
+                            {"selected_id",
+                             static_cast<std::int32_t>(
+                                 snapshot.sort_column == SortColumn::name      ? 1
+                                 : snapshot.sort_column == SortColumn::pid     ? 2
+                                                                               : 3)},
+                            {"height", 38},
+                            {"width", 112}});
+    controls.push_back(button_node(
+        "process.sort.direction",
+        snapshot.sort_direction == SortDirection::ascending ? "升序" : "降序", kSortAction,
+        {{"toggle", true}}, "ghost"));
+    controls.push_back(button_node(
+        "process.view_mode",
+        snapshot.view_mode == ViewMode::flat ? "列表视图" : "树状视图", kViewModeAction,
+        {{"mode", snapshot.view_mode == ViewMode::flat ? "tree" : "flat"}}, "ghost"));
+    controls.push_back(button_node(
+        "process.auto_refresh", snapshot.auto_refresh ? "自动: 开" : "自动: 关",
+        kAutoRefreshAction,
+        {{"enabled", !snapshot.auto_refresh}},
+        snapshot.auto_refresh ? "primary" : "ghost"));
+    filters.push_back(row_node(std::move(controls)));
     Json badges = Json::array();
     badges.push_back(Json{{"type", "badge"},
                           {"text", std::string(snapshot_state_label(state))},
@@ -369,25 +608,44 @@ std::string build_panel_spec(const Snapshot& snapshot) {
     badges.push_back(
         badge_node(snapshot.attach_available ? "Attach on / 可附加" : "Attach off / 未连接",
                    snapshot.attach_available ? "ok" : "muted"));
+    if (snapshot.view_mode == ViewMode::tree)
+        badges.push_back(badge_node(
+            "树根 " + std::to_string(snapshot.visible_root_count), "muted"));
+    if (!snapshot.search_query.empty())
+        badges.push_back(badge_node("搜索: " + snapshot.search_query, "accent"));
     filters.push_back(row_node(std::move(badges)));
     Json paging = Json::array();
     paging.push_back(button_node("process.page.previous", "上一页",
                                  std::string(kPreviousPageAction), Json::object(), "ghost",
                                  snapshot.loading || page_index == 0U));
     paging.push_back(badge_node(
-        "Page " + std::to_string(page_index + 1U) + " / " + std::to_string(page_count), "muted"));
+        "第 " + std::to_string(page_index + 1U) + " / " + std::to_string(page_count) + " 页",
+        "muted"));
     paging.push_back(button_node("process.page.next", "下一页", std::string(kNextPageAction),
                                  Json::object(), "ghost",
                                  snapshot.loading || page_index + 1U >= page_count));
-    filters.push_back(row_node(std::move(paging)));
-    nodes.push_back(section_node("Filters / 筛选", std::move(filters)));
+    for (auto& item : paging)
+        nodes.front()["children"][0]["children"].push_back(std::move(item));
+    nodes.front()["padding"] = 8;
+    nodes.front()["height"] = 60;
+    nodes.push_back(section_node("", std::move(filters)));
     if (snapshot.attached_process.has_value()) {
         const ProcessRecord& process = *snapshot.attached_process;
         Json details = Json::array();
         details.push_back(
             row_node(Json::array({badge_node("Attached / 已附加", "ok"),
                                   badge_node("PID " + std::to_string(process.pid), "cyan")})));
-        details.push_back(text_node(process.image_path_utf8, "mono", 34));
+        details.push_back(text_node(process.image_path_utf8, "mono", 28));
+        Json attached_actions = Json::array();
+        attached_actions.push_back(button_node(
+            "process.attached.detach", "分离 / Detach", kDetachAction, Json::object(),
+            "default", snapshot.loading));
+        if (snapshot.memory_viewer_available) {
+            attached_actions.push_back(button_node(
+                "process.attached.memory_viewer", "打开内存查看器", kOpenMemoryViewerAction,
+                Json::object(), "primary", snapshot.loading));
+        }
+        details.push_back(row_node(std::move(attached_actions)));
         nodes.push_back(section_node(
             "Attached / 已附加",
             Json::array({card_node(process.base_name_utf8, std::move(details), "ok")}), "ok"));
@@ -407,6 +665,9 @@ std::string build_panel_spec(const Snapshot& snapshot) {
         Json empty = Json::array();
         empty.push_back(text_node(state == SnapshotState::loading
                                       ? "Scanning running processes... / 正在扫描运行中的进程..."
+                                  : !snapshot.search_query.empty()
+                                      ? "No processes matched the search. Clear the box or "
+                                        "refresh. / 未匹配到搜索内容，请清空搜索框或刷新。"
                                   : snapshot.filter == FilterMode::likely_game
                                       ? "No likely game processes matched. Switch to Show all or "
                                         "refresh. / 未匹配到可能的游戏进程，请切换全部或刷新。"
@@ -420,20 +681,58 @@ std::string build_panel_spec(const Snapshot& snapshot) {
         Json cards = Json::array();
         for (std::size_t index = page_begin; index < page_end; ++index) {
             const ProcessRecord& process = snapshot.visible_processes[index];
-            Json details = Json::array();
-            details.push_back(row_node(
-                Json::array({badge_node("PID " + std::to_string(process.pid),
-                                        is_likely_game_process(process) ? "ok" : "muted"),
-                             badge_node(is_likely_game_process(process) ? "Likely game / 可能的游戏"
-                                                                        : "Process / 进程",
-                                        "muted")})));
-            details.push_back(text_node(process.image_path_utf8, "mono", 34));
-            details.push_back(button_node(
+            const std::uint8_t depth =
+                index < snapshot.visible_depths.size() ? snapshot.visible_depths[index] : 0U;
+            const bool has_children = index < snapshot.visible_has_children.size() &&
+                                      snapshot.visible_has_children[index] != 0U;
+            const bool collapsed = index < snapshot.visible_collapsed.size() &&
+                                   snapshot.visible_collapsed[index] != 0U;
+            std::string display_name = process.base_name_utf8;
+            if (depth != 0U)
+                display_name.insert(0, static_cast<std::size_t>(depth) * 2U, ' ');
+            Json identity =
+                section_node("", Json::array({
+                                     text_node(std::move(display_name), "label", 28),
+                                     text_node(process.image_path_utf8, "muted", 24)}));
+            identity["padding"] = 0;
+            identity["gap"] = 0;
+            identity["weight"] = 1.0;
+            Json pid = badge_node("PID " + std::to_string(process.pid), "muted");
+            pid["width"] = 108;
+            if (snapshot.view_mode == ViewMode::tree && process.parent_pid != 0U) {
+                pid["text"] = "PID " + std::to_string(process.pid) + " ▸" +
+                              std::to_string(process.parent_pid);
+            }
+            Json category = badge_node(is_likely_game_process(process) ? "可能的游戏" : "进程",
+                                       is_likely_game_process(process) ? "ok" : "muted");
+            category["width"] = 104;
+            Json row_children = Json::array();
+            if (snapshot.view_mode == ViewMode::tree && has_children) {
+                Json twist = button_node("process.expand." + std::to_string(process.pid),
+                                         collapsed ? "▸" : "▾",
+                                         std::string(kExpandCollapseAction),
+                                         {{"parent_pid", process.pid}}, "ghost");
+                twist["width"] = 34;
+                row_children.push_back(std::move(twist));
+            }
+            row_children.push_back(std::move(identity));
+            row_children.push_back(std::move(pid));
+            row_children.push_back(std::move(category));
+            Json attach = button_node(
                 "process.attach." + std::to_string(process.pid), "选择并附加", kAttachAction,
-                {{"pid", process.pid}, {"start_time_100ns", process.start_time_100ns}}, "primary",
-                !attach_allowed));
-            cards.push_back(card_node(process.base_name_utf8, std::move(details),
-                                      is_likely_game_process(process) ? "cyan" : "muted"));
+                {{"pid", process.pid}, {"start_time_100ns", process.start_time_100ns}}, "default",
+                !attach_allowed);
+            attach["width"] = 120;
+            row_children.push_back(std::move(attach));
+            Json row = row_node(std::move(row_children));
+            Json item = card_node("", Json::array({std::move(row)}));
+            item["padding"] = 12;
+            if (depth != 0U)
+                item["padding"] = Json{{"top", 12},
+                                       {"right", 12},
+                                       {"bottom", 12},
+                                       {"left", 12 + static_cast<int>(depth) * 14}};
+            cards.push_back(std::move(item));
         }
         nodes.push_back(section_node("Process List / 进程列表", std::move(cards), "cyan"));
     }
@@ -442,7 +741,8 @@ std::string build_panel_spec(const Snapshot& snapshot) {
         return serialized;
     Json compact = Json::array();
     compact.push_back(text_node(
-        "The process list exceeded the panel budget. Use Likely games to narrow it.", "bad", 48));
+        "The process list exceeded the panel budget. Narrow the search or use Likely games.",
+        "bad", 48));
     compact.push_back(button_node("process.refresh.compact", "Refresh", kRefreshAction,
                                   Json::object(), "primary"));
     compact.push_back(button_node("process.filter.compact", "Likely games", kFilterAction,
@@ -563,12 +863,14 @@ struct Owner::State {
     enum class WorkKind : std::uint8_t {
         refresh,
         attach,
+        detach,
     };
 
     struct WorkItem {
         WorkKind kind{WorkKind::refresh};
         std::uint64_t generation{};
         ProcessIdentity identity{};
+        std::chrono::steady_clock::time_point not_before{};
     };
 
     struct Completion {
@@ -593,10 +895,17 @@ struct Owner::State {
             std::function<sao_status_t(std::vector<ProcessRecord>&)> enumerate;
             std::function<sao_status_t(std::uint32_t, ProcessRecord&)> query_process;
             std::function<sao_status_t(std::uint32_t)> attach_operation;
+            std::function<sao_status_t()> detach_operation;
             std::uint32_t current_process_id = 0U;
             try {
                 std::unique_lock lock(mutex);
-                if (!worker_cv.wait(lock, stop, [this] { return !work_items.empty(); }))
+                const auto ready = [this] {
+                    if (work_items.empty())
+                        return false;
+                    return work_items.front().not_before <=
+                           std::chrono::steady_clock::now();
+                };
+                if (!worker_cv.wait(lock, stop, ready))
                     break;
                 item = std::move(work_items.front());
                 work_items.pop_front();
@@ -604,6 +913,7 @@ struct Owner::State {
                 enumerate = operations.enumerate_snapshot;
                 query_process = operations.query_process;
                 attach_operation = operations.attach;
+                detach_operation = operations.detach;
                 current_process_id = operations.current_process_id;
             } catch (...) {
                 Completion failure{};
@@ -630,9 +940,21 @@ struct Owner::State {
                                 std::move(completion.processes), current_process_id);
                         }
                     }
-                } else if (!query_process || !attach_operation) {
+                } else if (item.kind == WorkKind::detach) {
+                    if (!detach_operation) {
+                        completion.status = SAO_STATUS_ERR_NOT_INITIALIZED;
+                        completion.status_text = "Detach operation is not configured.";
+                    } else {
+                        completion.status = detach_operation();
+                        completion.status_text =
+                            completion.status == SAO_STATUS_OK
+                                ? "Detached the memory target."
+                                : status_description(completion.status, "Detach failed");
+                    }
+                } else if (!query_process || !attach_operation || !detach_operation) {
                     completion.status = SAO_STATUS_ERR_NOT_INITIALIZED;
-                    completion.status_text = "Attach operations are not configured.";
+                    completion.status_text =
+                        "Attach, detach, and identity operations are not configured.";
                 } else {
                     ProcessRecord candidate{};
                     completion.status = query_process(item.identity.pid, candidate);
@@ -661,13 +983,41 @@ struct Owner::State {
                                     ? "Attach rejected: process exited before attach."
                                     : "Attach rejected: PID identity changed before attach.";
                         } else {
-                            ProcessRecord validated = std::move(normalized.front());
                             completion.status = attach_operation(item.identity.pid);
                             if (completion.status == SAO_STATUS_OK) {
-                                completion.status_text = "Attached PID " +
-                                                         std::to_string(validated.pid) + " · " +
-                                                         validated.base_name_utf8;
-                                completion.attached_process = std::move(validated);
+                                ProcessRecord attached_candidate{};
+                                completion.status =
+                                    query_process(item.identity.pid, attached_candidate);
+                                std::vector<ProcessRecord> attached_snapshot;
+                                if (completion.status == SAO_STATUS_OK) {
+                                    attached_snapshot = normalize_snapshot(
+                                        std::vector<ProcessRecord>{
+                                            std::move(attached_candidate)},
+                                        current_process_id);
+                                    if (attached_snapshot.empty() ||
+                                        attached_snapshot.front().identity() != item.identity) {
+                                        completion.status = SAO_STATUS_ERR_PROCESS_GONE;
+                                    }
+                                }
+                                if (completion.status == SAO_STATUS_OK) {
+                                    ProcessRecord attached =
+                                        std::move(attached_snapshot.front());
+                                    completion.status_text =
+                                        "Attached PID " + std::to_string(attached.pid) +
+                                        " · " + attached.base_name_utf8;
+                                    completion.attached_process = std::move(attached);
+                                } else {
+                                    const sao_status_t identity_status = completion.status;
+                                    const sao_status_t detach_status = detach_operation();
+                                    completion.status = detach_status == SAO_STATUS_OK
+                                                            ? identity_status
+                                                            : detach_status;
+                                    completion.status_text = status_description(
+                                        completion.status,
+                                        detach_status == SAO_STATUS_OK
+                                            ? "Post-attach identity verification failed"
+                                            : "Post-attach identity rollback failed");
+                                }
                             } else {
                                 completion.status_text =
                                     status_description(completion.status, "Attach failed");
@@ -696,7 +1046,11 @@ struct Owner::State {
             std::lock_guard lock(mutex);
             accepting = false;
             work_items.clear();
-            ++requested_generation;
+            pending_attach.reset();
+            attached_notification_pending.reset();
+            detached_notification_pending = false;
+            if (requested_generation != (std::numeric_limits<std::uint64_t>::max)())
+                ++requested_generation;
         }
         worker_cv.notify_all();
         if (worker.joinable())
@@ -713,6 +1067,8 @@ struct Owner::State {
     std::condition_variable_any worker_cv;
     std::deque<WorkItem> work_items;
     std::deque<Completion> completions;
+    std::optional<WorkItem> pending_attach;
+    std::optional<std::pair<ProcessRecord, std::uint64_t>> attached_notification_pending;
     sao_ui_panel_handle_t panel{};
     sao_ui_panel_body_handle_t body{};
     std::size_t operations_in_flight{};
@@ -725,10 +1081,21 @@ struct Owner::State {
     bool event_handler_attached{};
     bool loading{};
     bool worker_active{};
+    std::chrono::steady_clock::time_point worker_clock_starting{};
     bool dirty{true};
     bool refresh_authoritative{};
+    bool detached_notification_pending{};
     std::uint64_t requested_generation{};
     FilterMode filter{FilterMode::all};
+    std::string search_query;
+    std::string search_query_lower;
+    SortColumn sort_column{SortColumn::name};
+    SortDirection sort_direction{SortDirection::ascending};
+    ViewMode view_mode{ViewMode::flat};
+    bool auto_refresh{};
+    std::chrono::steady_clock::time_point busy_since{};
+    std::chrono::steady_clock::time_point next_auto_refresh_at{};
+    std::unordered_set<std::uint32_t> collapsed_parents;
     std::size_t page_index{};
     sao_status_t last_status{SAO_STATUS_OK};
     std::string status_text{"Not refreshed yet."};
@@ -812,6 +1179,9 @@ Operations make_default_operations(sao_rt_io_proxy_handle_t proxy) {
     if (proxy != nullptr) {
         operations.attach = [proxy](std::uint32_t pid) {
             return sao_rt_io_proxy_attach(proxy, pid);
+        };
+        operations.detach = [proxy] {
+            return sao_rt_io_proxy_detach(proxy);
         };
     }
     return operations;
@@ -1100,13 +1470,29 @@ sao_status_t Owner::publish() noexcept {
             view.visible = state_->visible;
             view.loading = state_->loading;
             view.filter = state_->filter;
+            view.search_query = state_->search_query;
+            view.sort_column = state_->sort_column;
+            view.sort_direction = state_->sort_direction;
+            view.view_mode = state_->view_mode;
+            view.auto_refresh = state_->auto_refresh;
+            view.auto_refresh_interval_ms = kAutoRefreshIntervalMs;
             view.page_index = state_->page_index;
-            view.attach_available = state_->operations.query_process && state_->operations.attach;
+            view.attach_available = state_->operations.query_process &&
+                                    state_->operations.attach && state_->operations.detach;
             view.last_status = state_->last_status;
             view.status_text = state_->status_text;
             view.all_processes = state_->processes;
-            view.visible_processes = select_visible(view.all_processes, view.filter);
+            VisibleView visible_view =
+                select_visible(view.all_processes, view.filter, state_->search_query_lower,
+                               view.sort_column, view.sort_direction, view.view_mode,
+                               state_->collapsed_parents);
+            view.visible_root_count = visible_view.root_count;
+            view.visible_processes = std::move(visible_view.processes);
+            view.visible_depths = std::move(visible_view.depths);
+            view.visible_has_children = std::move(visible_view.has_children);
+            view.visible_collapsed = std::move(visible_view.collapsed);
             view.attached_process = state_->attached_process;
+            view.memory_viewer_available = static_cast<bool>(state_->operations.open_memory_viewer);
         }
         std::string spec = build_panel_spec(view);
         const sao_status_t status = sao_ui_panel_body_set_spec(
@@ -1168,10 +1554,92 @@ sao_status_t Owner::service_ui() noexcept {
     try {
         std::deque<State::Completion> completions;
         bool publish_needed = false;
+        bool wake_worker = false;
+        std::optional<State::WorkItem> pending_attach;
         {
             std::lock_guard lock(state_->mutex);
             if (state_->panel == nullptr || state_->body == nullptr)
                 return SAO_STATUS_OK;
+            pending_attach = state_->pending_attach;
+        }
+        if (pending_attach.has_value()) {
+            const sao_status_t drain_status = state_->operations.before_attach
+                                                  ? state_->operations.before_attach()
+                                                  : SAO_STATUS_OK;
+            std::lock_guard lock(state_->mutex);
+            if (state_->pending_attach.has_value() &&
+                state_->pending_attach->generation == pending_attach->generation &&
+                state_->pending_attach->identity == pending_attach->identity &&
+                state_->requested_generation == pending_attach->generation) {
+                if (drain_status == SAO_STATUS_OK) {
+                    state_->work_items.push_back(*pending_attach);
+                    state_->pending_attach.reset();
+                    state_->attached_notification_pending.reset();
+                    state_->detached_notification_pending = false;
+                    state_->attached_process.reset();
+                    state_->last_status = SAO_STATUS_OK;
+                    state_->status_text =
+                        "Verifying identity and attaching PID " +
+                        std::to_string(pending_attach->identity.pid) + ".";
+                    wake_worker = true;
+                } else {
+                    state_->last_status = drain_status;
+                    state_->status_text =
+                        "Waiting for the previous memory target to drain (status " +
+                        std::to_string(drain_status) + ").";
+                }
+                state_->dirty = true;
+                publish_needed = true;
+            }
+        }
+        if (wake_worker)
+            state_->worker_cv.notify_all();
+
+        std::optional<std::pair<ProcessRecord, std::uint64_t>> attached_notification;
+        bool detached_notification = false;
+        const auto service_now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard lock(state_->mutex);
+            if (state_->auto_refresh && state_->refresh_authoritative &&
+                !state_->loading && !state_->worker_active &&
+                state_->work_items.empty() && !state_->pending_attach.has_value()) {
+                const auto now = std::chrono::steady_clock::now();
+                if (state_->busy_since.time_since_epoch().count() != 0 &&
+                    now >= state_->busy_since + std::chrono::seconds(15U)) {
+                    state_->busy_since = {};
+                    state_->auto_refresh = false;
+                    state_->last_status = SAO_STATUS_OK;
+                    state_->status_text =
+                        "Auto refresh paused: an operation was busy for 15 seconds. Toggle "
+                        "auto refresh or press 刷新 to resume.";
+                    state_->dirty = true;
+                    publish_needed = true;
+                } else if (state_->next_auto_refresh_at.time_since_epoch().count() == 0) {
+                    state_->next_auto_refresh_at = now;
+                } else if (now >= state_->next_auto_refresh_at) {
+                    const std::chrono::steady_clock::time_point due =
+                        state_->next_auto_refresh_at + std::chrono::milliseconds(
+                                                           kAutoRefreshIntervalMs);
+                    state_->next_auto_refresh_at = due;
+                    state_->busy_since = {};
+                    if (state_->requested_generation !=
+                        (std::numeric_limits<std::uint64_t>::max)()) {
+                        ++state_->requested_generation;
+                        State::WorkItem follow_up{State::WorkKind::refresh,
+                                                  state_->requested_generation, {}, due};
+                        state_->work_items.push_back(std::move(follow_up));
+                        state_->loading = true;
+                        state_->refresh_authoritative = false;
+                        state_->last_status = SAO_STATUS_OK;
+                        state_->status_text = "Auto refreshing running processes...";
+                        wake_worker = true;
+                        state_->dirty = true;
+                        publish_needed = true;
+                    } else {
+                        state_->busy_since = now;
+                    }
+                }
+            }
             completions.swap(state_->completions);
             while (!completions.empty()) {
                 State::Completion completion = std::move(completions.front());
@@ -1184,8 +1652,20 @@ sao_status_t Owner::service_ui() noexcept {
                     state_->refresh_authoritative = completion.status == SAO_STATUS_OK;
                     if (completion.status == SAO_STATUS_OK) {
                         state_->processes = std::move(completion.processes);
+                        if (state_->attached_process.has_value() &&
+                            !std::ranges::any_of(
+                                state_->processes,
+                                [&](const ProcessRecord& process) {
+                                    return process.identity() ==
+                                           state_->attached_process->identity();
+                                })) {
+                            state_->attached_process.reset();
+                            state_->attached_notification_pending.reset();
+                            state_->detached_notification_pending = true;
+                        }
                         const std::size_t count =
-                            selected_process_count(state_->processes, state_->filter);
+                            selected_process_count(state_->processes, state_->filter,
+                                                   state_->search_query_lower);
                         const std::size_t maximum_page =
                             count == 0U ? 0U : (count - 1U) / kProcessesPerPage;
                         state_->page_index = std::min(state_->page_index, maximum_page);
@@ -1195,19 +1675,93 @@ sao_status_t Owner::service_ui() noexcept {
                     } else {
                         state_->status_text =
                             status_description(completion.status, "Refresh failed");
+                        if (state_->auto_refresh)
+                            state_->busy_since = service_now;
                     }
                 } else {
                     state_->status_text =
                         completion.status_text.empty()
-                            ? status_description(completion.status, "Attach failed")
+                            ? status_description(completion.status, "Operation failed")
                             : std::move(completion.status_text);
-                    if (completion.status == SAO_STATUS_OK)
+                    if (completion.kind == State::WorkKind::detach) {
+                        if (completion.status == SAO_STATUS_OK) {
+                            state_->attached_process.reset();
+                            state_->attached_notification_pending.reset();
+                            state_->detached_notification_pending = true;
+                        } else if (state_->auto_refresh) {
+                            state_->busy_since = service_now;
+                        }
+                    } else if (completion.status == SAO_STATUS_OK &&
+                               completion.attached_process.has_value()) {
+                        state_->attached_notification_pending.emplace(
+                            *completion.attached_process,
+                            completion.generation);
+                        state_->detached_notification_pending = false;
                         state_->attached_process = std::move(completion.attached_process);
+                    } else if (state_->auto_refresh && completion.status != SAO_STATUS_OK) {
+                        state_->busy_since = service_now;
+                    }
                 }
                 state_->dirty = true;
                 publish_needed = true;
             }
+            attached_notification = state_->attached_notification_pending;
+            detached_notification = state_->detached_notification_pending;
             publish_needed = publish_needed || state_->dirty;
+        }
+        if (attached_notification.has_value()) {
+            const sao_status_t notification_status = state_->operations.on_attached
+                                                         ? state_->operations.on_attached(
+                                                               attached_notification->first,
+                                                               attached_notification->second)
+                                                         : SAO_STATUS_OK;
+            std::lock_guard lock(state_->mutex);
+            if (state_->attached_notification_pending == attached_notification) {
+                if (notification_status == SAO_STATUS_OK) {
+                    state_->attached_notification_pending.reset();
+                    state_->last_status = SAO_STATUS_OK;
+                    state_->status_text =
+                        "Attached PID " + std::to_string(attached_notification->first.pid) +
+                        " · " + attached_notification->first.base_name_utf8;
+                } else if (notification_status == SAO_STATUS_ERR_NOT_FOUND ||
+                           notification_status == SAO_STATUS_ERR_PROCESS_GONE) {
+                    state_->attached_notification_pending.reset();
+                    if (state_->attached_process.has_value() &&
+                        state_->attached_process->identity() ==
+                            attached_notification->first.identity()) {
+                        state_->attached_process.reset();
+                    }
+                    state_->detached_notification_pending = true;
+                    state_->last_status = SAO_STATUS_ERR_PROCESS_GONE;
+                    state_->status_text =
+                        "Attached process exited before memory handoff completed.";
+                } else {
+                    state_->last_status = notification_status;
+                    state_->status_text =
+                        "AI Editor memory handoff is pending (status " +
+                        std::to_string(notification_status) + ").";
+                }
+                state_->dirty = true;
+                publish_needed = true;
+            }
+        }
+        if (detached_notification) {
+            const sao_status_t notification_status = state_->operations.on_detached
+                                                         ? state_->operations.on_detached()
+                                                         : SAO_STATUS_OK;
+            std::lock_guard lock(state_->mutex);
+            if (state_->detached_notification_pending) {
+                if (notification_status == SAO_STATUS_OK) {
+                    state_->detached_notification_pending = false;
+                } else {
+                    state_->last_status = notification_status;
+                    state_->status_text =
+                        "AI Editor memory detach is pending (status " +
+                        std::to_string(notification_status) + ").";
+                }
+                state_->dirty = true;
+                publish_needed = true;
+            }
         }
         return publish_needed ? publish() : SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
@@ -1240,11 +1794,19 @@ sao_status_t Owner::close() noexcept {
 sao_status_t Owner::take_offline() noexcept {
     if (!state_)
         return SAO_STATUS_OK;
+    const auto attachment_cleanup_needed = [](const State& state) {
+        return state.attached_process.has_value() ||
+               state.attached_notification_pending.has_value() ||
+               state.detached_notification_pending ||
+               std::ranges::any_of(state.completions, [](const State::Completion& completion) {
+                   return completion.kind == State::WorkKind::attach;
+               });
+    };
     {
         std::lock_guard lock(state_->mutex);
         if (state_->panel == nullptr && state_->body == nullptr && !state_->creating &&
             !state_->retiring && state_->operations_in_flight == 0U &&
-            state_->callbacks_in_flight == 0U) {
+            state_->callbacks_in_flight == 0U && !attachment_cleanup_needed(*state_)) {
             return SAO_STATUS_OK;
         }
     }
@@ -1256,6 +1818,9 @@ sao_status_t Owner::take_offline() noexcept {
     bool had_action_handler = false;
     bool had_event_handler = false;
     bool was_accepting = false;
+    bool cleanup_required = false;
+    std::function<sao_status_t()> detach_notification;
+    std::function<sao_status_t()> detach_operation;
     {
         std::lock_guard lock(state_->mutex);
         if (state_->creating || state_->retiring || state_->operations_in_flight != 0U ||
@@ -1263,25 +1828,71 @@ sao_status_t Owner::take_offline() noexcept {
             !state_->work_items.empty()) {
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         }
-        if (state_->panel == nullptr) {
-            if (state_->body != nullptr)
-                return SAO_STATUS_ERR_HANDLE_INVALID;
-            state_->visible = false;
-            return SAO_STATUS_OK;
-        }
-        if (state_->body == nullptr)
+        if ((state_->panel == nullptr) != (state_->body == nullptr))
             return SAO_STATUS_ERR_HANDLE_INVALID;
         state_->retiring = true;
         was_accepting = state_->accepting;
         state_->accepting = false;
-        ++state_->requested_generation;
-        state_->work_items.clear();
-        state_->loading = false;
-        state_->refresh_authoritative = false;
-        state_->completions.clear();
+        cleanup_required = attachment_cleanup_needed(*state_);
+        detach_notification = state_->operations.on_detached;
+        detach_operation = state_->operations.detach;
         panel = state_->panel;
         had_action_handler = state_->action_handler_attached;
         had_event_handler = state_->event_handler_attached;
+    }
+
+    if (cleanup_required) {
+        sao_status_t cleanup_status = SAO_STATUS_OK;
+        try {
+            if (detach_notification) {
+                cleanup_status = detach_notification();
+                if (cleanup_status == SAO_STATUS_ERR_NOT_INITIALIZED && detach_operation)
+                    cleanup_status = detach_operation();
+            } else if (detach_operation) {
+                cleanup_status = detach_operation();
+            } else {
+                cleanup_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+            }
+        } catch (const std::bad_alloc&) {
+            cleanup_status = SAO_STATUS_ERR_UNKNOWN;
+        } catch (...) {
+            cleanup_status = SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
+        if (cleanup_status != SAO_STATUS_OK) {
+            std::lock_guard lock(state_->mutex);
+            state_->accepting = was_accepting;
+            state_->retiring = false;
+            return cleanup_status;
+        }
+    }
+
+    {
+        std::lock_guard lock(state_->mutex);
+        if (!state_->retiring || state_->panel != panel) {
+            state_->retiring = false;
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        }
+        if (state_->requested_generation != (std::numeric_limits<std::uint64_t>::max)())
+            ++state_->requested_generation;
+        state_->work_items.clear();
+        state_->pending_attach.reset();
+        state_->attached_notification_pending.reset();
+        state_->detached_notification_pending = false;
+        state_->attached_process.reset();
+        if (cleanup_required) {
+            state_->last_status = SAO_STATUS_OK;
+            state_->status_text = "Memory target detached.";
+        }
+        state_->loading = false;
+        state_->refresh_authoritative = false;
+        state_->completions.clear();
+        state_->dirty = true;
+        if (panel == nullptr) {
+            state_->visible = false;
+            state_->accepting = true;
+            state_->retiring = false;
+            return SAO_STATUS_OK;
+        }
     }
 
     bool action_attached = had_action_handler;
@@ -1317,6 +1928,9 @@ sao_status_t Owner::take_offline() noexcept {
         state_->visible = false;
         state_->action_handler_attached = false;
         state_->event_handler_attached = false;
+        state_->auto_refresh = false;
+        state_->busy_since = {};
+        state_->next_auto_refresh_at = {};
         state_->rendered_spec_json.clear();
         state_->dirty = true;
         state_->accepting = true;
@@ -1379,7 +1993,8 @@ sao_status_t Owner::enqueue_refresh() noexcept {
         std::lock_guard lock(state_->mutex);
         if (!state_->accepting || state_->retiring)
             return SAO_STATUS_ERR_CANCELLED;
-        if (state_->loading || state_->worker_active || !state_->work_items.empty())
+        if (state_->loading || state_->worker_active || !state_->work_items.empty() ||
+            state_->pending_attach.has_value())
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         if (!state_->operations.enumerate_snapshot) {
             state_->loading = false;
@@ -1388,13 +2003,20 @@ sao_status_t Owner::enqueue_refresh() noexcept {
             state_->status_text = "Process enumeration operation is not configured.";
             enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
         } else {
-            ++state_->requested_generation;
-            state_->work_items.push_back(
-                State::WorkItem{State::WorkKind::refresh, state_->requested_generation, {}});
-            state_->loading = true;
-            state_->refresh_authoritative = false;
-            state_->last_status = SAO_STATUS_OK;
-            state_->status_text = "Scanning running processes...";
+            if (state_->requested_generation ==
+                (std::numeric_limits<std::uint64_t>::max)()) {
+                state_->last_status = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+                state_->status_text = "Process selection generation is exhausted.";
+                enqueue_status = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            } else {
+                ++state_->requested_generation;
+                state_->work_items.push_back(
+                    State::WorkItem{State::WorkKind::refresh, state_->requested_generation, {}});
+                state_->loading = true;
+                state_->refresh_authoritative = false;
+                state_->last_status = SAO_STATUS_OK;
+                state_->status_text = "Scanning running processes...";
+            }
         }
         state_->dirty = true;
     }
@@ -1416,6 +2038,7 @@ sao_status_t Owner::set_filter(FilterMode filter) noexcept {
         std::lock_guard lock(state_->mutex);
         state_->filter = filter;
         state_->page_index = 0U;
+        state_->busy_since = {};
         state_->status_text = filter == FilterMode::all
                                   ? "Filter changed: showing all queryable processes."
                                   : "Filter changed: showing likely game processes.";
@@ -1433,7 +2056,8 @@ sao_status_t Owner::set_page(std::size_t page_index) noexcept {
         return panel_status;
     {
         std::lock_guard lock(state_->mutex);
-        const std::size_t count = selected_process_count(state_->processes, state_->filter);
+        const std::size_t count = selected_process_count(state_->processes, state_->filter,
+                                                         state_->search_query_lower);
         const std::size_t page_count =
             count == 0U ? 1U : (count + kProcessesPerPage - 1U) / kProcessesPerPage;
         if (page_index >= page_count)
@@ -1444,6 +2068,214 @@ sao_status_t Owner::set_page(std::size_t page_index) noexcept {
         state_->dirty = true;
     }
     return publish();
+}
+
+sao_status_t Owner::set_search_query(std::string_view query) noexcept {
+    if (!valid_utf8(query) || query.find('\0') != std::string_view::npos)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    std::string bounded(query.substr(0, query.size() > kMaximumSearchQueryBytes
+                                            ? kMaximumSearchQueryBytes
+                                            : query.size()));
+    while (!bounded.empty() &&
+           (static_cast<unsigned char>(bounded.back()) & 0xc0U) == 0x80U) {
+        bounded.pop_back();
+    }
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (state_->search_query == bounded)
+            return SAO_STATUS_OK;
+        state_->search_query = bounded;
+        state_->search_query_lower = lower_ascii(bounded);
+        state_->page_index = 0U;
+        state_->dirty = true;
+    }
+    return publish();
+}
+
+sao_status_t Owner::set_sort(SortColumn column,
+                             std::optional<bool> direction_ascending) noexcept {
+    if (column != SortColumn::name && column != SortColumn::pid &&
+        column != SortColumn::parent_pid) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    const sao_status_t panel_status = ensure_panel();
+    if (panel_status != SAO_STATUS_OK)
+        return panel_status;
+    {
+        std::lock_guard lock(state_->mutex);
+        state_->sort_column = column;
+        if (direction_ascending.has_value())
+            state_->sort_direction =
+                *direction_ascending ? SortDirection::ascending : SortDirection::descending;
+        else
+            state_->sort_direction = state_->sort_direction == SortDirection::ascending
+                                         ? SortDirection::descending
+                                         : SortDirection::ascending;
+        state_->page_index = 0U;
+        state_->dirty = true;
+    }
+    return publish();
+}
+
+sao_status_t Owner::set_view_mode(ViewMode mode) noexcept {
+    if (mode != ViewMode::flat && mode != ViewMode::tree)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    const sao_status_t panel_status = ensure_panel();
+    if (panel_status != SAO_STATUS_OK)
+        return panel_status;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (state_->view_mode == mode)
+            return SAO_STATUS_OK;
+        state_->view_mode = mode;
+        state_->page_index = 0U;
+        state_->dirty = true;
+    }
+    return publish();
+}
+
+sao_status_t Owner::set_auto_refresh(bool enabled) noexcept {
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    const sao_status_t panel_status = ensure_panel();
+    if (panel_status != SAO_STATUS_OK)
+        return panel_status;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (!state_->operations.enumerate_snapshot ||
+            state_->operations.current_process_id == 0U) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        if (state_->auto_refresh == enabled)
+            return SAO_STATUS_OK;
+        state_->auto_refresh = enabled;
+        state_->busy_since = {};
+        state_->next_auto_refresh_at =
+            enabled ? std::chrono::steady_clock::now()
+                    : std::chrono::steady_clock::time_point{};
+        state_->status_text = enabled
+                                  ? "Auto refresh on (every 5s, worker-driven)."
+                                  : "Auto refresh off.";
+        state_->dirty = true;
+    }
+    return publish();
+}
+
+sao_status_t Owner::toggle_expanded(std::uint32_t parent_pid) noexcept {
+    if (parent_pid == 0U)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    const sao_status_t panel_status = ensure_panel();
+    if (panel_status != SAO_STATUS_OK)
+        return panel_status;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (state_->collapsed_parents.erase(parent_pid) == 0U) {
+            if (state_->collapsed_parents.size() >= kMaximumCollapsedPidSet)
+                return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            state_->collapsed_parents.insert(parent_pid);
+        }
+        state_->dirty = true;
+    }
+    return publish();
+}
+
+sao_status_t Owner::detach() noexcept {
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    const sao_status_t panel_status = ensure_panel();
+    if (panel_status != SAO_STATUS_OK)
+        return panel_status;
+
+    sao_status_t enqueue_status = SAO_STATUS_OK;
+    {
+        std::lock_guard lock(state_->mutex);
+        if (state_->loading || state_->worker_active || !state_->work_items.empty() ||
+            state_->pending_attach.has_value()) {
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        }
+        if (!state_->attached_process.has_value() &&
+            !state_->attached_notification_pending.has_value() &&
+            !state_->detached_notification_pending) {
+            return SAO_STATUS_ERR_NOT_FOUND;
+        }
+        if (!state_->operations.detach) {
+            state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+            state_->status_text = "Detach operation is not configured.";
+            state_->dirty = true;
+            enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+        } else if (state_->requested_generation ==
+                   (std::numeric_limits<std::uint64_t>::max)()) {
+            state_->last_status = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+            state_->status_text = "Process selection generation is exhausted.";
+            state_->dirty = true;
+            enqueue_status = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+        } else {
+            ++state_->requested_generation;
+            state_->work_items.push_back(State::WorkItem{State::WorkKind::detach,
+                                                         state_->requested_generation, {}, {}});
+            state_->loading = true;
+            state_->last_status = SAO_STATUS_OK;
+            state_->status_text = "Detaching the memory target.";
+            state_->dirty = true;
+        }
+    }
+    if (enqueue_status == SAO_STATUS_OK)
+        state_->worker_cv.notify_all();
+    const sao_status_t publish_status = publish();
+    return publish_status == SAO_STATUS_OK ? enqueue_status : publish_status;
+}
+
+sao_status_t Owner::open_memory_viewer() noexcept {
+    OperationGuard operation(*this);
+    if (operation.status != SAO_STATUS_OK)
+        return operation.status;
+    const sao_status_t panel_status = ensure_panel();
+    if (panel_status != SAO_STATUS_OK)
+        return panel_status;
+    std::function<sao_status_t()> open_hook;
+    bool attached = false;
+    {
+        std::lock_guard lock(state_->mutex);
+        attached = state_->attached_process.has_value();
+        open_hook = state_->operations.open_memory_viewer;
+    }
+    sao_status_t open_status = SAO_STATUS_OK;
+    std::string message;
+    if (!attached) {
+        open_status = SAO_STATUS_ERR_NOT_FOUND;
+        message = "Memory viewer requires an attached process; attach a PID first.";
+    } else if (!open_hook) {
+        open_status = SAO_STATUS_ERR_NOT_INITIALIZED;
+        message = "The memory viewer owner hook is not configured.";
+    } else {
+        open_status = open_hook();
+        if (open_status == SAO_STATUS_OK)
+            message = "Memory viewer opened for the attached process.";
+        else
+            message = status_description(open_status, "Opening the memory viewer failed");
+    }
+    {
+        std::lock_guard lock(state_->mutex);
+        state_->last_status = open_status;
+        state_->status_text = std::move(message);
+        state_->dirty = true;
+    }
+    const sao_status_t publish_status = publish();
+    return publish_status == SAO_STATUS_OK ? open_status : publish_status;
 }
 
 sao_status_t Owner::attach(ProcessIdentity identity) noexcept {
@@ -1459,7 +2291,8 @@ sao_status_t Owner::attach(ProcessIdentity identity) noexcept {
     sao_status_t enqueue_status = SAO_STATUS_OK;
     {
         std::lock_guard lock(state_->mutex);
-        if (state_->loading || state_->worker_active || !state_->work_items.empty())
+        if (state_->loading || state_->worker_active || !state_->work_items.empty() ||
+            state_->pending_attach.has_value())
             return SAO_UI_PANEL_STATUS_ERR_BUSY;
         if (!state_->refresh_authoritative) {
             state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
@@ -1477,20 +2310,37 @@ sao_status_t Owner::attach(ProcessIdentity identity) noexcept {
                     "Attach rejected: selection is no longer in the current snapshot.";
                 state_->dirty = true;
                 enqueue_status = SAO_STATUS_ERR_NOT_FOUND;
-            } else if (!state_->operations.query_process || !state_->operations.attach) {
+            } else if (!state_->operations.query_process || !state_->operations.attach ||
+                       !state_->operations.detach) {
                 state_->last_status = SAO_STATUS_ERR_NOT_INITIALIZED;
-                state_->status_text = "Attach operations are not configured.";
+                state_->status_text =
+                    "Attach, detach, and identity operations are not configured.";
                 state_->dirty = true;
                 enqueue_status = SAO_STATUS_ERR_NOT_INITIALIZED;
             } else {
-                ++state_->requested_generation;
-                state_->work_items.push_back(State::WorkItem{
-                    State::WorkKind::attach, state_->requested_generation, identity});
-                state_->loading = true;
-                state_->last_status = SAO_STATUS_OK;
-                state_->status_text =
-                    "Verifying identity and attaching PID " + std::to_string(identity.pid) + ".";
-                state_->dirty = true;
+                if (state_->requested_generation ==
+                    (std::numeric_limits<std::uint64_t>::max)()) {
+                    state_->last_status = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+                    state_->status_text = "Process selection generation is exhausted.";
+                    state_->dirty = true;
+                    enqueue_status = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+                } else {
+                    ++state_->requested_generation;
+                    State::WorkItem work{State::WorkKind::attach,
+                                         state_->requested_generation, identity};
+                    if (state_->operations.before_attach)
+                        state_->pending_attach = work;
+                    else
+                        state_->work_items.push_back(work);
+                    state_->attached_notification_pending.reset();
+                    state_->loading = true;
+                    state_->last_status = SAO_STATUS_OK;
+                    state_->status_text = state_->operations.before_attach
+                                              ? "Draining the previous memory target."
+                                              : "Verifying identity and attaching PID " +
+                                                    std::to_string(identity.pid) + ".";
+                    state_->dirty = true;
+                }
             }
         }
     }
@@ -1551,6 +2401,105 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
         }
         return attach({static_cast<std::uint32_t>(*pid), *start_time});
     }
+    if (action_id == kDetachAction) {
+        if (!payload.empty())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return detach();
+    }
+    if (action_id == kSearchAction) {
+        const auto text = payload.find("text");
+        const auto value = payload.find("value");
+        const auto phase = payload.find("phase");
+        const bool have_text = text != payload.end();
+        const bool have_value = value != payload.end();
+        const auto* chosen = have_text ? &(*text) : have_value ? &(*value) : nullptr;
+        if (phase != payload.end() && !phase->is_string())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (chosen != nullptr && !chosen->is_string())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return set_search_query(chosen != nullptr ? chosen->get<std::string>()
+                                                  : std::string_view{});
+    }
+    if (action_id == kSortAction) {
+        const auto selection = payload.find("selected_id");
+        const auto value = payload.find("value");
+        const auto toggle = payload.find("toggle");
+        if (toggle != payload.end()) {
+            if (!toggle->is_boolean() || !toggle->get<bool>())
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            SortColumn column{};
+            {
+                std::lock_guard lock(state_->mutex);
+                column = state_->sort_column;
+            }
+            return set_sort(column, std::optional<bool>{});
+        }
+        SortColumn column = SortColumn::name;
+        bool have_column = false;
+        if (selection != payload.end() && selection->is_number_integer()) {
+            const std::int64_t id = selection->get<std::int64_t>();
+            if (id >= 1 && id <= 3) {
+                column = id == 1 ? SortColumn::name : id == 2 ? SortColumn::pid
+                                                              : SortColumn::parent_pid;
+                have_column = true;
+            }
+        }
+        if (!have_column && value != payload.end() && value->is_string()) {
+            const std::string name = value->get<std::string>();
+            if (name == "name") {
+                column = SortColumn::name;
+                have_column = true;
+            } else if (name == "pid") {
+                column = SortColumn::pid;
+                have_column = true;
+            } else if (name == "ppid") {
+                column = SortColumn::parent_pid;
+                have_column = true;
+            }
+        }
+        if (!have_column)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        SortColumn current{};
+        {
+            std::lock_guard lock(state_->mutex);
+            current = state_->sort_column;
+        }
+        if (column == current)
+            return set_sort(column, std::optional<bool>{});
+        return set_sort(column, true);
+    }
+    if (action_id == kViewModeAction) {
+        const auto mode = payload.find("mode");
+        if (mode == payload.end() || !mode->is_string())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        const std::string value = mode->get<std::string>();
+        if (!valid_text(value, 16U, true))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (value == "flat")
+            return set_view_mode(ViewMode::flat);
+        if (value == "tree")
+            return set_view_mode(ViewMode::tree);
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (action_id == kAutoRefreshAction) {
+        const auto enabled = payload.find("enabled");
+        if (enabled == payload.end() || !enabled->is_boolean())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return set_auto_refresh(enabled->get<bool>());
+    }
+    if (action_id == kExpandCollapseAction) {
+        const std::optional<std::uint64_t> parent_pid = json_unsigned(payload, "parent_pid");
+        if (!parent_pid.has_value() ||
+            *parent_pid > (std::numeric_limits<std::uint32_t>::max)()) {
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        return toggle_expanded(static_cast<std::uint32_t>(*parent_pid));
+    }
+    if (action_id == kOpenMemoryViewerAction) {
+        if (!payload.empty())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        return open_memory_viewer();
+    }
     return SAO_STATUS_ERR_NOT_FOUND;
 }
 
@@ -1567,13 +2516,30 @@ sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
             copy.visible = state_->visible;
             copy.loading = state_->loading;
             copy.filter = state_->filter;
+            copy.search_query = state_->search_query;
+            copy.sort_column = state_->sort_column;
+            copy.sort_direction = state_->sort_direction;
+            copy.view_mode = state_->view_mode;
+            copy.auto_refresh = state_->auto_refresh;
+            copy.auto_refresh_interval_ms = kAutoRefreshIntervalMs;
             copy.page_index = state_->page_index;
-            copy.attach_available = state_->operations.query_process && state_->operations.attach;
+            copy.attach_available = state_->operations.query_process &&
+                                    state_->operations.attach && state_->operations.detach;
             copy.last_status = state_->last_status;
             copy.status_text = state_->status_text;
             copy.all_processes = state_->processes;
-            copy.visible_processes = select_visible(copy.all_processes, copy.filter);
+            VisibleView visible_view =
+                select_visible(copy.all_processes, copy.filter, state_->search_query_lower,
+                               copy.sort_column, copy.sort_direction, copy.view_mode,
+                               state_->collapsed_parents);
+            copy.visible_root_count = visible_view.root_count;
+            copy.visible_processes = std::move(visible_view.processes);
+            copy.visible_depths = std::move(visible_view.depths);
+            copy.visible_has_children = std::move(visible_view.has_children);
+            copy.visible_collapsed = std::move(visible_view.collapsed);
             copy.attached_process = state_->attached_process;
+            copy.memory_viewer_available =
+                static_cast<bool>(state_->operations.open_memory_viewer);
             copy.rendered_spec_json = state_->rendered_spec_json;
         }
         out = std::move(copy);

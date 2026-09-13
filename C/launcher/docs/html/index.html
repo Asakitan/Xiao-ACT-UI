@@ -13,6 +13,7 @@
 </head>
 <body>
   <div id="linkstart-overlay" class="linkstart-overlay" aria-hidden="false">
+    <button type="button" class="guide-close guide-intro-close" data-guide-close aria-label="关闭指南，返回 SAO Auto">关闭指南 <span aria-hidden="true">×</span></button>
     <div class="ls-veil"></div>
     <div class="ls-center">
       <div class="ls-ring ls-ring-a"></div>
@@ -38,7 +39,7 @@
       <a href="#quick-start">快速开始</a><a href="#hotkeys">快捷键</a><a href="#cli">启动参数</a><a href="#faq">常见问题</a>
     </nav>
     <div class="header-actions">
-      <button type="button" id="native-guide-close" class="theme-switch" aria-label="关闭指南，返回 SAO Auto" title="关闭指南" hidden>×</button>
+      <button type="button" id="native-guide-close" class="guide-close" data-guide-close aria-label="关闭指南，返回 SAO Auto" title="关闭指南（Esc）">关闭 <span aria-hidden="true">×</span></button>
       <div class="chapter-picker"><label for="chapter-select">章节</label><select id="chapter-select" aria-label="跳转到指南章节"></select></div>
       <span class="offline-badge"><i aria-hidden="true"></i>离线可用</span>
       <button type="button" id="sound-toggle" class="theme-switch sound-toggle" aria-label="关闭音效" title="音效开 / 关" aria-pressed="true">

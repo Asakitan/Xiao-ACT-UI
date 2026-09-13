@@ -17,8 +17,8 @@
 #include "sao/launcher/provider_config.h"
 #include "sao/launcher/shutdown.h"
 #include "sao/launcher/single_instance.h"
-#include "sao/launcher/user_menu.h"
 #include "sao/launcher/user_guide_webview.h"
+#include "sao/launcher/user_menu.h"
 #include "sao/launcher/working_dir.h"
 
 #include "launcher_lifecycle.h"
@@ -37,6 +37,8 @@
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION) &&                                              \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "license_panel_internal.h"
+#include "memory_viewer_panel_internal.h"
+#include "menu_panel_toggle.h"
 #include "plugin_manager_panel_internal.h"
 #include "process_selector_panel_internal.h"
 #include "workshop_panel_internal.h"
@@ -64,6 +66,7 @@
 #include <windows.h>
 
 #include <bcrypt.h>
+#include <dwmapi.h>
 
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
 #undef SAO_STATUS_OK
@@ -292,6 +295,11 @@ constexpr size_t kRtIoOperatorJsonCapacity =
     2u * SAO_LAUNCHER_RT_IO_STRICT_HELPER_IMAGE_CAPACITY * 6u + 8192u;
 constexpr DWORD kEnvironmentValueCapacity = 32768u;
 
+// process-wide launcher platform context used to satisfy SDK-level streaming
+// requests while the launcher is alive.  Cleared on teardown so a dead
+// pointer can never leak into a plugin call.
+sao_platform_ctx* g_streaming_apply_ctx = nullptr;
+
 // tagWND / capture-shield chain constants.  The decoy rect and the ExStyle mask
 // mirror the Python authoritative sources: `_dc.hide_window_rect(hwnd,0,0,1,1)`
 // and `_dc.OVERLAY_EXSTYLE_MASK` (mem_probe/_dc.py L794) as consumed by
@@ -299,10 +307,10 @@ constexpr DWORD kEnvironmentValueCapacity = 32768u;
 constexpr SaoUiDcMutationRect kCaptureShieldRectScrub{0, 0, 1, 1};
 constexpr uint32_t kCaptureShieldScrubSettleMs = 40;
 constexpr uint32_t kCaptureShieldScrubTimeoutMs = 2000;
-constexpr uint32_t kOverlayExstyleScrubMask = 0x00000008u | 0x00000020u | 0x00000080u |
-                                              0x00200000u | 0x08000000u;
-constexpr uint32_t kCaptureShieldDrainAttempts = 40u;
-constexpr DWORD kCaptureShieldDrainSleepMs = 25u;
+constexpr uint32_t kOverlayExstyleScrubMask =
+    0x00000008u | 0x00000020u | 0x00000080u | 0x00200000u | 0x08000000u;
+constexpr uint32_t kCaptureShieldDispatchWaitMs = kCaptureShieldScrubTimeoutMs + 500u;
+constexpr uint32_t kWndScrubOperationCount = 5u;
 
 class EnvironmentVariableRollback {
   public:
@@ -2243,7 +2251,9 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config*, sao_platfo
 }
 
 sao_status_t sao_platform_bringup_engines(const sao_platform_config*, sao_platform_ctx*,
-                                          sao_platform_ctx**) {
+                                          sao_platform_ctx** ctx_out) {
+    if (ctx_out != nullptr)
+        *ctx_out = nullptr;
     return SAO_STATUS_OK;
 }
 
@@ -2274,36 +2284,55 @@ sao_status_t sao_ui_intro_release_bootstrap(sao_platform_ctx*, int32_t) {
 sao_status_t sao_ui_intro_pump(sao_platform_ctx*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
+sao_status_t sao_ui_outro_show(sao_platform_ctx*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_ui_outro_pump(sao_platform_ctx*, int32_t* out_active) {
+    if (out_active)
+        *out_active = 0;
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_ui_outro_cancel(sao_platform_ctx*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
 #elif defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+struct DcMutationWindowRegistration {
+    void* hwnd = nullptr;
+    void* token = nullptr;
+};
+
 struct sao_platform_ctx {
     sao_rt_io_proxy_handle_t rt_io_proxy;
     uint64_t rt_io_strict_transaction_id = 0u;
     uint64_t rt_io_strict_chain_generation = 0u;
+    std::mutex window_rect_state_mutex;
     sao_rt_io_window_rect_controller_t window_rect_controller;
     SaoRtIoWindowToken window_rect_token;
-    bool window_rect_registered;
-    // Capture-shield / tagWND chains.  The auxiliary windows (hControl decoy,
-    // suppressed owner) and the coordinator registration for hControl are owned
-    // here because the overlay host only registers hRender.
+    bool window_rect_registered = false;
     SaoRtIoWindowToken window_rect_control_token;
     SaoRtIoWindowToken window_rect_owner_token;
-    bool window_rect_aux_registered = false;
-    void* dc_mutation_control_token = nullptr;
-    uint32_t capture_shield_methods = 0u;
+    bool window_rect_control_registered = false;
+    bool window_rect_owner_registered = false;
+    DcMutationWindowRegistration dc_mutation_render;
+    DcMutationWindowRegistration dc_mutation_control;
+    DcMutationWindowRegistration dc_mutation_owner;
     uint32_t capture_shield_threat_flags = 0u;
-    bool capture_shield_active = false;
+    uint32_t wnd_scrub_completed_operations = 0u;
+    sao_ui_dc_mutation_submission_handle_t wnd_scrub_pending_submission = nullptr;
     bool wnd_scrub_applied = false;
     sao_ui_dc_mutation_coordinator_handle_t dc_mutation_coordinator;
     sao_ui_overlay_host_handle_t overlay_host;
     sao_ui_compositor_handle_t compositor;
     sao_ui_input_router_deep_handle_t keyboard_router = nullptr;
     bool sdk_compositor_bound;
+    bool sdk_streaming_apply_bound = false;
     void* user_menu = nullptr;
     sao_ui_entity_shell_handle_t entity_shell;
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
     sao_ui_fisheye_backdrop_handle_t fisheye_backdrop;
     std::unique_ptr<sao::launcher::plugin_manager_panel::Owner> plugin_manager_panel;
     std::unique_ptr<sao::launcher::process_selector_panel::Owner> process_selector_panel;
+    std::unique_ptr<sao::launcher::memory_viewer_panel::Owner> memory_viewer_panel;
     std::unique_ptr<sao::launcher::workshop_panel::Owner> workshop_panel;
     bool workshop_panel_visible;
     std::unique_ptr<sao::launcher::license_panel::Owner> license_panel;
@@ -2331,8 +2360,13 @@ struct sao_platform_ctx {
     sao_ui_linkstart_handle_t linkstart = nullptr;
     SaoUiLinkStartCompletionReason linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
     bool linkstart_pending_completion = false;
+    bool startup_menu_pending = false;
+    bool ui_exiting = false;
     ULONGLONG linkstart_last_tick = 0;
 };
+
+void capture_linkstart_completion(sao_platform_ctx* ctx,
+                                  SaoUiLinkStartCompletionReason fallback) noexcept;
 
 void SAO_UI_CALL resize_linkstart_for_host(int32_t width, int32_t height,
                                            void* user_data) noexcept {
@@ -2340,8 +2374,15 @@ void SAO_UI_CALL resize_linkstart_for_host(int32_t width, int32_t height,
     if (ctx == nullptr || ctx->linkstart == nullptr || width <= 0 || height <= 0)
         return;
     const uint32_t dpi = sao_ui_overlay_host_current_dpi(ctx->overlay_host);
-    (void)sao_ui_linkstart_resize(ctx->linkstart, static_cast<uint32_t>(width),
-                                  static_cast<uint32_t>(height), dpi);
+    const sao_status_t status = sao_ui_linkstart_resize(
+        ctx->linkstart, static_cast<uint32_t>(width), static_cast<uint32_t>(height), dpi);
+    if (status != SAO_STATUS_OK) {
+        const auto reason = status == SAO_STATUS_ERR_DEVICE_LOST
+                                ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
+                                : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
+        (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart, reason);
+        capture_linkstart_completion(ctx, reason);
+    }
 }
 
 void SAO_UI_CALL resize_linkstart_for_dpi(uint32_t dpi, int32_t, int32_t, int32_t width,
@@ -2349,8 +2390,15 @@ void SAO_UI_CALL resize_linkstart_for_dpi(uint32_t dpi, int32_t, int32_t, int32_
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     if (ctx == nullptr || ctx->linkstart == nullptr || width <= 0 || height <= 0)
         return;
-    (void)sao_ui_linkstart_resize(ctx->linkstart, static_cast<uint32_t>(width),
-                                  static_cast<uint32_t>(height), dpi);
+    const sao_status_t status = sao_ui_linkstart_resize(
+        ctx->linkstart, static_cast<uint32_t>(width), static_cast<uint32_t>(height), dpi);
+    if (status != SAO_STATUS_OK) {
+        const auto reason = status == SAO_STATUS_ERR_DEVICE_LOST
+                                ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
+                                : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
+        (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart, reason);
+        capture_linkstart_completion(ctx, reason);
+    }
 }
 
 void capture_linkstart_completion(sao_platform_ctx* ctx,
@@ -2379,6 +2427,7 @@ void drain_deferred_cleanup_for_owner() noexcept {
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
     sao::launcher::workshop_panel::Owner::drain_deferred_cleanup_for_owner();
     sao::launcher::process_selector_panel::Owner::drain_deferred_cleanup_for_owner();
+    sao::launcher::memory_viewer_panel::Owner::drain_deferred_cleanup_for_owner();
     sao::launcher::plugin_manager_panel::Owner::drain_deferred_cleanup_for_owner();
 #endif
 }
@@ -2442,6 +2491,15 @@ sao_status_t update_shared_fisheye_visibility(sao_platform_ctx* ctx) noexcept {
     if (ctx == nullptr || ctx->fisheye_backdrop == nullptr)
         return SAO_STATUS_OK;
 
+    if (ctx->linkstart != nullptr) {
+        bool intro_active = false;
+        const auto status = sao_ui_linkstart_is_active(ctx->linkstart, &intro_active);
+        if (status != SAO_STATUS_OK)
+            return status;
+        if (intro_active)
+            return sao_ui_fisheye_backdrop_hide(ctx->fisheye_backdrop);
+    }
+
     SharedPanelVisibilityProbe panels;
     sao_status_t status = sao_ui_panel_registry_iterate(&collect_shared_panel_visibility, &panels);
     if (status != SAO_STATUS_OK)
@@ -2502,9 +2560,56 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
             ctx->plugin_manager_panel =
                 std::make_unique<sao::launcher::plugin_manager_panel::Owner>(
                     ctx->compositor, [ctx] { return reload_plugins(ctx); });
+            auto process_operations =
+                sao::launcher::process_selector_panel::make_default_operations(ctx->rt_io_proxy);
+            ctx->memory_viewer_panel =
+                std::make_unique<sao::launcher::memory_viewer_panel::Owner>(
+                    ctx->compositor, ctx->rt_io_proxy);
+            process_operations.open_memory_viewer = [ctx]() -> sao_status_t {
+                if (!ctx->memory_viewer_panel)
+                    return SAO_STATUS_ERR_NOT_INITIALIZED;
+                return ctx->memory_viewer_panel->open();
+            };
+            const auto drain_memory_target = [ctx]() -> sao_status_t {
+                if (ctx->memory_viewer_panel) {
+                    const std::uint64_t generation = [&] {
+                        std::lock_guard<std::mutex> peek(ctx->window_rect_state_mutex);
+                        return ctx->rt_io_strict_chain_generation;
+                    }();
+                    (void)ctx->memory_viewer_panel->clear_target(generation);
+                }
+                if (ctx->ai_editor == nullptr || ctx->rt_io_proxy == nullptr)
+                    return SAO_STATUS_ERR_NOT_INITIALIZED;
+                const sao_status_t clear_status = ctx->ai_editor->clear_memory_target();
+                if (clear_status != SAO_STATUS_OK)
+                    return clear_status;
+                return sao_rt_io_proxy_detach(ctx->rt_io_proxy);
+            };
+            process_operations.before_attach = drain_memory_target;
+            process_operations.on_attached =
+                [ctx](const sao::launcher::process_selector_panel::ProcessRecord& process,
+                      std::uint64_t generation) -> sao_status_t {
+                if (ctx->ai_editor == nullptr || ctx->rt_io_proxy == nullptr)
+                    return SAO_STATUS_ERR_NOT_INITIALIZED;
+                if (ctx->memory_viewer_panel) {
+                    sao::launcher::memory_viewer_panel::TargetBinding binding{};
+                    binding.proxy = ctx->rt_io_proxy;
+                    binding.pid = process.pid;
+                    binding.start_time_100ns = process.start_time_100ns;
+                    binding.generation = generation;
+                    binding.base_name_utf8 = process.base_name_utf8;
+                    binding.image_path_utf8 = process.image_path_utf8;
+                    const sao_status_t bind_status = ctx->memory_viewer_panel->bind_target(binding);
+                    if (bind_status != SAO_STATUS_OK)
+                        return bind_status;
+                }
+                return ctx->ai_editor->bind_memory_target(ctx->rt_io_proxy, process.pid,
+                                                          process.start_time_100ns, generation);
+            };
+            process_operations.on_detached = drain_memory_target;
             ctx->process_selector_panel =
-                std::make_unique<sao::launcher::process_selector_panel::Owner>(ctx->compositor,
-                                                                               ctx->rt_io_proxy);
+                std::make_unique<sao::launcher::process_selector_panel::Owner>(
+                    ctx->compositor, std::move(process_operations));
         }
         ctx->workshop_panel = std::make_unique<sao::launcher::workshop_panel::Owner>(
             ctx->compositor, std::filesystem::path(base_dir));
@@ -2544,6 +2649,12 @@ sao_status_t retire_shared_ui_owners(sao_platform_ctx* ctx) noexcept {
         ctx->workshop_panel.reset();
         ctx->workshop_panel_visible = false;
         ctx->builtin_action_state.authority.workshop = false;
+    }
+    if (ctx->memory_viewer_panel) {
+        const sao_status_t status = ctx->memory_viewer_panel->take_offline();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->memory_viewer_panel.reset();
     }
     if (ctx->process_selector_panel) {
         const sao_status_t status = ctx->process_selector_panel->take_offline();
@@ -2693,6 +2804,9 @@ sao_status_t trace_platform_bringup_failure(const char* stage,
 
 sao_status_t rollback_platform_bringup(sao_platform_ctx* ctx, sao_platform_ctx** ctx_out,
                                        sao_status_t failure_status) noexcept {
+    if (ctx_out == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *ctx_out = nullptr;
     const SaoUiThemeId previous_theme = ctx->previous_theme;
     const bool restore_theme = ctx->restore_theme_on_rollback;
     const sao_status_t teardown_status = teardown_platform_context(ctx, false);
@@ -2705,6 +2819,97 @@ sao_status_t rollback_platform_bringup(sao_platform_ctx* ctx, sao_platform_ctx**
     return failure_status;
 }
 
+bool window_rect_token_matches(const SaoRtIoWindowToken& token, uint64_t hwnd) noexcept {
+    const HWND window = reinterpret_cast<HWND>(static_cast<uintptr_t>(hwnd));
+    DWORD process_id = 0u;
+    const DWORD thread_id = GetWindowThreadProcessId(window, &process_id);
+    return window != nullptr && thread_id != 0u && process_id == GetCurrentProcessId() &&
+           token.hwnd == hwnd && token.pid == process_id && token.tid == thread_id &&
+           token.generation != 0u;
+}
+
+bool snapshot_window_rect_binding(sao_platform_ctx* ctx, uint64_t hwnd,
+                                  sao_rt_io_window_rect_controller_t* out_controller,
+                                  SaoRtIoWindowToken* out_token) noexcept {
+    if (ctx == nullptr || hwnd == 0u || out_controller == nullptr || out_token == nullptr) {
+        return false;
+    }
+    *out_controller = nullptr;
+    *out_token = {};
+    std::lock_guard<std::mutex> lock(ctx->window_rect_state_mutex);
+    if (ctx->window_rect_controller == nullptr)
+        return false;
+    const struct {
+        const SaoRtIoWindowToken* token;
+        bool registered;
+    } candidates[] = {
+        {&ctx->window_rect_token, ctx->window_rect_registered},
+        {&ctx->window_rect_control_token, ctx->window_rect_control_registered},
+        {&ctx->window_rect_owner_token, ctx->window_rect_owner_registered},
+    };
+    for (const auto& candidate : candidates) {
+        const SaoRtIoWindowToken& token = *candidate.token;
+        if (candidate.registered && window_rect_token_matches(token, hwnd)) {
+            *out_controller = ctx->window_rect_controller;
+            *out_token = token;
+            return true;
+        }
+    }
+    return false;
+}
+
+sao_status_t ensure_dc_mutation_registration(sao_platform_ctx* ctx, void* hwnd,
+                                             DcMutationWindowRegistration& registration) noexcept {
+    if (ctx == nullptr || hwnd == nullptr || ctx->dc_mutation_coordinator == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (registration.token != nullptr)
+        return registration.hwnd == hwnd ? SAO_STATUS_OK : SAO_STATUS_ERR_HANDLE_INVALID;
+    if (registration.hwnd != nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    void* token = nullptr;
+    const sao_status_t status =
+        sao_ui_dc_mutation_coordinator_register(ctx->dc_mutation_coordinator, hwnd, &token);
+    if (status != SAO_STATUS_OK)
+        return status;
+    if (token == nullptr)
+        return SAO_STATUS_INTERNAL;
+    registration.hwnd = hwnd;
+    registration.token = token;
+    return SAO_STATUS_OK;
+}
+
+sao_status_t
+invalidate_dc_mutation_registration(sao_platform_ctx* ctx,
+                                    DcMutationWindowRegistration& registration) noexcept {
+    if (registration.hwnd == nullptr && registration.token == nullptr)
+        return SAO_STATUS_OK;
+    if (ctx == nullptr || ctx->dc_mutation_coordinator == nullptr || registration.hwnd == nullptr ||
+        registration.token == nullptr) {
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    if (!sao_ui_dc_mutation_coordinator_invalidate(ctx->dc_mutation_coordinator, registration.hwnd,
+                                                   2.0)) {
+        return SAO_STATUS_ERR_TIMEOUT;
+    }
+    registration = {};
+    return SAO_STATUS_OK;
+}
+
+sao_status_t invalidate_dc_mutation_aux(sao_platform_ctx* ctx) noexcept {
+    if (ctx == nullptr)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    sao_status_t first_failure = SAO_STATUS_OK;
+    const sao_status_t control_status =
+        invalidate_dc_mutation_registration(ctx, ctx->dc_mutation_control);
+    if (control_status != SAO_STATUS_OK)
+        first_failure = control_status;
+    const sao_status_t owner_status =
+        invalidate_dc_mutation_registration(ctx, ctx->dc_mutation_owner);
+    if (owner_status != SAO_STATUS_OK && first_failure == SAO_STATUS_OK)
+        first_failure = owner_status;
+    return first_failure;
+}
+
 sao_status_t SAO_UI_CALL hide_window_rect(void* user_data, void* hwnd,
                                           const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms,
                                           uint32_t timeout_ms) {
@@ -2712,13 +2917,10 @@ sao_status_t SAO_UI_CALL hide_window_rect(void* user_data, void* hwnd,
     if (ctx == nullptr || hwnd == nullptr || fake_rect == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    if (ctx->window_rect_controller == nullptr || !ctx->window_rect_registered) {
-        return SAO_STATUS_ERR_NOT_INITIALIZED;
-    }
     const uint64_t hwnd_value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
-    const SaoRtIoWindowToken& token = ctx->window_rect_token;
-    if (token.hwnd == 0 || token.pid == 0 || token.tid == 0 || token.generation == 0 ||
-        token.hwnd != hwnd_value) {
+    sao_rt_io_window_rect_controller_t controller = nullptr;
+    SaoRtIoWindowToken token{};
+    if (!snapshot_window_rect_binding(ctx, hwnd_value, &controller, &token)) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
     if (fake_rect->right <= fake_rect->left || fake_rect->bottom <= fake_rect->top) {
@@ -2726,8 +2928,7 @@ sao_status_t SAO_UI_CALL hide_window_rect(void* user_data, void* hwnd,
     }
     const SaoRtIoRect rect{fake_rect->left, fake_rect->top, fake_rect->right, fake_rect->bottom};
     SaoRtIoCallResult result{};
-    return sao_rt_io_hide_window_rect(ctx->window_rect_controller, &token, &rect, settle_ms,
-                                      timeout_ms, &result);
+    return sao_rt_io_hide_window_rect(controller, &token, &rect, settle_ms, timeout_ms, &result);
 }
 
 sao_status_t SAO_UI_CALL hide_exstyle(void* user_data, void* hwnd, uint32_t mask,
@@ -2736,18 +2937,14 @@ sao_status_t SAO_UI_CALL hide_exstyle(void* user_data, void* hwnd, uint32_t mask
     if (ctx == nullptr || hwnd == nullptr || mask == 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    if (ctx->window_rect_controller == nullptr || !ctx->window_rect_registered) {
-        return SAO_STATUS_ERR_NOT_INITIALIZED;
-    }
     const uint64_t hwnd_value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
-    const SaoRtIoWindowToken& token = ctx->window_rect_token;
-    if (token.hwnd == 0 || token.pid == 0 || token.tid == 0 || token.generation == 0 ||
-        token.hwnd != hwnd_value) {
+    sao_rt_io_window_rect_controller_t controller = nullptr;
+    SaoRtIoWindowToken token{};
+    if (!snapshot_window_rect_binding(ctx, hwnd_value, &controller, &token)) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
     SaoRtIoCallResult result{};
-    return sao_rt_io_clear_window_exstyle(ctx->window_rect_controller, &token, mask, timeout_ms,
-                                          &result);
+    return sao_rt_io_clear_window_exstyle(controller, &token, mask, timeout_ms, &result);
 }
 
 sao_status_t SAO_UI_CALL unlink_z_order(void* user_data, void* hwnd, uint32_t timeout_ms) {
@@ -2755,17 +2952,14 @@ sao_status_t SAO_UI_CALL unlink_z_order(void* user_data, void* hwnd, uint32_t ti
     if (ctx == nullptr || hwnd == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    if (ctx->window_rect_controller == nullptr || !ctx->window_rect_registered) {
-        return SAO_STATUS_ERR_NOT_INITIALIZED;
-    }
     const uint64_t hwnd_value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(hwnd));
-    const SaoRtIoWindowToken& token = ctx->window_rect_token;
-    if (token.hwnd == 0 || token.pid == 0 || token.tid == 0 || token.generation == 0 ||
-        token.hwnd != hwnd_value) {
+    sao_rt_io_window_rect_controller_t controller = nullptr;
+    SaoRtIoWindowToken token{};
+    if (!snapshot_window_rect_binding(ctx, hwnd_value, &controller, &token)) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
     SaoRtIoCallResult result{};
-    return sao_rt_io_unlink_z_order(ctx->window_rect_controller, &token, timeout_ms, &result);
+    return sao_rt_io_unlink_z_order(controller, &token, timeout_ms, &result);
 }
 
 sao_status_t SAO_UI_CALL apply_overlay_protection_provider(void* render_hwnd, void* control_hwnd,
@@ -2888,7 +3082,7 @@ sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
     if (ctx == nullptr || ctx->overlay_host == nullptr || !ctx->streaming_flow_started) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
-    return applyStreamingModeTransaction(
+    const sao_status_t result = applyStreamingModeTransaction(
         enabled, [](void*) { return sao_streaming_flow_mode_lock_acquire(2.0); },
         [](void*) { return sao_streaming_flow_get_mode(); },
         [](void* context) {
@@ -2905,6 +3099,16 @@ sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
                                                              : SAO_STATUS_OK;
         },
         [](void*) { return sao_streaming_flow_mode_lock_release(); }, ctx);
+    if (result == SAO_STATUS_OK)
+        ctx->builtin_action_state.streaming_mode = enabled;
+    return result;
+}
+
+int32_t SAO_SDK_CALL sao_launcher_streaming_apply(int32_t enabled) {
+    sao_platform_ctx* ctx = g_streaming_apply_ctx;
+    if (ctx == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    return apply_streaming_mode(enabled != 0, ctx);
 }
 
 sao_status_t persist_streaming_mode(bool enabled, void* user_data) {
@@ -2919,7 +3123,9 @@ sao_status_t open_workshop(void* user_data) {
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     if (ctx == nullptr || !ctx->workshop_panel)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
-    const sao_status_t status = ctx->workshop_panel->open();
+    const sao_status_t status = sao::launcher::toggle_menu_panel(
+        sao::launcher::workshop_panel::kPanelId, [&] { return ctx->workshop_panel->open(); },
+        [&] { return ctx->workshop_panel->hide(); });
     if (status != SAO_STATUS_OK)
         return status;
     return update_shared_fisheye_visibility(ctx);
@@ -2929,7 +3135,10 @@ sao_status_t open_process_selector(void* user_data) {
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     if (ctx == nullptr || !ctx->process_selector_panel)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
-    const sao_status_t status = ctx->process_selector_panel->open();
+    const sao_status_t status = sao::launcher::toggle_menu_panel(
+        sao::launcher::process_selector_panel::kPanelId,
+        [&] { return ctx->process_selector_panel->open(); },
+        [&] { return ctx->process_selector_panel->close(); });
     if (status != SAO_STATUS_OK)
         return status;
     return update_shared_fisheye_visibility(ctx);
@@ -2939,7 +3148,10 @@ sao_status_t open_plugin_manager(void* user_data) {
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     if (ctx == nullptr || !ctx->plugin_manager_panel)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
-    const sao_status_t status = ctx->plugin_manager_panel->open();
+    const sao_status_t status = sao::launcher::toggle_menu_panel(
+        sao::launcher::plugin_manager_panel::kPanelId.data(),
+        [&] { return ctx->plugin_manager_panel->open(); },
+        [&] { return ctx->plugin_manager_panel->close(); });
     if (status != SAO_STATUS_OK)
         return status;
     return update_shared_fisheye_visibility(ctx);
@@ -2953,7 +3165,9 @@ sao_status_t open_license_panel(void* user_data) {
     auto* ctx = static_cast<sao_platform_ctx*>(user_data);
     if (ctx == nullptr || !ctx->license_panel)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
-    const sao_status_t status = ctx->license_panel->open();
+    const sao_status_t status = sao::launcher::toggle_menu_panel(
+        sao::launcher::license_panel::kPanelId, [&] { return ctx->license_panel->open(); },
+        [&] { return ctx->license_panel->close(); });
     if (status != SAO_STATUS_OK)
         return status;
     (void)update_shared_fisheye_visibility(ctx);
@@ -3037,6 +3251,8 @@ sao_status_t publish_nervgear_degraded(void* user_data) {
 }
 
 sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data) {
+    if (user_data != nullptr && static_cast<sao_platform_ctx*>(user_data)->ui_exiting)
+        return SAO_STATUS_OK;
     const auto action_token = static_cast<std::int32_t>(action);
     if (sao::launcher::entity_action_routes::is_dynamic_token(action_token)) {
         auto* ctx = static_cast<sao_platform_ctx*>(user_data);
@@ -3171,6 +3387,10 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     HWND owner = ctx == nullptr || ctx->overlay_host == nullptr
                      ? nullptr
                      : static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
+    if (sao::launcher::userGuideWebViewVisible()) {
+        sao::launcher::hideUserGuideWebView();
+        return SAO_STATUS_OK;
+    }
     if (sao::launcher::openUserDocsIndex(sao_launcher_base_dir(), owner)) {
         return SAO_STATUS_OK;
     }
@@ -3509,29 +3729,28 @@ rt_io_operator_live_options(const sao_launcher_rt_io_operator_options_t& options
     return flags;
 }
 
-// Auxiliary window generations registered by the tagWND chain must be revoked
-// before the controller is destroyed; the tokens are per-HWND, so a failure on
-// one does not invalidate the others.
 sao_status_t revoke_window_rect_aux(sao_platform_ctx* ctx) noexcept {
     if (ctx == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
-    if (!ctx->window_rect_aux_registered)
+    if (!ctx->window_rect_control_registered && !ctx->window_rect_owner_registered)
         return SAO_STATUS_OK;
     if (ctx->window_rect_controller == nullptr)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     sao_status_t first_failure = SAO_STATUS_OK;
-    const SaoRtIoWindowToken tokens[]{ctx->window_rect_control_token,
-                                      ctx->window_rect_owner_token};
-    for (const SaoRtIoWindowToken& token : tokens) {
-        if (token.hwnd == 0u || token.generation == 0u)
-            continue;
-        const sao_status_t status = sao_rt_io_window_rect_revoke(ctx->window_rect_controller, &token);
-        if (status != SAO_STATUS_OK && first_failure == SAO_STATUS_OK)
+    const auto revoke = [&](SaoRtIoWindowToken& token, bool& registered) {
+        if (!registered)
+            return;
+        const sao_status_t status =
+            sao_rt_io_window_rect_revoke(ctx->window_rect_controller, &token);
+        if (status == SAO_STATUS_OK) {
+            token = {};
+            registered = false;
+        } else if (first_failure == SAO_STATUS_OK) {
             first_failure = status;
-    }
-    ctx->window_rect_control_token = {};
-    ctx->window_rect_owner_token = {};
-    ctx->window_rect_aux_registered = false;
+        }
+    };
+    revoke(ctx->window_rect_control_token, ctx->window_rect_control_registered);
+    revoke(ctx->window_rect_owner_token, ctx->window_rect_owner_registered);
     return first_failure;
 }
 
@@ -4050,9 +4269,21 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
         return rollback_and_fail("ui_overlay_host_create", status);
     }
     const auto render_hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
-    if (render_hwnd == nullptr) {
+    const auto control_hwnd =
+        static_cast<HWND>(sao_ui_overlay_host_control_hwnd(ctx->overlay_host));
+    const auto owner_hwnd = static_cast<HWND>(sao_ui_overlay_host_owner_hwnd(ctx->overlay_host));
+    if (render_hwnd == nullptr || control_hwnd == nullptr || owner_hwnd == nullptr) {
         return rollback_and_fail("ui_overlay_host_hwnd", SAO_STATUS_ERR_HANDLE_INVALID);
     }
+    status = ensure_dc_mutation_registration(ctx, render_hwnd, ctx->dc_mutation_render);
+    if (status != SAO_STATUS_OK)
+        return rollback_and_fail("dc_mutation_register_render", status);
+    status = ensure_dc_mutation_registration(ctx, control_hwnd, ctx->dc_mutation_control);
+    if (status != SAO_STATUS_OK)
+        return rollback_and_fail("dc_mutation_register_control", status);
+    status = ensure_dc_mutation_registration(ctx, owner_hwnd, ctx->dc_mutation_owner);
+    if (status != SAO_STATUS_OK)
+        return rollback_and_fail("dc_mutation_register_owner", status);
     status = sao_ui_compositor_create(ctx->overlay_host, nullptr, &ctx->compositor);
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("ui_compositor_create", status);
@@ -4113,10 +4344,9 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_pl
     // and test callers, but launcher defaults no longer bypass the
     // service identity contract.
     rt_io_cfg.bootstrap_mode = SAO_RT_IO_PROXY_BOOTSTRAP_MODE_SCM_STRICT;
-    const NTSTATUS nonce_status =
-        BCryptGenRandom(nullptr, rt_io_cfg.session_nonce,
-                        static_cast<ULONG>(sizeof(rt_io_cfg.session_nonce)),
-                        BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    const NTSTATUS nonce_status = BCryptGenRandom(
+        nullptr, rt_io_cfg.session_nonce, static_cast<ULONG>(sizeof(rt_io_cfg.session_nonce)),
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     const NTSTATUS transaction_status = BCryptGenRandom(
         nullptr, reinterpret_cast<PUCHAR>(&rt_io_cfg.transaction_id),
         static_cast<ULONG>(sizeof(rt_io_cfg.transaction_id)), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
@@ -4149,10 +4379,17 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_pl
     if (status != SAO_STATUS_OK) {
         return trace_platform_bringup_failure("rt_io_proxy_open_v3", status);
     }
-    status =
-        sao_rt_io_window_rect_controller_create(ctx->rt_io_proxy, &ctx->window_rect_controller);
+    sao_rt_io_window_rect_controller_t window_rect_controller = nullptr;
+    status = sao_rt_io_window_rect_controller_create(ctx->rt_io_proxy, &window_rect_controller);
     if (status != SAO_STATUS_OK) {
         return trace_platform_bringup_failure("rt_io_window_rect_controller_create", status);
+    }
+    if (window_rect_controller == nullptr)
+        return trace_platform_bringup_failure("rt_io_window_rect_controller_create",
+                                              SAO_STATUS_INTERNAL);
+    {
+        std::lock_guard<std::mutex> lock(ctx->window_rect_state_mutex);
+        ctx->window_rect_controller = window_rect_controller;
     }
     return SAO_STATUS_OK;
 }
@@ -4162,8 +4399,9 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_pl
 // entity shell and its provider publication all bind compositor objects.
 sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_platform_ctx* ctx,
                                           sao_platform_ctx** ctx_out) {
-    if (!cfg || !ctx)
+    if (!cfg || !ctx || !ctx_out)
         return SAO_STATUS_INVALID_ARGUMENT;
+    *ctx_out = nullptr;
     const auto rollback_and_fail = [&](const char* stage, sao_status_t failure_status) noexcept {
         return rollback_platform_bringup(ctx, ctx_out,
                                          trace_platform_bringup_failure(stage, failure_status));
@@ -4187,14 +4425,28 @@ sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_pl
     action_authority.fisheye_live = ctx->fisheye_backdrop != nullptr;
 #endif
     if (!safe_mode) {
+        sao_rt_io_window_rect_controller_t controller = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(ctx->window_rect_state_mutex);
+            controller = ctx->window_rect_controller;
+        }
+        if (controller == nullptr)
+            return rollback_and_fail("rt_io_window_rect_register", SAO_STATUS_ERR_NOT_INITIALIZED);
+        SaoRtIoWindowToken token{};
         status = sao_rt_io_window_rect_register(
-            ctx->window_rect_controller,
-            static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)),
-            &ctx->window_rect_token);
+            controller, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)), &token);
         if (status != SAO_STATUS_OK) {
             return rollback_and_fail("rt_io_window_rect_register", status);
         }
-        ctx->window_rect_registered = true;
+        {
+            std::lock_guard<std::mutex> lock(ctx->window_rect_state_mutex);
+            ctx->window_rect_token = token;
+            ctx->window_rect_registered = true;
+        }
+        if (!window_rect_token_matches(
+                token, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)))) {
+            return rollback_and_fail("rt_io_window_rect_register", SAO_STATUS_ERR_HANDLE_INVALID);
+        }
     }
 
     status = sao_streaming_flow_startup(2.0);
@@ -4202,6 +4454,16 @@ sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_pl
         return rollback_and_fail("streaming_flow_startup", status);
     }
     ctx->streaming_flow_started = true;
+
+    // Register the SDK streaming-mode hook before the entity shell starts so
+    // plugin/settings call sites can route through the host transaction.
+    status = map_sdk_runtime_status(
+        sao_sdk_platform_bind_streaming_mode_apply(&sao_launcher_streaming_apply));
+    if (status != SAO_STATUS_OK) {
+        return rollback_and_fail("sdk_bind_streaming_apply", status);
+    }
+    g_streaming_apply_ctx = ctx;
+    ctx->sdk_streaming_apply_bound = true;
 
     status = apply_streaming_mode(ctx->builtin_action_state.streaming_mode, ctx);
     if (status != SAO_STATUS_OK) {
@@ -4238,10 +4500,83 @@ sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_pl
     authority.topmost_status = sao::launcher::entity_provider_publication::
         TopmostPublicationStatus::degraded_authority_unavailable;
 #endif
-    ctx->restore_theme_on_rollback = false;
-    ctx->settings_save_enabled = true;
     return SAO_STATUS_OK;
 }
+
+#if defined(SAO_LAUNCHER_HAS_ANTI_SCREENCAP_CHAIN)
+bool capture_method_available(uint64_t methods, const char* id) noexcept {
+    if (id == nullptr)
+        return false;
+    const size_t count = sao_security_anti_screencap_method_count();
+    for (size_t index = 0; index < count && index < 64u; ++index) {
+        SaoAscMethodInfo info{};
+        if (sao_security_anti_screencap_method_at(index, &info) == 0 && info.id != nullptr &&
+            std::strcmp(info.id, id) == 0) {
+            return (methods & (uint64_t{1} << index)) != 0u;
+        }
+    }
+    return false;
+}
+
+sao_status_t map_dwm_attribute_status(HRESULT status) noexcept {
+    if (SUCCEEDED(status))
+        return SAO_STATUS_OK;
+    if (status == E_INVALIDARG || status == E_NOTIMPL || status == E_NOINTERFACE ||
+        status == HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)) {
+        return SAO_STATUS_ERR_CAPABILITY_MISSING;
+    }
+    return SAO_STATUS_ERR_OS_CALL_FAILED;
+}
+
+sao_status_t read_dwm_bool_attribute(HWND hwnd, DWORD attribute, BOOL* out_value) noexcept {
+    if (hwnd == nullptr || out_value == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_value = FALSE;
+    return map_dwm_attribute_status(
+        DwmGetWindowAttribute(hwnd, attribute, out_value, sizeof(*out_value)));
+}
+
+sao_status_t write_dwm_bool_attribute(HWND hwnd, DWORD attribute, DWORD query_attribute,
+                                      BOOL value) noexcept {
+    const sao_status_t set_status =
+        map_dwm_attribute_status(DwmSetWindowAttribute(hwnd, attribute, &value, sizeof(value)));
+    if (set_status != SAO_STATUS_OK)
+        return set_status;
+    BOOL observed = FALSE;
+    const sao_status_t query_status = read_dwm_bool_attribute(hwnd, query_attribute, &observed);
+    if (query_status != SAO_STATUS_OK)
+        return query_status;
+    return (observed != FALSE) == (value != FALSE) ? SAO_STATUS_OK : SAO_STATUS_ERR_OS_CALL_FAILED;
+}
+
+sao_status_t deny_secondary_dwm_thumbnail(HWND hwnd) noexcept {
+    constexpr DWORD kExcludedFromPeek = 12u;
+    constexpr DWORD kCloak = 13u;
+    constexpr DWORD kCloaked = 14u;
+    BOOL prior_cloak = FALSE;
+    BOOL prior_peek = FALSE;
+    sao_status_t status = read_dwm_bool_attribute(hwnd, kCloaked, &prior_cloak);
+    if (status == SAO_STATUS_OK)
+        status = read_dwm_bool_attribute(hwnd, kExcludedFromPeek, &prior_peek);
+    if (status != SAO_STATUS_OK)
+        return status;
+
+    status = write_dwm_bool_attribute(hwnd, kCloak, kCloaked, TRUE);
+    if (status == SAO_STATUS_OK) {
+        status = write_dwm_bool_attribute(hwnd, kExcludedFromPeek, kExcludedFromPeek, TRUE);
+    }
+    if (status == SAO_STATUS_OK)
+        return SAO_STATUS_OK;
+
+    const sao_status_t peek_rollback =
+        write_dwm_bool_attribute(hwnd, kExcludedFromPeek, kExcludedFromPeek, prior_peek);
+    const sao_status_t cloak_rollback =
+        write_dwm_bool_attribute(hwnd, kCloak, kCloaked, prior_cloak);
+    return peek_rollback == SAO_STATUS_OK && cloak_rollback == SAO_STATUS_OK
+               ? status
+               : SAO_STATUS_ERR_OS_CALL_FAILED;
+}
+#endif
 
 // Stage 4 — capture shield.  Runs the anti-screencap chain over every window
 // this process owns: per-method availability, the syscall/stub affinity path,
@@ -4257,46 +4592,67 @@ sao_status_t sao_platform_bringup_capture_shield(const sao_platform_config* cfg,
         return SAO_STATUS_OK;
     HWND render_hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
     HWND control_hwnd = static_cast<HWND>(sao_ui_overlay_host_control_hwnd(ctx->overlay_host));
-    if (render_hwnd == nullptr)
+    HWND owner_hwnd = static_cast<HWND>(sao_ui_overlay_host_owner_hwnd(ctx->overlay_host));
+    if (render_hwnd == nullptr || control_hwnd == nullptr || owner_hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
 #if defined(SAO_LAUNCHER_HAS_ANTI_SCREENCAP_CHAIN)
-    // Method availability first: the result decides which denial paths below
-    // can be relied on, and is reported through the rail telemetry.
-    ctx->capture_shield_methods =
-        static_cast<uint32_t>(sao_security_anti_screencap_method_probe_all());
-    if (sao_security_anti_screencap_syscall_affinity_available()) {
-        (void)sao_security_anti_screencap_syscall_affinity_apply(render_hwnd, 1u);
-        if (control_hwnd != nullptr)
-            (void)sao_security_anti_screencap_syscall_affinity_apply(control_hwnd, 1u);
+    const uint64_t capture_methods = sao_security_anti_screencap_method_probe_all();
+    if (capture_method_available(capture_methods, "syscall_affinity")) {
+        int32_t method_status = sao_security_anti_screencap_syscall_affinity_apply(render_hwnd, 1u);
+        if (method_status != 0)
+            return trace_platform_bringup_failure("capture_syscall_affinity_render", method_status);
+        method_status = sao_security_anti_screencap_syscall_affinity_apply(control_hwnd, 1u);
+        if (method_status != 0)
+            return trace_platform_bringup_failure("capture_syscall_affinity_control",
+                                                  method_status);
     }
-    if (sao_security_anti_screencap_kernel_sprite_available() &&
-        sao_security_anti_screencap_kernel_sprite_status() !=
-            SAO_ASC_KERNEL_SPRITE_NO_PROVIDER) {
-        (void)sao_security_anti_screencap_kernel_sprite_protect(render_hwnd, true);
-        if (control_hwnd != nullptr)
-            (void)sao_security_anti_screencap_kernel_sprite_protect(control_hwnd, true);
+    if (capture_method_available(capture_methods, "kernel_sprite_protect")) {
+        int32_t method_status =
+            sao_security_anti_screencap_kernel_sprite_protect(render_hwnd, true);
+        if (method_status != 0)
+            return trace_platform_bringup_failure("capture_kernel_sprite_render", method_status);
+        method_status = sao_security_anti_screencap_kernel_sprite_protect(control_hwnd, true);
+        if (method_status != 0)
+            return trace_platform_bringup_failure("capture_kernel_sprite_control", method_status);
     }
-    (void)sao_security_anti_screencap_dwm_thumbnail_deny(render_hwnd);
-    if (control_hwnd != nullptr)
-        (void)sao_security_anti_screencap_dwm_thumbnail_deny(control_hwnd);
-    // Re-assert the dual-HWND affinity through the host: the host owns both
-    // HWNDs and applies the pair symmetrically with rollback.
+    const bool dwm_thumbnail_available =
+        capture_method_available(capture_methods, "dwm_thumbnail_deny");
+    if (ctx->screencap_protection && !dwm_thumbnail_available) {
+        return trace_platform_bringup_failure("capture_dwm_thumbnail_capability",
+                                              SAO_STATUS_ERR_CAPABILITY_MISSING);
+    }
+    if (dwm_thumbnail_available) {
+        int32_t method_status = sao_security_anti_screencap_dwm_thumbnail_deny(render_hwnd);
+        if (method_status != 0)
+            return trace_platform_bringup_failure("capture_dwm_thumbnail_render", method_status);
+        method_status = deny_secondary_dwm_thumbnail(control_hwnd);
+        if (method_status != SAO_STATUS_OK)
+            return trace_platform_bringup_failure("capture_dwm_thumbnail_control", method_status);
+    }
     if (ctx->screencap_protection) {
+        if (!capture_method_available(capture_methods, "wda_user32") ||
+            !capture_method_available(capture_methods, "wda_streaming_state_machine")) {
+            return trace_platform_bringup_failure("capture_mode_capability",
+                                                  SAO_STATUS_ERR_CAPABILITY_MISSING);
+        }
         const sao_status_t capture_status =
             sao_ui_overlay_host_set_capture_mode(ctx->overlay_host, true);
         if (capture_status != SAO_STATUS_OK)
-            trace_platform_bringup_failure("capture_mode_apply", capture_status);
+            return trace_platform_bringup_failure("capture_mode_apply", capture_status);
+        if (!sao_ui_overlay_host_capture_excluded(ctx->overlay_host)) {
+            return trace_platform_bringup_failure("capture_mode_verify",
+                                                  SAO_STATUS_ERR_CAPABILITY_MISSING);
+        }
     }
     const sao_status_t sweep_status = sao_platform_bringup_capture_sweep(ctx);
     if (sweep_status != SAO_STATUS_OK)
         return sweep_status;
-    (void)sao_security_anti_screencap_scan_all(render_hwnd, &ctx->capture_shield_threat_flags);
-    // A dirty scan turns on the strict posture; a clean one restores the
-    // normal posture instead of leaving the threat latch set.
-    (void)sao_security_anti_screencap_react_to_capture_threat(
-        ctx->capture_shield_threat_flags != 0u);
+#else
+    if (ctx->screencap_protection) {
+        return trace_platform_bringup_failure("capture_chain_capability",
+                                              SAO_STATUS_ERR_CAPABILITY_MISSING);
+    }
 #endif
-    ctx->capture_shield_active = true;
     return SAO_STATUS_OK;
 }
 
@@ -4307,14 +4663,21 @@ sao_status_t sao_platform_bringup_capture_sweep(sao_platform_ctx* ctx) {
     if (ctx == nullptr)
         return SAO_STATUS_INVALID_ARGUMENT;
 #if defined(SAO_LAUNCHER_HAS_ANTI_SCREENCAP_CHAIN)
-    (void)sao_security_anti_screencap_register_process_windows();
+    const int32_t register_status = sao_security_anti_screencap_register_process_windows();
+    if (register_status < 0)
+        return trace_platform_bringup_failure("capture_register_sweep", register_status);
     HWND render_hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
-    if (render_hwnd != nullptr) {
-        (void)sao_security_anti_screencap_scan_all(render_hwnd, &ctx->capture_shield_threat_flags);
-        if (ctx->capture_shield_active)
-            (void)sao_security_anti_screencap_react_to_capture_threat(
-                ctx->capture_shield_threat_flags != 0u);
-    }
+    if (render_hwnd == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    uint32_t threat_flags = 0u;
+    const int32_t scan_status = sao_security_anti_screencap_scan_all(render_hwnd, &threat_flags);
+    if (scan_status != 0)
+        return trace_platform_bringup_failure("capture_scan", scan_status);
+    const int32_t react_status =
+        sao_security_anti_screencap_react_to_capture_threat(threat_flags != 0u);
+    if (react_status != 0)
+        return trace_platform_bringup_failure("capture_react", react_status);
+    ctx->capture_shield_threat_flags = threat_flags;
 #else
     (void)ctx;
 #endif
@@ -4328,118 +4691,198 @@ sao_status_t sao_platform_bringup_capture_sweep(sao_platform_ctx* ctx) {
 sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_platform_ctx* ctx) {
     if (!cfg || !ctx)
         return SAO_STATUS_INVALID_ARGUMENT;
-    if (cfg->safe_mode != 0)
+    if (cfg->safe_mode != 0) {
+        ctx->restore_theme_on_rollback = false;
+        ctx->settings_save_enabled = true;
         return SAO_STATUS_OK;
-    if (ctx->window_rect_controller == nullptr || ctx->dc_mutation_coordinator == nullptr)
+    }
+    if (ctx->wnd_scrub_applied)
+        return SAO_STATUS_OK;
+    if (ctx->wnd_scrub_completed_operations > kWndScrubOperationCount ||
+        (ctx->wnd_scrub_completed_operations == kWndScrubOperationCount &&
+         ctx->wnd_scrub_pending_submission != nullptr)) {
+        return SAO_STATUS_INTERNAL;
+    }
+    sao_rt_io_window_rect_controller_t controller = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(ctx->window_rect_state_mutex);
+        controller = ctx->window_rect_controller;
+    }
+    if (controller == nullptr || ctx->dc_mutation_coordinator == nullptr)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
 
     const auto render_hwnd = static_cast<HWND>(sao_ui_overlay_host_hwnd(ctx->overlay_host));
-    const auto control_hwnd = static_cast<HWND>(sao_ui_overlay_host_control_hwnd(ctx->overlay_host));
+    const auto control_hwnd =
+        static_cast<HWND>(sao_ui_overlay_host_control_hwnd(ctx->overlay_host));
     const auto owner_hwnd = static_cast<HWND>(sao_ui_overlay_host_owner_hwnd(ctx->overlay_host));
-    if (render_hwnd == nullptr)
+    if (render_hwnd == nullptr || control_hwnd == nullptr || owner_hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
 
-    // Auxiliary windows: rcWindow/ExStyle transactions need their own
-    // generation tokens, and hControl needs a coordinator registration because
-    // the host only registers hRender.
-    if (!ctx->window_rect_aux_registered) {
-        if (control_hwnd != nullptr) {
-            const sao_status_t status = sao_rt_io_window_rect_register(
-                ctx->window_rect_controller,
-                static_cast<uint64_t>(reinterpret_cast<uintptr_t>(control_hwnd)),
-                &ctx->window_rect_control_token);
-            if (status != SAO_STATUS_OK)
-                return trace_platform_bringup_failure("window_rect_register_control", status);
-        }
-        if (owner_hwnd != nullptr) {
-            const sao_status_t status = sao_rt_io_window_rect_register(
-                ctx->window_rect_controller,
-                static_cast<uint64_t>(reinterpret_cast<uintptr_t>(owner_hwnd)),
-                &ctx->window_rect_owner_token);
-            if (status != SAO_STATUS_OK)
-                return trace_platform_bringup_failure("window_rect_register_owner", status);
-        }
-        ctx->window_rect_aux_registered = true;
-    }
-
-    const uint32_t timeout_ms = kCaptureShieldScrubTimeoutMs;
-    const uint32_t settle_ms = kCaptureShieldScrubSettleMs;
-    sao_status_t status = sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
-        ctx->dc_mutation_coordinator, render_hwnd, &kCaptureShieldRectScrub, settle_ms,
-        timeout_ms);
-    if (status == SAO_STATUS_ERR_NOT_INITIALIZED) {
-        // No rect-scrub provider installed: the chain degrades to USER32/DWM
-        // geometry only, exactly like the host's own scrub path.
-        status = SAO_STATUS_OK;
-    }
+    sao_status_t status =
+        ensure_dc_mutation_registration(ctx, render_hwnd, ctx->dc_mutation_render);
     if (status != SAO_STATUS_OK)
-        return trace_platform_bringup_failure("wnd_scrub_rect_render", status);
+        return trace_platform_bringup_failure("dc_mutation_register_render", status);
+    status = ensure_dc_mutation_registration(ctx, control_hwnd, ctx->dc_mutation_control);
+    if (status != SAO_STATUS_OK)
+        return trace_platform_bringup_failure("dc_mutation_register_control", status);
+    status = ensure_dc_mutation_registration(ctx, owner_hwnd, ctx->dc_mutation_owner);
+    if (status != SAO_STATUS_OK)
+        return trace_platform_bringup_failure("dc_mutation_register_owner", status);
 
-    if (control_hwnd != nullptr) {
-        if (ctx->dc_mutation_control_token == nullptr) {
-            void* token = nullptr;
-            const sao_status_t register_status = sao_ui_dc_mutation_coordinator_register(
-                ctx->dc_mutation_coordinator, control_hwnd, &token);
-            if (register_status != SAO_STATUS_OK)
-                return trace_platform_bringup_failure("dc_mutation_register_control",
-                                                      register_status);
-            ctx->dc_mutation_control_token = token;
+    bool control_registered = false;
+    bool owner_registered = false;
+    {
+        std::lock_guard<std::mutex> lock(ctx->window_rect_state_mutex);
+        control_registered = ctx->window_rect_control_registered;
+        owner_registered = ctx->window_rect_owner_registered;
+    }
+    if (!control_registered) {
+        SaoRtIoWindowToken token{};
+        status = sao_rt_io_window_rect_register(
+            controller, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(control_hwnd)), &token);
+        if (status != SAO_STATUS_OK)
+            return trace_platform_bringup_failure("window_rect_register_control", status);
+        {
+            std::lock_guard<std::mutex> lock(ctx->window_rect_state_mutex);
+            ctx->window_rect_control_token = token;
+            ctx->window_rect_control_registered = true;
         }
-        const sao_status_t control_status = sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
-            ctx->dc_mutation_coordinator, control_hwnd, &kCaptureShieldRectScrub, settle_ms,
-            timeout_ms);
-        if (control_status != SAO_STATUS_OK && control_status != SAO_STATUS_ERR_NOT_INITIALIZED)
-            return trace_platform_bringup_failure("wnd_scrub_rect_control", control_status);
+        if (!window_rect_token_matches(
+                token, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(control_hwnd)))) {
+            return trace_platform_bringup_failure("window_rect_register_control",
+                                                  SAO_STATUS_ERR_HANDLE_INVALID);
+        }
+    }
+    if (!owner_registered) {
+        SaoRtIoWindowToken token{};
+        status = sao_rt_io_window_rect_register(
+            controller, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(owner_hwnd)), &token);
+        if (status != SAO_STATUS_OK)
+            return trace_platform_bringup_failure("window_rect_register_owner", status);
+        {
+            std::lock_guard<std::mutex> lock(ctx->window_rect_state_mutex);
+            ctx->window_rect_owner_token = token;
+            ctx->window_rect_owner_registered = true;
+        }
+        if (!window_rect_token_matches(
+                token, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(owner_hwnd)))) {
+            return trace_platform_bringup_failure("window_rect_register_owner",
+                                                  SAO_STATUS_ERR_HANDLE_INVALID);
+        }
+    }
+    sao_rt_io_window_rect_controller_t verified_controller = nullptr;
+    SaoRtIoWindowToken verified_token{};
+    if (!snapshot_window_rect_binding(
+            ctx, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(render_hwnd)),
+            &verified_controller, &verified_token) ||
+        !snapshot_window_rect_binding(
+            ctx, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(control_hwnd)),
+            &verified_controller, &verified_token) ||
+        !snapshot_window_rect_binding(
+            ctx, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(owner_hwnd)),
+            &verified_controller, &verified_token)) {
+        return SAO_STATUS_ERR_HANDLE_INVALID;
     }
 
-    // ExStyle scrub rides the generic JSON lane: operation "host-exstyle",
-    // method "hide_exstyle", args {"mask":N}.
     char exstyle_args[64]{};
-    (void)sprintf_s(exstyle_args, sizeof(exstyle_args), "{\"mask\":%u}",
-                    kOverlayExstyleScrubMask);
-    const auto submit_exstyle = [&](HWND hwnd, const char* stage) -> sao_status_t {
-        if (hwnd == nullptr)
+    (void)sprintf_s(exstyle_args, sizeof(exstyle_args), "{\"mask\":%u}", kOverlayExstyleScrubMask);
+    const auto complete_tracked = [&](uint32_t operation_index, const char* admission_stage,
+                                      const char* wait_stage, const char* timeout_stage,
+                                      const char* dispatch_stage, auto&& submit) -> sao_status_t {
+        if (ctx->wnd_scrub_completed_operations > operation_index)
             return SAO_STATUS_OK;
-        const sao_status_t exstyle_status = sao_ui_dc_mutation_coordinator_submit_dc(
-            ctx->dc_mutation_coordinator, hwnd, "host-exstyle", "hide_exstyle",
-            reinterpret_cast<const uint8_t*>(exstyle_args), std::strlen(exstyle_args));
-        if (exstyle_status == SAO_STATUS_ERR_NOT_INITIALIZED)
-            return SAO_STATUS_OK;
-        return exstyle_status == SAO_STATUS_OK
-                   ? SAO_STATUS_OK
-                   : trace_platform_bringup_failure(stage, exstyle_status);
+        if (ctx->wnd_scrub_completed_operations != operation_index)
+            return trace_platform_bringup_failure(wait_stage, SAO_STATUS_INTERNAL);
+        if (ctx->wnd_scrub_pending_submission == nullptr) {
+            sao_ui_dc_mutation_submission_handle_t submission = nullptr;
+            const sao_status_t admission_status = submit(&submission);
+            if (admission_status != SAO_STATUS_OK) {
+                sao_ui_dc_mutation_submission_destroy(submission);
+                return trace_platform_bringup_failure(admission_stage, admission_status);
+            }
+            if (submission == nullptr)
+                return trace_platform_bringup_failure(admission_stage, SAO_STATUS_INTERNAL);
+            ctx->wnd_scrub_pending_submission = submission;
+        }
+
+        SaoDcMutationDispatchResult result{};
+        const sao_status_t wait_status = sao_ui_dc_mutation_submission_wait(
+            ctx->wnd_scrub_pending_submission, kCaptureShieldDispatchWaitMs, &result);
+        if (wait_status != SAO_STATUS_OK) {
+            return trace_platform_bringup_failure(
+                wait_status == SAO_STATUS_ERR_TIMEOUT ? timeout_stage : wait_stage, wait_status);
+        }
+        const auto completed_submission = ctx->wnd_scrub_pending_submission;
+        ctx->wnd_scrub_pending_submission = nullptr;
+        sao_ui_dc_mutation_submission_destroy(completed_submission);
+        if (result.completed != 1u ||
+            result.abi_version != SAO_UI_DC_MUTATION_DISPATCH_RESULT_ABI_VERSION ||
+            result.struct_size != sizeof(result)) {
+            return trace_platform_bringup_failure(wait_stage, SAO_STATUS_INTERNAL);
+        }
+        if (result.dispatch_status != SAO_STATUS_OK)
+            return trace_platform_bringup_failure(dispatch_stage, result.dispatch_status);
+        ctx->wnd_scrub_completed_operations = operation_index + 1u;
+        return SAO_STATUS_OK;
     };
-    status = submit_exstyle(render_hwnd, "wnd_scrub_exstyle_render");
-    if (status != SAO_STATUS_OK)
-        return status;
-    status = submit_exstyle(control_hwnd, "wnd_scrub_exstyle_control");
-    if (status != SAO_STATUS_OK)
-        return status;
-    status = submit_exstyle(owner_hwnd, "wnd_scrub_exstyle_owner");
+
+    status = complete_tracked(
+        0u, "wnd_scrub_admission_rect_render", "wnd_scrub_wait_rect_render",
+        "wnd_scrub_timeout_rect_render", "wnd_scrub_dispatch_rect_render",
+        [&](sao_ui_dc_mutation_submission_handle_t* out_submission) {
+            return sao_ui_dc_mutation_coordinator_submit_hide_window_rect_tracked(
+                ctx->dc_mutation_coordinator, render_hwnd, &kCaptureShieldRectScrub,
+                kCaptureShieldScrubSettleMs, kCaptureShieldScrubTimeoutMs, out_submission);
+        });
+    if (status == SAO_STATUS_OK)
+        status = complete_tracked(
+            1u, "wnd_scrub_admission_rect_control", "wnd_scrub_wait_rect_control",
+            "wnd_scrub_timeout_rect_control", "wnd_scrub_dispatch_rect_control",
+            [&](sao_ui_dc_mutation_submission_handle_t* out_submission) {
+                return sao_ui_dc_mutation_coordinator_submit_hide_window_rect_tracked(
+                    ctx->dc_mutation_coordinator, control_hwnd, &kCaptureShieldRectScrub,
+                    kCaptureShieldScrubSettleMs, kCaptureShieldScrubTimeoutMs, out_submission);
+            });
+    if (status == SAO_STATUS_OK)
+        status = complete_tracked(
+            2u, "wnd_scrub_admission_exstyle_render", "wnd_scrub_wait_exstyle_render",
+            "wnd_scrub_timeout_exstyle_render", "wnd_scrub_dispatch_exstyle_render",
+            [&](sao_ui_dc_mutation_submission_handle_t* out_submission) {
+                return sao_ui_dc_mutation_coordinator_submit_dc_tracked(
+                    ctx->dc_mutation_coordinator, render_hwnd, "host-exstyle", "hide_exstyle",
+                    reinterpret_cast<const uint8_t*>(exstyle_args), std::strlen(exstyle_args),
+                    out_submission);
+            });
+    if (status == SAO_STATUS_OK)
+        status = complete_tracked(
+            3u, "wnd_scrub_admission_exstyle_control", "wnd_scrub_wait_exstyle_control",
+            "wnd_scrub_timeout_exstyle_control", "wnd_scrub_dispatch_exstyle_control",
+            [&](sao_ui_dc_mutation_submission_handle_t* out_submission) {
+                return sao_ui_dc_mutation_coordinator_submit_dc_tracked(
+                    ctx->dc_mutation_coordinator, control_hwnd, "host-exstyle", "hide_exstyle",
+                    reinterpret_cast<const uint8_t*>(exstyle_args), std::strlen(exstyle_args),
+                    out_submission);
+            });
+    if (status == SAO_STATUS_OK)
+        status = complete_tracked(
+            4u, "wnd_scrub_admission_exstyle_owner", "wnd_scrub_wait_exstyle_owner",
+            "wnd_scrub_timeout_exstyle_owner", "wnd_scrub_dispatch_exstyle_owner",
+            [&](sao_ui_dc_mutation_submission_handle_t* out_submission) {
+                return sao_ui_dc_mutation_coordinator_submit_dc_tracked(
+                    ctx->dc_mutation_coordinator, owner_hwnd, "host-exstyle", "hide_exstyle",
+                    reinterpret_cast<const uint8_t*>(exstyle_args), std::strlen(exstyle_args),
+                    out_submission);
+            });
     if (status != SAO_STATUS_OK)
         return status;
 
-    // The coordinator dispatches provider mutations on its worker; wait for the
-    // lane to drain so the scrub is committed before the hold is released.
-    for (uint32_t attempt = 0u; attempt < kCaptureShieldDrainAttempts; ++attempt) {
-        SaoDcMutationStats stats{};
-        const sao_status_t stats_status =
-            sao_ui_dc_mutation_coordinator_stats(ctx->dc_mutation_coordinator, &stats);
-        if (stats_status != SAO_STATUS_OK)
-            break;
-        if (stats.inflight_operations == 0u && stats.queued_operations == 0u)
-            break;
-        Sleep(kCaptureShieldDrainSleepMs);
+    if (ctx->wnd_scrub_completed_operations != kWndScrubOperationCount ||
+        ctx->wnd_scrub_pending_submission != nullptr) {
+        return SAO_STATUS_INTERNAL;
     }
     ctx->wnd_scrub_applied = true;
-
-    // hControl was registered with the coordinator for this stage only; the
-    // host owns hRender's registration, so this one is invalidated here.
-    if (ctx->dc_mutation_control_token != nullptr && control_hwnd != nullptr) {
-        (void)sao_ui_dc_mutation_coordinator_invalidate(ctx->dc_mutation_coordinator, control_hwnd,
-                                                        2.0);
-        ctx->dc_mutation_control_token = nullptr;
-    }
+    ctx->restore_theme_on_rollback = false;
+    ctx->settings_save_enabled = true;
     return SAO_STATUS_OK;
 }
 
@@ -4475,16 +4918,9 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept {
     if (!ctx)
         return SAO_STATUS_INVALID_ARGUMENT;
-    // The tagWND chain's coordinator registration for hControl is stage-owned;
-    // drop it before the overlay host retires its own windows.
-    if (ctx->dc_mutation_control_token != nullptr && ctx->dc_mutation_coordinator != nullptr &&
-        ctx->overlay_host != nullptr) {
-        void* control_hwnd = sao_ui_overlay_host_control_hwnd(ctx->overlay_host);
-        if (control_hwnd != nullptr)
-            (void)sao_ui_dc_mutation_coordinator_invalidate(ctx->dc_mutation_coordinator,
-                                                            control_hwnd, 2.0);
-        ctx->dc_mutation_control_token = nullptr;
-    }
+    const sao_status_t dc_aux_status = invalidate_dc_mutation_aux(ctx);
+    if (dc_aux_status != SAO_STATUS_OK)
+        return dc_aux_status;
     const sao_status_t aux_revoke_status = revoke_window_rect_aux(ctx);
     if (aux_revoke_status != SAO_STATUS_OK)
         return aux_revoke_status;
@@ -4518,6 +4954,14 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
     if (settings_panel_status != SAO_STATUS_OK)
         return settings_panel_status;
     drain_deferred_cleanup_for_owner();
+    if (ctx->sdk_streaming_apply_bound) {
+        const sao_sdk_status_t unbind_status =
+            sao_sdk_platform_bind_streaming_mode_apply(nullptr);
+        if (unbind_status != SAO_SDK_OK)
+            return map_sdk_runtime_status(unbind_status);
+        g_streaming_apply_ctx = nullptr;
+        ctx->sdk_streaming_apply_bound = false;
+    }
     if (ctx->streaming_flow_started) {
         const sao_status_t streaming_status = sao_streaming_flow_teardown(2.0, 2.0);
         if (streaming_status != SAO_STATUS_OK) {
@@ -4574,8 +5018,18 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
             return SAO_STATUS_INTERNAL;
         }
         ctx->overlay_host = nullptr;
+        ctx->dc_mutation_render = {};
+    }
+    if (ctx->wnd_scrub_pending_submission != nullptr) {
+        sao_ui_dc_mutation_submission_destroy(ctx->wnd_scrub_pending_submission);
+        ctx->wnd_scrub_pending_submission = nullptr;
     }
     if (ctx->dc_mutation_coordinator) {
+        if (ctx->dc_mutation_render.hwnd != nullptr || ctx->dc_mutation_render.token != nullptr ||
+            ctx->dc_mutation_control.hwnd != nullptr || ctx->dc_mutation_control.token != nullptr ||
+            ctx->dc_mutation_owner.hwnd != nullptr || ctx->dc_mutation_owner.token != nullptr) {
+            return SAO_STATUS_INTERNAL;
+        }
         sao_ui_dc_mutation_coordinator_destroy(ctx->dc_mutation_coordinator);
         ctx->dc_mutation_coordinator = nullptr;
     }
@@ -4713,8 +5167,7 @@ sao_status_t start_linkstart_intro(sao_platform_ctx* ctx) {
             ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST;
         }
     }
-    if (!linkstart_started &&
-        ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_NONE)
+    if (!linkstart_started && ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_NONE)
         ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
     return linkstart_started ? SAO_STATUS_OK : SAO_STATUS_UI_ONLINE_FAIL;
 }
@@ -4749,6 +5202,16 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (status != SAO_STATUS_OK)
         return status;
 #endif
+    SaoUiEntityShellSnapshot startup_shell{};
+    status = sao_ui_entity_shell_get_snapshot(ctx->entity_shell, &startup_shell);
+    if (status == SAO_STATUS_OK && startup_shell.overlay_visible)
+        status = sao_ui_entity_shell_insert(ctx->entity_shell);
+    if (status != SAO_STATUS_OK)
+        return status;
+    ctx->startup_menu_pending = true;
+    status = sao_ui_overlay_host_set_visible(ctx->overlay_host, true);
+    if (status != SAO_STATUS_OK)
+        return status;
     status = tick_shared_fisheye(ctx);
     if (status == SAO_STATUS_OK)
         status = sao_ui_compositor_tick(ctx->compositor);
@@ -4786,6 +5249,7 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->overlay_host || !ctx->entity_shell) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
+    ctx->startup_menu_pending = false;
     if (ctx->linkstart != nullptr) {
         (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart,
                                                    SAO_UI_LINKSTART_COMPLETION_OFFLINE);
@@ -4837,17 +5301,29 @@ sao_status_t tick_linkstart(sao_platform_ctx* ctx) {
         std::min<ULONGLONG>(now - ctx->linkstart_last_tick, static_cast<ULONGLONG>(INT32_MAX)));
     ctx->linkstart_last_tick = now;
     const sao_status_t linkstart_status = sao_ui_linkstart_tick(ctx->linkstart, intro_delta);
-    if (linkstart_status != SAO_STATUS_OK &&
-        linkstart_status != SAO_STATUS_ERR_NOT_INITIALIZED) {
-        const auto reason = linkstart_status == SAO_STATUS_ERR_DEVICE_LOST
+    SaoUiLinkStartCompletionReason completion_fallback = SAO_UI_LINKSTART_COMPLETION_NATURAL;
+    if (linkstart_status != SAO_STATUS_OK && linkstart_status != SAO_STATUS_ERR_NOT_INITIALIZED) {
+        completion_fallback = linkstart_status == SAO_STATUS_ERR_DEVICE_LOST
+                                  ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
+                                  : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
+        (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart, completion_fallback);
+    }
+    bool now_active = false;
+    const sao_status_t active_status = sao_ui_linkstart_is_active(ctx->linkstart, &now_active);
+    if (active_status != SAO_STATUS_OK) {
+        const auto reason = active_status == SAO_STATUS_ERR_DEVICE_LOST
                                 ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
                                 : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
         (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart, reason);
+        if (ctx->linkstart_pending_completion)
+            capture_linkstart_completion(ctx, reason);
+        return linkstart_status != SAO_STATUS_OK &&
+                       linkstart_status != SAO_STATUS_ERR_NOT_INITIALIZED
+                   ? linkstart_status
+                   : active_status;
     }
-    bool now_active = false;
-    (void)sao_ui_linkstart_is_active(ctx->linkstart, &now_active);
     if (ctx->linkstart_pending_completion && !now_active)
-        capture_linkstart_completion(ctx, SAO_UI_LINKSTART_COMPLETION_NATURAL);
+        capture_linkstart_completion(ctx, completion_fallback);
     return linkstart_status == SAO_STATUS_ERR_NOT_INITIALIZED ? SAO_STATUS_OK : linkstart_status;
 }
 
@@ -4865,8 +5341,21 @@ sao_status_t sao_ui_intro_show(sao_platform_ctx* ctx, int32_t hold_for_bootstrap
         (void)sao_ui_overlay_host_set_visible(ctx->overlay_host, false);
         return status;
     }
-    if (hold_for_bootstrap != 0 && ctx->linkstart != nullptr)
+    if (hold_for_bootstrap != 0 && ctx->linkstart != nullptr) {
         status = sao_ui_linkstart_arm_bootstrap_hold(ctx->linkstart);
+        if (status != SAO_STATUS_OK) {
+            (void)sao_ui_linkstart_dismiss_with_reason(
+                ctx->linkstart, SAO_UI_LINKSTART_COMPLETION_BOOTSTRAP_FAILED);
+            sao_ui_linkstart_destroy(ctx->linkstart);
+            ctx->linkstart = nullptr;
+            ctx->linkstart_pending_completion = false;
+            ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_BOOTSTRAP_FAILED;
+            const sao_status_t hide_status =
+                sao_ui_overlay_host_set_visible(ctx->overlay_host, false);
+            if (hide_status != SAO_STATUS_OK)
+                return hide_status;
+        }
+    }
     return status;
 }
 
@@ -4876,6 +5365,14 @@ sao_status_t sao_ui_intro_publish_bootstrap(sao_platform_ctx* ctx,
         return SAO_STATUS_INVALID_ARGUMENT;
     if (ctx->linkstart == nullptr)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
+    bool active = false;
+    const sao_status_t active_status = sao_ui_linkstart_is_active(ctx->linkstart, &active);
+    if (active_status != SAO_STATUS_OK)
+        return active_status;
+    if (!active && (ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED ||
+                    ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST)) {
+        return SAO_STATUS_OK;
+    }
     return sao_ui_linkstart_set_bootstrap(ctx->linkstart, state);
 }
 
@@ -4884,6 +5381,14 @@ sao_status_t sao_ui_intro_release_bootstrap(sao_platform_ctx* ctx, int32_t faile
         return SAO_STATUS_INVALID_ARGUMENT;
     if (ctx->linkstart == nullptr)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
+    bool active = false;
+    const sao_status_t active_status = sao_ui_linkstart_is_active(ctx->linkstart, &active);
+    if (active_status != SAO_STATUS_OK)
+        return active_status;
+    if (!active && (ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED ||
+                    ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST)) {
+        return SAO_STATUS_OK;
+    }
     return sao_ui_linkstart_release_bootstrap_hold(ctx->linkstart, failed);
 }
 
@@ -4894,16 +5399,97 @@ sao_status_t sao_ui_intro_pump(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->compositor)
         return SAO_STATUS_INVALID_ARGUMENT;
     drain_deferred_cleanup_for_owner();
-    const sao_status_t intro_status = tick_linkstart(ctx);
+    sao_status_t intro_status = tick_linkstart(ctx);
+    if (intro_status != SAO_STATUS_OK &&
+        (ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED ||
+         ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST)) {
+        intro_status = SAO_STATUS_OK;
+    }
     sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
     if (compositor_status == SAO_STATUS_ERR_DEVICE_LOST)
         compositor_status = SAO_STATUS_OK;
     return intro_status == SAO_STATUS_OK ? compositor_status : intro_status;
 }
 
+sao_status_t sao_ui_outro_show(sao_platform_ctx* ctx) {
+    if (!ctx || !ctx->compositor || !ctx->overlay_host || !ctx->linkstart)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (ctx->ui_exiting)
+        return SAO_STATUS_OK;
+    ctx->ui_exiting = true;
+    ctx->startup_menu_pending = false;
+    ctx->linkstart_pending_completion = false;
+    ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+    if (ctx->entity_shell) {
+        SaoUiEntityShellSnapshot shell{};
+        const sao_status_t snapshot_status =
+            sao_ui_entity_shell_get_snapshot(ctx->entity_shell, &shell);
+        if (snapshot_status != SAO_STATUS_OK)
+            return snapshot_status;
+        if (shell.overlay_visible) {
+            const sao_status_t hide_status = sao_ui_entity_shell_insert(ctx->entity_shell);
+            if (hide_status != SAO_STATUS_OK)
+                return hide_status;
+        }
+    }
+    const sao_status_t visible_status = sao_ui_overlay_host_set_visible(ctx->overlay_host, true);
+    if (visible_status != SAO_STATUS_OK)
+        return visible_status;
+    const sao_status_t status = sao_ui_linkstart_show_outro(ctx->linkstart);
+    ctx->linkstart_last_tick = GetTickCount64();
+    ctx->linkstart_pending_completion = status == SAO_STATUS_OK;
+    return status;
+}
+
+sao_status_t sao_ui_outro_pump(sao_platform_ctx* ctx, int32_t* out_active) {
+    if (!ctx || !ctx->compositor || !out_active)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    *out_active = 0;
+    if (!ctx->ui_exiting || !ctx->linkstart)
+        return SAO_STATUS_OK;
+    drain_deferred_cleanup_for_owner();
+    const sao_status_t status = tick_linkstart(ctx);
+    if (status != SAO_STATUS_OK)
+        return status;
+    bool active = false;
+    const sao_status_t active_status = sao_ui_linkstart_is_active(ctx->linkstart, &active);
+    if (active_status != SAO_STATUS_OK)
+        return active_status;
+    if (!active)
+        return sao_ui_overlay_host_set_visible(ctx->overlay_host, false);
+    const sao_status_t render_status = sao_ui_compositor_tick(ctx->compositor);
+    if (render_status != SAO_STATUS_OK) {
+        const auto reason = render_status == SAO_STATUS_ERR_DEVICE_LOST
+                                ? SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST
+                                : SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
+        (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart, reason);
+        capture_linkstart_completion(ctx, reason);
+        return render_status;
+    }
+    *out_active = 1;
+    return SAO_STATUS_OK;
+}
+
+sao_status_t sao_ui_outro_cancel(sao_platform_ctx* ctx) {
+    if (!ctx)
+        return SAO_STATUS_INVALID_ARGUMENT;
+    if (!ctx->ui_exiting || !ctx->linkstart)
+        return SAO_STATUS_OK;
+    ctx->startup_menu_pending = false;
+    ctx->linkstart_pending_completion = false;
+    const sao_status_t status =
+        sao_ui_linkstart_dismiss_with_reason(ctx->linkstart, SAO_UI_LINKSTART_COMPLETION_TEARDOWN);
+    const sao_status_t hide_status = sao_ui_overlay_host_set_visible(ctx->overlay_host, false);
+    return status == SAO_STATUS_OK ? hide_status : status;
+}
+
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     if (!ctx || !ctx->entity_shell || !ctx->compositor)
         return SAO_STATUS_INVALID_ARGUMENT;
+    if (ctx->ui_exiting) {
+        int32_t active = 0;
+        return sao_ui_outro_pump(ctx, &active);
+    }
     drain_deferred_cleanup_for_owner();
     sao_status_t status = sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
@@ -4980,6 +5566,22 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
         capture_linkstart_completion(ctx, reason);
         compositor_status = sao_ui_compositor_tick(ctx->compositor);
     }
+    if (ctx->startup_menu_pending &&
+        (ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_NATURAL ||
+         ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_SKIPPED ||
+         ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED ||
+         ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST)) {
+        SaoUiEntityShellSnapshot shell{};
+        sao_status_t menu_status = sao_ui_entity_shell_get_snapshot(ctx->entity_shell, &shell);
+        if (menu_status == SAO_STATUS_OK && !shell.overlay_visible)
+            menu_status = sao_ui_entity_shell_insert(ctx->entity_shell);
+        if (menu_status == SAO_STATUS_OK && !shell.menu_visible)
+            menu_status = sao_ui_entity_shell_home(ctx->entity_shell);
+        if (menu_status == SAO_STATUS_OK)
+            ctx->startup_menu_pending = false;
+        if (status == SAO_STATUS_OK)
+            status = menu_status;
+    }
     // The compositor owns device recreation and retries it on the next frame.
     if (compositor_status == SAO_STATUS_ERR_DEVICE_LOST)
         compositor_status = SAO_STATUS_OK;
@@ -5011,18 +5613,10 @@ sao_status_t sao_ui_linkstart_poll_finished_ex(sao_platform_ctx* ctx, int32_t* o
 
 sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uintptr_t w_param,
                                    intptr_t l_param, int32_t* out_handled) {
-    if (!ctx || !ctx->entity_shell || !out_handled) {
+    if (!ctx || !out_handled) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
     *out_handled = 0;
-    if (message == WM_TIMER && w_param == kUiFrameTimerId) {
-        *out_handled = 1;
-        return sao_ui_tick(ctx, kUiFrameIntervalMs);
-    }
-    if (message == sao::launcher::hotkey::kCaptureCompletionMessage) {
-        *out_handled = 1;
-        return ctx->hotkey_owner ? ctx->hotkey_owner->drain_capture_for_owner() : SAO_STATUS_OK;
-    }
     if (ctx->linkstart != nullptr &&
         (message == WM_KEYDOWN || message == WM_KEYUP || message == WM_CHAR ||
          message == WM_HOTKEY || message == SAO_UI_NATIVE_TEXT_TAB_MESSAGE)) {
@@ -5035,12 +5629,32 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
             return SAO_STATUS_OK;
         }
     }
+    if (ctx->entity_shell == nullptr)
+        return SAO_STATUS_OK;
+    if (message == WM_TIMER && w_param == kUiFrameTimerId) {
+        *out_handled = 1;
+        return sao_ui_tick(ctx, kUiFrameIntervalMs);
+    }
+    if (message == sao::launcher::hotkey::kCaptureCompletionMessage) {
+        *out_handled = 1;
+        return ctx->hotkey_owner ? ctx->hotkey_owner->drain_capture_for_owner() : SAO_STATUS_OK;
+    }
+    if (message == WM_HOTKEY && sao::launcher::userGuideWebViewVisible()) {
+        *out_handled = 1;
+        return SAO_STATUS_OK;
+    }
     if ((message == WM_KEYDOWN || message == WM_KEYUP || message == WM_CHAR ||
          message == SAO_UI_NATIVE_TEXT_TAB_MESSAGE) &&
         ctx->keyboard_router != nullptr && ctx->compositor != nullptr) {
         const HWND host = static_cast<HWND>(sao_ui_compositor_host_hwnd(ctx->compositor));
         const HWND focus = GetFocus();
         if (host != nullptr && focus == host) {
+            if (sao::launcher::userGuideWebViewVisible()) {
+                if (message == WM_KEYDOWN && w_param == VK_ESCAPE)
+                    sao::launcher::hideUserGuideWebView();
+                *out_handled = 1;
+                return SAO_STATUS_OK;
+            }
             bool consumed = false;
             const sao_status_t route_status = sao_ui_input_router_feed_raw_win32(
                 ctx->keyboard_router, message, static_cast<uint64_t>(w_param),
@@ -5111,7 +5725,9 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config*, sao_platfo
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_platform_bringup_engines(const sao_platform_config*, sao_platform_ctx*,
-                                          sao_platform_ctx**) {
+                                          sao_platform_ctx** ctx_out) {
+    if (ctx_out != nullptr)
+        *ctx_out = nullptr;
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 
@@ -5136,6 +5752,17 @@ sao_status_t sao_ui_intro_release_bootstrap(sao_platform_ctx*, int32_t) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_ui_intro_pump(sao_platform_ctx*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_ui_outro_show(sao_platform_ctx*) {
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_ui_outro_pump(sao_platform_ctx*, int32_t* out_active) {
+    if (out_active)
+        *out_active = 0;
+    return SAO_STATUS_NOT_IMPLEMENTED;
+}
+sao_status_t sao_ui_outro_cancel(sao_platform_ctx*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 sao_status_t sao_platform_teardown(sao_platform_ctx*) {

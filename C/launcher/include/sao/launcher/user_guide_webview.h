@@ -8,6 +8,7 @@ bool openUserGuideInWebView(const wchar_t* docs_index_path, bool native_intro_co
 void tickUserGuideWebView() noexcept;
 void hideUserGuideWebView() noexcept;
 bool userGuideWebViewReady() noexcept;
+bool userGuideWebViewVisible() noexcept;
 bool shutdownUserGuideWebView() noexcept;
 void refreshUserGuideSoundPolicy() noexcept;
 

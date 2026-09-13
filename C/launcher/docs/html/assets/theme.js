@@ -38,14 +38,28 @@
   }
   applyTheme(saved === 'dark');
 
-  document.addEventListener('DOMContentLoaded', function () {
-    var close = document.getElementById('native-guide-close');
-    if (close && window.chrome && window.chrome.webview) {
-      close.hidden = false;
-      close.addEventListener('click', function () {
-        window.chrome.webview.postMessage('sao-guide-close');
-      });
+  function closeGuide() {
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage('sao-guide-close');
+    } else {
+      window.close();
     }
+  }
+
+  window.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || event.defaultPrevented || event.repeat) { return; }
+    event.preventDefault();
+    closeGuide();
+  });
+
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-guide-close]').forEach(function (close) {
+      close.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeGuide();
+      });
+    });
     var toggle = document.getElementById('theme-toggle');
     if (!toggle) {
       return;

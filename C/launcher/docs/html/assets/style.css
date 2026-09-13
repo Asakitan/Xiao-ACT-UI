@@ -4,7 +4,38 @@
    ========================================================================== */
 
 /* ── 设计令牌 ─────────────────────────────────────────────── */
-#native-guide-close[hidden] { display: none; }
+@font-face {
+  font-family: "SAO Product";
+  src: url("./fonts/SAOUI.ttf") format("truetype");
+  font-display: block;
+  unicode-range: U+0000-024F, U+1E00-1EFF;
+}
+@font-face {
+  font-family: "SAO Product";
+  src: url("./fonts/ZhuZiAYuanJWD.ttf") format("truetype");
+  font-display: block;
+  unicode-range: U+0250-1DFF, U+1F00-10FFFF;
+}
+.guide-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 8px;
+  min-width: 70px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-strong);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.guide-close:hover { border-color: var(--accent); background: var(--accent-soft); }
+.guide-close:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
+.guide-intro-close { position: absolute; top: 20px; right: 20px; z-index: 10; }
 :root {
   --bg: #f0efed;
   --surface: #ffffff;
@@ -64,6 +95,7 @@ html.dark {
 
 /* ── 基础 ─────────────────────────────────────────────────── */
 * { box-sizing: border-box; }
+button, input, select, textarea { font-family: "SAO Product"; }
 
 html {
   scroll-behavior: smooth;
@@ -72,9 +104,10 @@ html {
 
 body {
   margin: 0;
+  isolation: isolate;
   background: var(--bg);
   color: var(--ink);
-  font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-family: "SAO Product";
   font-size: 16px;
   line-height: 1.75;
   -webkit-font-smoothing: antialiased;
@@ -104,7 +137,7 @@ html.sc-cursor-ready body * {
   position: fixed;
   width: 240px;
   height: 240px;
-  z-index: 205;
+  z-index: 5500;
   pointer-events: none;
   contain: strict;
   background: rgba(255, 255, 255, 0.001);
@@ -133,7 +166,7 @@ html.sc-cursor-ready body * {
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 4000;
+  z-index: 6000;
   width: 44px;
   height: 44px;
   pointer-events: none;
@@ -629,7 +662,7 @@ kbd {
   border-radius: 8px;
   background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
   color: var(--ink-strong);
-  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-family: "SAO Product";
   font-size: 0.85em; font-weight: 700; line-height: 1.5;
   text-align: center; white-space: nowrap;
   box-shadow: 0 1px 2px rgba(16, 24, 31, 0.06);
@@ -639,7 +672,7 @@ code {
   padding: 2px 7px; border-radius: 7px;
   background: color-mix(in srgb, var(--accent-soft) 90%, transparent);
   color: var(--accent-strong);
-  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-family: "SAO Product";
   font-size: 0.88em; font-weight: 600;
 }
 
@@ -1098,10 +1131,10 @@ body.js .manual-section.visible {
   left: 0;
   width: 520px;
   height: 520px;
-  z-index: -1;
+  z-index: 91;
   border-radius: 50%;
   pointer-events: none;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 9%, transparent) 0%, color-mix(in srgb, var(--violet) 4%, transparent) 38%, transparent 64%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 18%, transparent) 0%, color-mix(in srgb, var(--violet) 10%, transparent) 38%, transparent 64%);
   opacity: 0;
   transition: opacity 700ms ease;
 }
@@ -1114,11 +1147,11 @@ body::after {
   inset: 0;
   z-index: 90;
   pointer-events: none;
-  background: repeating-linear-gradient(0deg, rgba(14, 165, 196, 0.016) 0 1px, transparent 1px 3px);
-  opacity: 0.5;
+  background: repeating-linear-gradient(0deg, rgba(14, 165, 196, 0.06) 0 1px, transparent 1px 3px);
+  opacity: 0.7;
 }
 html.dark body::after {
-  background: repeating-linear-gradient(0deg, rgba(79, 208, 233, 0.03) 0 1px, transparent 1px 3px);
+  background: repeating-linear-gradient(0deg, rgba(79, 208, 233, 0.065) 0 1px, transparent 1px 3px);
 }
 
 /* Hero 标题辉光 */
@@ -1344,7 +1377,7 @@ body.ls-locked { overflow: hidden; }
 /* s3：LINK START 逐字弹出 —— JS 逐字加 .on，transition 播形变 */
 .ls-title {
   margin: 0;
-  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-family: "SAO Product";
   font-size: clamp(24px, 7vw, 64px);
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -1401,7 +1434,7 @@ body.ls-locked { overflow: hidden; }
   inset: 0;
   display: grid;
   place-items: center;
-  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-family: "SAO Product";
   font-size: clamp(22px, 5.4vw, 56px);
   font-weight: 800;
   letter-spacing: 0.1em;
@@ -1608,7 +1641,7 @@ html.guide-hidden .linkstart-overlay * {
   border-radius: 6px;
   background: color-mix(in srgb, var(--accent-soft) 90%, transparent);
   color: var(--accent-strong);
-  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-family: "SAO Product";
   font-size: 0.85em;
 }
 body.dp-locked { overflow: hidden; }
@@ -1868,17 +1901,12 @@ html.dark {
   --shadow-deep:0 28px 76px rgba(0,0,0,.48); --grid-line:rgba(238,240,232,.025);
 }
 html { background:var(--bg); scrollbar-gutter:stable; accent-color:var(--accent); }
-body { background:var(--bg); color:var(--ink); font-family:"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif; font-size:16px; line-height:1.72; letter-spacing:.005em; transition:background-color 180ms ease,color 180ms ease; }
+body { background:var(--bg); color:var(--ink); font-family:"SAO Product"; font-size:16px; line-height:1.72; letter-spacing:.005em; transition:background-color 180ms ease,color 180ms ease; }
 body::before,html.dark body::before { background:repeating-linear-gradient(0deg,transparent 0 31px,var(--grid-line) 31px 32px),linear-gradient(90deg,transparent,color-mix(in srgb,var(--line) 14%,transparent),transparent); background-size:auto,100% 100%; }
-body::after,html.dark body::after { display:none; }
 ::selection { background:color-mix(in srgb,var(--gold) 34%,transparent); color:var(--ink-strong); }
 a { color:var(--accent-strong); } a:hover { color:var(--accent); }
 a:focus-visible,summary:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[role="button"]:focus-visible,.manual-section:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:var(--r-sm); }
 .manual-section:focus { scroll-margin-top:calc(var(--header-h) + 24px); }
-html.sc-cursor-ready body,html.sc-cursor-ready body * { cursor:auto !important; }
-html.sc-cursor-ready a,html.sc-cursor-ready button,html.sc-cursor-ready summary,html.sc-cursor-ready select,html.sc-cursor-ready [role="button"],html.sc-cursor-ready [data-detail] { cursor:pointer !important; }
-.sc-cursor { display:none !important; } .sao-particles { opacity:.16; } .cursor-glow { display:none; }
-.sao-water-domain { opacity:.45; } .sao-water-domain-lighting { opacity:.22; mix-blend-mode:multiply; filter:sepia(1) saturate(.75) hue-rotate(350deg) blur(.65px); }
 .progress-track { height:2px; background:color-mix(in srgb,var(--line) 50%,transparent); } .progress-fill { background:var(--accent); }
 .skip-link { padding:9px 14px; border:1px solid var(--accent); border-radius:var(--r-sm); background:var(--ink-strong); color:var(--surface); box-shadow:var(--shadow-card); }
 .site-header { grid-template-columns:minmax(180px,1fr) auto minmax(260px,1fr); min-height:var(--header-h); padding:0 max(22px,calc((100vw - var(--content-w))/2)); border-bottom:1px solid var(--line); background:color-mix(in srgb,var(--surface) 96%,transparent); box-shadow:0 1px 0 rgba(35,39,36,.025); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
@@ -1901,7 +1929,7 @@ html.sc-cursor-ready a,html.sc-cursor-ready button,html.sc-cursor-ready summary,
 .hero-copy::before { top:-24px; left:0; width:54px; height:2px; border-radius:0; background:var(--accent); opacity:1; }
 .hero-tag { margin-bottom:24px; padding:0 0 0 12px; border:0; border-left:2px solid var(--accent); border-radius:0; background:transparent; color:var(--accent-strong); box-shadow:none; font-size:10px; font-weight:720; letter-spacing:.2em; }
 .hero-tag::before { display:none; }
-.hero h1 { color:var(--ink-strong); font-family:"Segoe UI Variable Display","Segoe UI","Microsoft YaHei UI",sans-serif; font-size:clamp(44px,5.8vw,72px); font-weight:720; letter-spacing:-.045em; line-height:1.05; text-shadow:none; }
+.hero h1 { color:var(--ink-strong); font-family:"SAO Product"; font-size:clamp(44px,5.8vw,72px); font-weight:720; letter-spacing:-.045em; line-height:1.05; text-shadow:none; }
 html.dark .hero h1 { text-shadow:none; }
 .hero-lede { max-width:650px; margin-top:26px; color:var(--muted); font-size:16px; line-height:1.9; }
 .hero-actions { gap:10px; margin-top:30px; }
@@ -1962,7 +1990,7 @@ html.dark .toc a.active { box-shadow:none; }
 .section-number::after,.step-index::after,.demo-button::after { display:none; }
 html.dark .section-number,html.dark .step-index { box-shadow:none; }
 .section-heading p { margin-bottom:2px; color:var(--accent-strong); font-size:9px; letter-spacing:.2em; }
-.section-heading h2 { color:var(--ink-strong); font-family:"Segoe UI Variable Display","Segoe UI","Microsoft YaHei UI",sans-serif; font-size:clamp(25px,3.2vw,34px); font-weight:700; letter-spacing:-.025em; }
+.section-heading h2 { color:var(--ink-strong); font-family:"SAO Product"; font-size:clamp(25px,3.2vw,34px); font-weight:700; letter-spacing:-.025em; }
 .section-intro { margin-bottom:26px; color:var(--muted); font-size:15px; }
 kbd { padding:2px 7px; border:1px solid var(--line-strong); border-bottom-width:2px; border-radius:var(--r-sm); background:var(--surface-2); color:var(--ink-strong); box-shadow:none; }
 kbd:hover { border-color:var(--accent); box-shadow:none; }

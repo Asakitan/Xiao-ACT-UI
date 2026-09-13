@@ -122,10 +122,12 @@ set(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION OFF)
 if (TARGET sao::ui AND TARGET sao::rt_io AND TARGET sao::sdk AND
     TARGET sao::server::freetier::workshop_client)
     list(APPEND SAO_LAUNCHER_HEADERS
+        src/memory_viewer_panel_internal.h
         src/plugin_manager_panel_internal.h
         src/process_selector_panel_internal.h
         src/workshop_panel_internal.h)
     list(APPEND SAO_LAUNCHER_SOURCES
+        src/memory_viewer_panel_internal.cpp
         src/plugin_manager_panel_internal.cpp
         src/process_selector_panel_internal.cpp
         src/workshop_panel_internal.cpp)
@@ -265,7 +267,7 @@ if(WIN32 AND TARGET sao::ui AND TARGET sao::sdk AND TARGET sao::plugin_ai_editor
     # The preview is a production-compositor developer shell.  Compile the
     # launcher owners into it so their real factories can run without starting
     # the full launcher pipeline; an AI backend remains an explicit CLI opt-in.
-    add_executable(sao_ui_preview WIN32 EXCLUDE_FROM_ALL
+    add_executable(sao_ui_preview WIN32
         preview/production_ui_host.cpp
         src/settings_codec.cpp
         src/settings_json_internal.cpp
@@ -282,6 +284,7 @@ if(WIN32 AND TARGET sao::ui AND TARGET sao::sdk AND TARGET sao::plugin_ai_editor
         src/working_dir.cpp
         src/plugin_manager_panel_internal.cpp
         src/process_selector_panel_internal.cpp
+        src/memory_viewer_panel_internal.cpp
         src/workshop_panel_internal.cpp
     )
     target_compile_features(sao_ui_preview PRIVATE cxx_std_20)
@@ -344,9 +347,7 @@ endif()
 target_compile_definitions(SaoAuto PRIVATE
     "$<$<CONFIG:Debug>:SAO_LAUNCHER_ACTUAL_DEBUG=1>")
 
-# The output filename is deliberately fixed to SaoAuto.exe — the packaging
-# tools (tools/pack_cli) expect this exact name when building the release
-# tree.  Do not rename.
+# The logical target stays SaoAuto; encrypted builds rename only its payload file.
 set_target_properties(SaoAuto PROPERTIES
     OUTPUT_NAME "SaoAuto"
     SUFFIX ".exe"
@@ -354,6 +355,38 @@ set_target_properties(SaoAuto PROPERTIES
     PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/diagnostics/pdb"
     COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/diagnostics/compile-pdb"
 )
+
+if (SAO_ENCRYPTED_RUNTIME_BUNDLE)
+    if (NOT TARGET sao::runtime::artifact)
+        message(FATAL_ERROR
+            "launcher bootstrap requires the static runtime artifact codec")
+    endif()
+    add_executable(SaoBootstrap WIN32
+        src/bootstrap_main.cpp
+        ${SAO_LAUNCHER_RESOURCES})
+    target_compile_features(SaoBootstrap PRIVATE cxx_std_20)
+    target_include_directories(SaoBootstrap PRIVATE
+        "${CMAKE_SOURCE_DIR}/shell/artifact/include"
+        "${SAO_RUNTIME_GENERATED_INCLUDE_DIR}")
+    target_link_libraries(SaoBootstrap PRIVATE
+        sao::runtime::artifact
+        user32
+        shell32
+        advapi32
+        bcrypt)
+    target_compile_definitions(SaoBootstrap PRIVATE
+        SAO_LAUNCHER_VERSION="${CMAKE_PROJECT_VERSION}")
+    set_target_properties(SaoBootstrap PROPERTIES
+        OUTPUT_NAME "SaoAuto"
+        SUFFIX ".exe"
+        VS_DPI_AWARE "PerMonitor"
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+        PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/diagnostics/pdb"
+        COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/diagnostics/compile-pdb")
+    if (MSVC)
+        target_link_options(SaoBootstrap PRIVATE /MANIFEST:NO)
+    endif()
+endif()
 
 target_include_directories(SaoAuto
     PRIVATE
@@ -426,6 +459,10 @@ if (EXISTS "${SAO_LAUNCHER_ICON}")
     file(TO_CMAKE_PATH "${SAO_LAUNCHER_ICON}" SAO_LAUNCHER_ICON_RC_PATH)
     target_compile_definitions(SaoAuto PRIVATE
         SAO_LAUNCHER_ICON_PATH=\"${SAO_LAUNCHER_ICON_RC_PATH}\")
+    if (TARGET SaoBootstrap)
+        target_compile_definitions(SaoBootstrap PRIVATE
+            SAO_LAUNCHER_ICON_PATH=\"${SAO_LAUNCHER_ICON_RC_PATH}\")
+    endif()
 else()
     message(STATUS "launcher: no application icon found; omitting icon resource")
 endif()
@@ -570,6 +607,14 @@ set(SAO_LAUNCHER_DOCS_DETAIL_POPUP
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/detail_popup.js")
 set(SAO_LAUNCHER_DOCS_SOUNDS_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/sounds")
+set(SAO_LAUNCHER_DOCS_FONT_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/fonts/SAOUI.ttf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/fonts/ZhuZiAYuanJWD.ttf")
+foreach (_sao_guide_font IN LISTS SAO_LAUNCHER_DOCS_FONT_FILES)
+    if (NOT EXISTS "${_sao_guide_font}")
+        message(FATAL_ERROR "launcher: required guide font is missing: ${_sao_guide_font}")
+    endif()
+endforeach()
 set(SAO_LAUNCHER_DOCS_SOUND_NAMES
     "Dismiss.SAO.Launcher.wav"
     "Dismiss.SAO.Message.wav"
@@ -646,6 +691,11 @@ add_custom_command(TARGET SaoAuto POST_BUILD
     COMMENT "Copying packaged launcher user guide"
     VERBATIM
 )
+add_custom_command(TARGET SaoAuto POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/fonts"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${SAO_LAUNCHER_DOCS_FONT_FILES}
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/fonts"
+    VERBATIM)
 
 set(SAO_LAUNCHER_PROVIDER_CONFIG_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/config/SaoAuto.provider.json")
@@ -678,10 +728,15 @@ endif()
 
 # Launcher tests and integration-test registration were removed on 2026-08-23.
 
-install(TARGETS SaoAuto
-    RUNTIME DESTINATION bin
-    COMPONENT ship
-)
+if (SAO_ENCRYPTED_RUNTIME_BUNDLE)
+    install(TARGETS SaoBootstrap
+        RUNTIME DESTINATION bin
+        COMPONENT ship)
+else()
+    install(TARGETS SaoAuto
+        RUNTIME DESTINATION bin
+        COMPONENT ship)
+endif()
 if (_SAO_GUIDE_WEBVIEW2_ROOT)
     add_custom_command(TARGET SaoAuto POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -704,6 +759,9 @@ install(FILES "${SAO_LAUNCHER_DOCS_STYLE}"
     DESTINATION bin/docs/html/assets
     COMPONENT ship
 )
+install(FILES ${SAO_LAUNCHER_DOCS_FONT_FILES}
+    DESTINATION bin/docs/html/assets/fonts
+    COMPONENT ship)
 install(FILES
     "${SAO_LAUNCHER_DOCS_THEME}"
     "${SAO_LAUNCHER_DOCS_SCROLLSPY}"
