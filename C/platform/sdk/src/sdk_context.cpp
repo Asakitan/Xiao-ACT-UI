@@ -305,6 +305,36 @@ SharedRuntime::get_bound_compositor(sao_ui_compositor_handle_t* out_compositor) 
     }
 }
 
+sao_sdk_status_t
+SharedRuntime::bind_streaming_apply(SaoSdkStreamingModeApplyFn callback) {
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        streaming_apply = callback;
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+sao_sdk_status_t
+SharedRuntime::apply_streaming_mode(int32_t enabled, bool* out_applied) {
+    if (out_applied == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    *out_applied = false;
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        if (streaming_apply == nullptr)
+            return SAO_SDK_ERR_NOT_INITIALIZED;
+        const int32_t status = streaming_apply(enabled);
+        if (status != SAO_STATUS_OK)
+            return map_runtime_status(static_cast<sao_status_t>(status));
+        *out_applied = true;
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
 // ─── Context registry (process-wide) ─────────────────────────────────
 
 namespace {
@@ -1182,6 +1212,25 @@ sao_sdk_platform_get_ui_compositor(void** out_compositor) {
         if (status == SAO_SDK_OK)
             *out_compositor = compositor;
         return status;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
+sao_sdk_platform_bind_streaming_mode_apply(SaoSdkStreamingModeApplyFn callback) {
+    try {
+        return sao_sdk_internal::SharedRuntime::instance().bind_streaming_apply(callback);
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
+sao_sdk_platform_apply_streaming_mode(int32_t enabled, bool* out_applied) {
+    try {
+        return sao_sdk_internal::SharedRuntime::instance().apply_streaming_mode(enabled,
+                                                                                out_applied);
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
     }

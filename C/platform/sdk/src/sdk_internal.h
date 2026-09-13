@@ -32,6 +32,7 @@
 #include "sao/engine/event_bus.h"
 #include "sao/engine/render_hook.h"
 #include "sao/sdk/sao_sdk.h"
+#include "sao/sdk/sao_sdk_platform_internal.h"
 #include "sao/ui/compositor.h"
 #include "sao/ui/input_router.h"
 #include "sao/ui/panel_layout.h"
@@ -293,6 +294,7 @@ struct SharedRuntime {
     sao_engine_render_hook_registry_handle_t render_registry = nullptr;
     sao_ui_input_router_deep_handle_t input_router = nullptr;
     std::mutex mu;
+    SaoSdkStreamingModeApplyFn streaming_apply = nullptr;
 
     static SharedRuntime& instance();
     // Idempotent; safe under concurrent context_create calls.
@@ -302,6 +304,8 @@ struct SharedRuntime {
     sao_sdk_status_t bind_compositor(sao_ui_compositor_handle_t replacement);
     sao_sdk_status_t unbind_compositor();
     sao_sdk_status_t get_bound_compositor(sao_ui_compositor_handle_t* out_compositor);
+    sao_sdk_status_t bind_streaming_apply(SaoSdkStreamingModeApplyFn callback);
+    sao_sdk_status_t apply_streaming_mode(int32_t enabled, bool* out_applied);
 };
 
 // Per-context private state — `ctx_impl` in SaoSdkContext points here.
