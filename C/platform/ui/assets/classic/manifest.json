@@ -166,12 +166,26 @@
       "source": "original geometric drawing",
       "license": "CC0-1.0",
       "sha256": "1d2108814d6861af1ddd103300a5525fe4b35e1ae680e835f2ce957d908bd567"
+    },
+    {
+      "id": "sun",
+      "file": "sun.svg",
+      "source": "original geometric drawing",
+      "license": "CC0-1.0",
+      "sha256": "38099b6cda45408c20e54bd2feb9ccfc2274315fe26a509b20d8a97a1b8103e4"
+    },
+    {
+      "id": "moon",
+      "file": "moon.svg",
+      "source": "original geometric drawing",
+      "license": "CC0-1.0",
+      "sha256": "fb06d284eba53ef94eebee51ae2c5d14337525b654d62d34ea5e181104ab2d2b"
     }
   ],
   "native_helper": {
     "file": "classic_icons.h",
     "source": "generated:classic-sao-geometry",
     "license": "CC0-1.0",
-    "sha256": "92e40d65ef6bfb6c2c556aa5d92ec36a119b5e93e072537c1fb274fb656b09db"
+    "sha256": "b70282af36d7e1c38921fc85dedc07864e2fa84eeaea19a14c56c32fb05d886e"
   }
 }

@@ -36,10 +36,6 @@ constexpr uint32_t kStreakVertexCount = kCapVertexCount * 2u;
 constexpr uint32_t kStreakIndexCount = kColumnSides * kCapBands * 12u;
 constexpr float kPi = 3.14159265359F;
 constexpr float kFlightDistance = 7200.0F;
-constexpr float kFlightRamp = 0.40F;
-constexpr float kMinimumSpeed = 0.22F;
-constexpr float kFlightIntegral = kMinimumSpeed + (1.0F - kMinimumSpeed) * (1.0F - kFlightRamp);
-constexpr float kBirthLead = 160.0F;
 
 template <typename T> void release(T*& value) noexcept {
     if (value != nullptr) {
@@ -131,37 +127,36 @@ std::array<float, 3> mix_color(const std::array<float, 3>& a, const std::array<f
     return {lerp(a[0], b[0], x), lerp(a[1], b[1], x), lerp(a[2], b[2], x)};
 }
 
-float ramp_integral(float value) noexcept {
-    const float x = saturate(value);
-    return x * x * x * x * (x * (x - 3.0F) + 2.5F);
-}
-
-float camera_position(float progress, float span) noexcept {
-    const float p = saturate(progress);
-    const float integrated = p < kFlightRamp ? kFlightRamp * ramp_integral(p / kFlightRamp)
-        : p <= 1.0F - kFlightRamp ? p - kFlightRamp * 0.5F
-        : 1.0F - kFlightRamp - kFlightRamp * ramp_integral((1.0F - p) / kFlightRamp);
-    return span * (kMinimumSpeed * p + (1.0F - kMinimumSpeed) * integrated) / kFlightIntegral;
-}
-
 VisualState visual_state(const FrameState& frame) noexcept {
     VisualState state{};
     const float elapsed = std::max(0.0F, frame.elapsed_seconds);
+    if (frame.outro) {
+        const float progress = saturate(elapsed / std::max(0.001F, frame.total_duration));
+        const float flight = saturate((progress - 0.08F) / 0.78F);
+        state.scene_time = elapsed;
+        state.background = {0.965F, 0.978F, 0.990F};
+        state.tint = {0.86F, 0.94F, 1.0F};
+        state.cool_mix = 1.0F;
+        state.camera_z = flight * state.flight_span;
+        state.motion_mix = frame.reduced_motion ? 0.0F : 0.25F;
+        state.energy = frame.reduced_motion ? 0.0F : 0.12F;
+        state.particle_alpha = 0.30F * smoothstep(flight / 0.20F) *
+            (1.0F - smoothstep((flight - 0.65F) / 0.35F));
+        state.particles = !frame.reduced_motion && progress > 0.08F && progress < 0.86F;
+        return state;
+    }
     const float prelude = std::max(0.0F, frame.startup_prelude);
     state.scene_time = frame.scene_timeline ? std::max(0.0F, elapsed - prelude) : elapsed;
     state.startup_wave = prelude > 0.0F ? saturate(elapsed / prelude) : 1.0F;
     state.background = {0.98F, 0.985F, 0.995F};
     const float color_start = frame.scene_timeline ? 0.0F : prelude;
     const float color_end = frame.p1_end + (frame.scene_timeline
-        ? std::min(0.40F, std::max(0.0F, frame.p2_end - frame.p2_start) * 0.18F) : 0.0F);
-    const float color_duration = std::max(0.001F, color_end - color_start);
+        ? std::min(0.12F, std::max(0.0F, frame.p2_end - frame.p2_start) * 0.06F) : 0.0F);
+    const float color_duration = color_end - color_start;
     const float blue_end = frame.scene_timeline ? frame.total_duration : frame.p3_end;
-    const float blue_duration = std::max(0.001F, blue_end - frame.p3_start);
+    const float blue_duration = blue_end - frame.p3_start;
     const float blue_span = kFlightDistance;
-    const float blue_initial_speed = blue_span * kMinimumSpeed / (blue_duration * kFlightIntegral);
-    const float blue_lead = std::min(kBirthLead, blue_initial_speed *
-        std::max(0.0F, frame.p3_start - color_end));
-    const bool blue = state.scene_time >= frame.p3_start - blue_lead / blue_initial_speed;
+    const bool blue = state.scene_time >= frame.p3_start;
     const float blue_transition = smoothstep((state.scene_time - (frame.p3_start - 0.30F)) / 0.80F);
     state.tint = mix_color({0.84F, 0.88F, 0.94F}, {0.56F, 0.80F, 1.0F}, blue_transition);
     state.cool_mix = blue ? 1.0F : 0.0F;
@@ -194,20 +189,17 @@ VisualState visual_state(const FrameState& frame) noexcept {
     const float end = blue ? blue_end : color_end;
     const float duration = blue ? blue_duration : color_duration;
     state.flight_span = blue ? blue_span : kFlightDistance;
-    const float initial_speed = state.flight_span * kMinimumSpeed / (duration * kFlightIntegral);
-    state.birth_lead = blue ? blue_lead : std::min(kBirthLead, initial_speed * prelude);
     const float local_time = blue ? state.scene_time - start
         : frame.scene_timeline ? elapsed - prelude : elapsed - start;
-    if (end <= start || local_time < -state.birth_lead / initial_speed || local_time >= end - start) {
+    if (end <= start || local_time < 0.0F || local_time >= end - start) {
         state.energy = 0.16F;
         state.motion_mix = 0.0F;
         return state;
     }
-    const float progress = saturate(local_time / (end - start));
-    state.motion_mix = lerp(kMinimumSpeed, 1.0F,
-        smoothstep(std::min(progress, 1.0F - progress) / kFlightRamp));
-    state.camera_z = local_time < 0.0F ? initial_speed * local_time
-                                      : camera_position(progress, state.flight_span);
+    const float progress = saturate(local_time / duration);
+    state.motion_mix = saturate(progress / 0.55F);
+    // The vertex shader applies acceleration to each column's own age.
+    state.camera_z = progress * state.flight_span;
     state.energy = lerp(0.16F, 0.90F, state.motion_mix);
     state.particle_alpha = 1.0F;
     state.particles = true;
@@ -274,10 +266,12 @@ struct Renderer {
     uint32_t history_seed{};
     float history_seconds{};
     bool history_reduced{};
+    bool history_outro{};
     bool history_valid{};
     uint32_t width{};
     uint32_t height{};
     uint32_t uploaded_seed{};
+    bool uploaded_outro{};
     bool instances_ready{};
 };
 
@@ -623,7 +617,8 @@ bool ensure_targets(Renderer& renderer, uint32_t width, uint32_t height) noexcep
 }
 
 bool upload_instances(Renderer& renderer, ID3D11DeviceContext* context) noexcept {
-    if (renderer.instances_ready && renderer.uploaded_seed == renderer.frame.seed)
+    if (renderer.instances_ready && renderer.uploaded_seed == renderer.frame.seed &&
+        renderer.uploaded_outro == renderer.frame.outro)
         return true;
     constexpr std::array<std::array<float, 3>, 8> warm{{
         {1.00F, 0.00F, 0.00F}, {1.00F, 1.00F, 0.00F},
@@ -660,7 +655,9 @@ bool upload_instances(Renderer& renderer, ID3D11DeviceContext* context) noexcept
         const float sequence = static_cast<float>(index) / static_cast<float>(kParticleCount - 1u);
         const float birth_fraction = saturate(sequence + 0.10F * std::sin(2.0F * kPi * sequence));
         const auto& warm_color = warm[index % warm.size()];
-        const auto& cool_color = cool[index % cool.size()];
+        const auto cool_color = renderer.frame.outro
+            ? mix_color(cool[index % cool.size()], {1.0F, 1.0F, 1.0F}, 0.80F)
+            : cool[index % cool.size()];
         instances[index] = {{radius * std::cos(angle), radius * std::sin(angle), depth},
                             length,
                             width,
@@ -673,6 +670,7 @@ bool upload_instances(Renderer& renderer, ID3D11DeviceContext* context) noexcept
     }
     context->Unmap(renderer.instance_buffer, 0u);
     renderer.uploaded_seed = renderer.frame.seed;
+    renderer.uploaded_outro = renderer.frame.outro;
     renderer.instances_ready = true;
     return true;
 }
@@ -700,6 +698,8 @@ void update(Renderer* renderer, const FrameState& frame) noexcept {
     if (renderer == nullptr)
         return;
     std::lock_guard lock(renderer->mutex);
+    if (renderer->frame.outro != frame.outro)
+        renderer->history_valid = false;
     renderer->frame = frame;
 }
 
@@ -727,7 +727,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
 
         const VisualState visual = visual_state(renderer->frame);
         float history_weight = 0.0F;
-        float history_scale = 1.0F;
+        const float history_scale = 1.0F;
         const auto upload_constants = [&](float width, float height, float blur_x, float blur_y,
                                           float camera, float alpha, float radius,
                                           float extract = 0.0F,
@@ -819,9 +819,9 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             device_context->RSSetState(renderer->no_cull_rasterizer);
 
             device_context->OMSetBlendState(renderer->premultiplied_blend, blend_factor, 0xffffffffu);
-            constexpr std::array<float, 2> shutter_offsets{0.5F / 60.0F, 0.0F};
-            constexpr std::array<float, 2> shutter_weights{0.12F, 1.0F};
-            constexpr std::array<float, 2> shutter_radius{1.025F, 1.0F};
+            constexpr std::array<float, 2> shutter_offsets{0.45F / 60.0F, 0.0F};
+            constexpr std::array<float, 2> shutter_weights{0.10F, 1.0F};
+            constexpr std::array<float, 2> shutter_radius{1.0F, 1.0F};
             for (size_t index = 0u; index < shutter_offsets.size(); ++index) {
                 const bool current_sample = index + 1u == shutter_offsets.size();
                 if (!current_sample && visual.motion_mix < 0.02F)
@@ -841,7 +841,8 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                                           (current_sample ? 1.0F : visual.motion_mix),
                                       shutter_radius[index], 0.0F, &sample))
                     return gpu_failure();
-                device_context->DrawIndexedInstanced(kStreakIndexCount, kParticleCount, 0u, 0, 0u);
+                device_context->DrawIndexedInstanced(kStreakIndexCount,
+                    renderer->frame.outro ? kParticleCount / 4u : kParticleCount, 0u, 0, 0u);
             }
         }
 
@@ -893,15 +894,16 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
         const float delta = renderer->frame.elapsed_seconds - renderer->history_seconds;
         const bool same_frame = renderer->history_valid && delta == 0.0F &&
             renderer->history_seed == renderer->frame.seed &&
+            renderer->history_outro == renderer->frame.outro &&
             renderer->history_reduced == renderer->frame.reduced_motion;
         if (!same_frame) {
             const bool continuous = renderer->history_valid && delta > 0.0F && delta < 0.50F &&
                 renderer->history_seed == renderer->frame.seed &&
+                renderer->history_outro == renderer->frame.outro &&
                 !renderer->frame.reduced_motion &&
                 !renderer->history_reduced;
-            const float retention = lerp(0.80F, 0.92F, visual.motion_mix);
+            const float retention = lerp(0.76F, 0.88F, visual.motion_mix);
             history_weight = continuous ? std::pow(retention, delta * 60.0F) : 0.0F;
-            history_scale = continuous ? std::exp(delta * lerp(0.35F, 1.80F, visual.motion_mix)) : 1.0F;
             const uint32_t next = renderer->history_valid ? 1u - renderer->history_index : 0u;
             if (!upload_constants(static_cast<float>(context->width_px),
                                   static_cast<float>(context->height_px), 0.0F, 0.0F, visual.camera_z,
@@ -920,6 +922,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             renderer->history_seconds = renderer->frame.elapsed_seconds;
             renderer->history_seed = renderer->frame.seed;
             renderer->history_reduced = renderer->frame.reduced_motion;
+            renderer->history_outro = renderer->frame.outro;
         }
         if (!upload_constants(static_cast<float>(context->width_px),
                               static_cast<float>(context->height_px), 0.0F, 0.0F, visual.camera_z,

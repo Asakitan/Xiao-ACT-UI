@@ -15,6 +15,8 @@ struct Renderer {
     float seconds{};
     float openness{};
     bool reduced{};
+    float darkness{};
+    float theme_direction{};
 #if defined(_WIN32)
     ID3D11Device* device{};
     ID3D11VertexShader* vertex{};
@@ -99,10 +101,13 @@ void destroy(Renderer* renderer) noexcept {
 #endif
     delete renderer;
 }
-void update(Renderer* r, float seconds, float openness, bool reduced_motion) noexcept {
+void update(Renderer* r, float seconds, float openness, bool reduced_motion,
+            float darkness, float theme_direction) noexcept {
     if (!r) return;
     std::lock_guard lock(r->mutex);
     r->seconds = seconds; r->openness = std::clamp(openness, 0.0F, 1.0F); r->reduced = reduced_motion;
+    r->darkness = std::clamp(darkness, 0.0F, 1.0F);
+    r->theme_direction = reduced_motion ? 0.0F : std::clamp(theme_direction, -1.0F, 1.0F);
 }
 sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* frame, void* user) noexcept {
 #if defined(_WIN32)
@@ -120,13 +125,13 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* frame, void*
         const UINT width = std::max(1u, frame->width_px * 85u / 100u);
         const UINT height = std::max(1u, frame->height_px * 85u / 100u);
         if (!ensure_device(*r, device) || !ensure_field(*r, width, height)) return failure();
-        struct Constants { float resolution[2], time, openness, reduced, pass, padding[2]; };
+        struct Constants { float resolution[2], time, openness, reduced, pass, darkness, theme_direction; };
         static_assert(sizeof(Constants) == 32);
         const auto uniforms = [&](UINT w, UINT h, float pass) {
             D3D11_MAPPED_SUBRESOURCE mapped{};
             if (FAILED(context->Map(r->constants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) return false;
             *static_cast<Constants*>(mapped.pData) = {{static_cast<float>(w), static_cast<float>(h)},
-                r->seconds, r->openness, r->reduced ? 1.0F : 0.0F, pass, {0, 0}};
+                r->seconds, r->openness, r->reduced ? 1.0F : 0.0F, pass, r->darkness, r->theme_direction};
             context->Unmap(r->constants, 0); return true;
         };
         ID3D11ShaderResourceView* empty = nullptr;

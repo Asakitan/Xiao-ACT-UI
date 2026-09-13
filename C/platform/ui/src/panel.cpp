@@ -1677,8 +1677,8 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
         if (type == "badge" && parent_type == "row" && spec.fixed_width_px == 0) {
             float width = 0.0F, height = 0.0F;
             const sao::ui::detail::ScopedTextRole role(sao::ui::detail::ClassicTextRole::Auto);
-            if (sao::ui::detail::measure_text_dwrite(text_value.c_str(), 15.0F, &width, &height)) {
-                const int32_t intrinsic_width = std::clamp(static_cast<int32_t>(std::ceil(width)) + 20, 48,
+            if (sao::ui::detail::measure_text_dwrite(text_value.c_str(), 13.0F, &width, &height)) {
+                const int32_t intrinsic_width = std::clamp(static_cast<int32_t>(std::ceil(width)) + 24, 48,
                     std::max(48, std::min(400, viewport_width - 24)));
                 spec.fixed_width_px = std::max(spec.min_width_px, intrinsic_width);
                 if (spec.max_width_px > 0) spec.fixed_width_px = std::min(spec.fixed_width_px, spec.max_width_px);
@@ -2129,13 +2129,19 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
         close_armed = panel->close_armed;
     }
     if (status == SAO_STATUS_OK)
-        status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
+        status = sao_ui_paint_ctx_fill_rounded_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
                                             static_cast<float>(state.height),
+                                            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]),
                                             theme.colors[SAO_UI_TOKEN_APP_BG]);
     if (status == SAO_STATUS_OK and show_titlebar) {
-        status = sao_ui_paint_ctx_fill_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
+        status = sao_ui_paint_ctx_fill_rounded_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
                                             static_cast<float>(std::max(1, top)),
+                                            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]),
                                             theme.colors[SAO_UI_TOKEN_APP_CARD]);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_paint_ctx_fill_rect(context, 0.0F, static_cast<float>(top / 2),
+                static_cast<float>(state.width), static_cast<float>(top - top / 2),
+                theme.colors[SAO_UI_TOKEN_APP_CARD]);
         if (status == SAO_STATUS_OK and not title.empty()) {
             const int32_t title_padding = theme.metrics[SAO_UI_METRIC_PADDING_M];
             const int32_t marker_space = theme.high_contrast ? 0 : 10;
@@ -2152,11 +2158,14 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                 const sao::ui::detail::ScopedTextRole title_role(
                     sao::ui::detail::ClassicTextRole::Body,
                     sao::ui::detail::ClassicTextWeight::SemiBold);
-                const std::string visible_title = fit_title(title, static_cast<float>(title_width), 15.0F);
+                const std::string visible_title = fit_title(title, static_cast<float>(title_width), 16.0F);
+                float measured_width = 0.0F, measured_height = 22.0F;
+                (void)sao::ui::detail::measure_text_dwrite(visible_title.c_str(), 16.0F,
+                    &measured_width, &measured_height);
                 status = sao_ui_paint_ctx_draw_utf8(
                     context, static_cast<float>(title_padding + marker_space),
-                    std::max(0.0F, (static_cast<float>(top) - 15.0F) * 0.5F),
-                    visible_title.c_str(), 15.0F, theme.colors[SAO_UI_TOKEN_APP_TEXT]);
+                    std::max(0.0F, (static_cast<float>(top) - measured_height) * 0.5F),
+                    visible_title.c_str(), 16.0F, theme.colors[SAO_UI_TOKEN_APP_TEXT]);
             }
         }
         if (status == SAO_STATUS_OK and show_close_button) {
@@ -2236,8 +2245,14 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                 const float paint_inset =
                     static_cast<float>(std::max(1, theme.metrics[SAO_UI_METRIC_PADDING_XS]));
                 constexpr float stroke_width = 1.0F;
-                if (!section_role)
-                    status = sao_ui_paint_ctx_fill_rounded_rect(context, x, y, width, height,
+                const float surface_height = card_role && !theme.high_contrast && height > 4.0F
+                    ? height - 2.0F : height;
+                if (card_role && !theme.high_contrast && width > 4.0F && height > 4.0F)
+                    status = sao_ui_paint_ctx_fill_rounded_rect(context, x + 1.0F, y + 2.0F,
+                        width - 2.0F, height - 2.0F, radius,
+                        theme_color_with_alpha(theme.colors[SAO_UI_TOKEN_BLACK], 12));
+                if (status == SAO_STATUS_OK && (panel_role || card_role))
+                    status = sao_ui_paint_ctx_fill_rounded_rect(context, x, y, width, surface_height,
                                                                 radius, fill);
                 if (status != SAO_STATUS_OK)
                     break;
@@ -2258,18 +2273,16 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                     if (status != SAO_STATUS_OK)
                         break;
                 }
-                if (section_role)
+                if (section_role && theme.high_contrast)
                     status = sao_ui_paint_ctx_stroke_line(context, x, y + height - 1.0F, x + width,
                                                           y + height - 1.0F, 1.0F, border);
-                else
+                else if (card_role || (panel_role && theme.high_contrast))
                     status = sao::ui::detail::paint_rounded_rect_stroke(
-                        context, x, y, width, height, radius, stroke_width, border);
+                        context, x, y, width, surface_height, radius, stroke_width, border);
                 if (status != SAO_STATUS_OK)
                     break;
                 if (!visual.title.empty()) {
-                    const uint32_t title_color = section_role
-                                                     ? theme.colors[SAO_UI_TOKEN_APP_TEXT_2]
-                                                     : theme.colors[SAO_UI_TOKEN_APP_TEXT];
+                    const uint32_t title_color = theme.colors[SAO_UI_TOKEN_APP_TEXT];
                     const float title_leading = section_role ? rail_width
                                                 : group_role ? paint_inset
                                                              : 0.0F;
@@ -2286,7 +2299,7 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                     const std::string visible_title = fit_title(visual.title, title_width, 14.0F);
                     status = sao_ui_paint_ctx_draw_utf8(
                         context, title_x,
-                        y + static_cast<float>(theme.metrics[SAO_UI_METRIC_PADDING_S]),
+                        y + static_cast<float>(theme.metrics[SAO_UI_METRIC_GAP_S]),
                         visible_title.c_str(), 14.0F, title_color);
                     if (status != SAO_STATUS_OK)
                         break;
@@ -2408,7 +2421,7 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
     }
     if (status == SAO_STATUS_OK) {
         const float panel_radius =
-            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_MEDIUM]);
+            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]);
         status = sao::ui::detail::paint_rounded_rect_stroke(
             context, 0.5F, 0.5F, static_cast<float>(std::max(1, state.width - 1)),
             static_cast<float>(std::max(1, state.height - 1)), panel_radius, 1.0F,
@@ -3062,6 +3075,7 @@ sao_status_t panel_cursor_pos(sao_ui_panel_s* panel, int32_t ix, int32_t iy) {
     bool movable = false;
     bool resizable = false;
     SaoPanelState start_state{};
+    SaoPanelState current_state{};
     {
         std::scoped_lock lock(panel->mutex);
         mode = panel->interaction_mode;
@@ -3071,11 +3085,17 @@ sao_status_t panel_cursor_pos(sao_ui_panel_s* panel, int32_t ix, int32_t iy) {
         start_x = panel->pointer_down_x;
         start_y = panel->pointer_down_y;
         start_state = panel->interaction_start_state;
+        current_state = panel->state;
         panel->pointer_x = ix;
         panel->pointer_y = iy;
     }
-    const int64_t delta_x = static_cast<int64_t>(ix) - start_x;
-    const int64_t delta_y = static_cast<int64_t>(iy) - start_y;
+    int64_t delta_x = static_cast<int64_t>(ix) - start_x;
+    int64_t delta_y = static_cast<int64_t>(iy) - start_y;
+    if (mode == 1 || mode == 2) {
+        // Geometry deltas need a fixed frame; widget drags remain panel-local.
+        delta_x += static_cast<int64_t>(current_state.x) - start_state.x;
+        delta_y += static_cast<int64_t>(current_state.y) - start_state.y;
+    }
     if (mode == 1 && movable) {
         return sao_ui_panel_set_position(
             panel, clamp_i64_to_i32(saturating_add_i64(start_state.x, delta_x)),

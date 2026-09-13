@@ -26,7 +26,9 @@
 #pragma pop_macro("NTDDI_VERSION")
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -54,6 +56,8 @@ struct EmbeddedDisplayFont {
     ComPtr<IDWriteFactory5> factory;
     ComPtr<IDWriteInMemoryFontFileLoader> loader;
     ComPtr<IDWriteFontCollection1> collection;
+    ComPtr<IDWriteFontFallback> fallback;
+    std::array<wchar_t, 256> cjk_family{};
     bool registered{};
     explicit EmbeddedDisplayFont(IDWriteFactory* source) noexcept {
         if (!source || FAILED(source->QueryInterface(IID_PPV_ARGS(&factory))))
@@ -69,23 +73,49 @@ struct EmbeddedDisplayFont {
                                     GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                 reinterpret_cast<LPCWSTR>(&resource_anchor), &module))
             return;
-        HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(701), MAKEINTRESOURCEW(10));
-        const DWORD size = resource ? SizeofResource(module, resource) : 0;
-        HGLOBAL memory = resource ? LoadResource(module, resource) : nullptr;
-        const void* bytes = memory ? LockResource(memory) : nullptr;
-        if (!bytes || !size)
-            return;
-        ComPtr<IDWriteFontFile> file;
         ComPtr<IDWriteFontSetBuilder1> builder;
         ComPtr<IDWriteFontSet> set;
-        if (FAILED(loader->CreateInMemoryFontFileReference(factory.Get(), bytes, size, nullptr,
-                                                           &file)) ||
-            FAILED(factory->CreateFontSetBuilder(&builder)) ||
-            FAILED(builder->AddFontFile(file.Get())) || FAILED(builder->CreateFontSet(&set)))
+        if (FAILED(factory->CreateFontSetBuilder(&builder))) return;
+        for (const WORD id : {WORD{701}, WORD{702}}) {
+            HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10));
+            const DWORD size = resource ? SizeofResource(module, resource) : 0;
+            HGLOBAL memory = resource ? LoadResource(module, resource) : nullptr;
+            const void* bytes = memory ? LockResource(memory) : nullptr;
+            if (!bytes || !size) return;
+            ComPtr<IDWriteFontFile> file;
+            if (FAILED(loader->CreateInMemoryFontFileReference(factory.Get(), bytes, size, nullptr, &file)) ||
+                FAILED(builder->AddFontFile(file.Get()))) return;
+        }
+        if (FAILED(builder->CreateFontSet(&set)) ||
+            FAILED(factory->CreateFontCollectionFromFontSet(set.Get(), &collection))) return;
+        UINT32 latin_index = 0;
+        BOOL found = FALSE;
+        if (FAILED(collection->FindFamilyName(L"SAO UI", &latin_index, &found)) ||
+            !found || collection->GetFontFamilyCount() != 2) return;
+        ComPtr<IDWriteFontFamily> cjk;
+        ComPtr<IDWriteLocalizedStrings> names;
+        UINT32 name_index = 0, length = 0;
+        if (FAILED(collection->GetFontFamily(latin_index == 0 ? 1 : 0, &cjk)) ||
+            FAILED(cjk->GetFamilyNames(&names))) return;
+        if (FAILED(names->FindLocaleName(L"en-us", &name_index, &found)) || !found) name_index = 0;
+        if (FAILED(names->GetStringLength(name_index, &length)) || length >= cjk_family.size() ||
+            FAILED(names->GetString(name_index, cjk_family.data(), static_cast<UINT32>(cjk_family.size())))) return;
+        ComPtr<IDWriteFontFallbackBuilder> fallback_builder;
+        if (FAILED(factory->CreateFontFallbackBuilder(&fallback_builder))) return;
+        const DWRITE_UNICODE_RANGE ranges[] = {{0x0250, 0x1DFF}, {0x1F00, 0x10FFFF}};
+        const wchar_t* families[] = {cjk_family.data()};
+        if (FAILED(fallback_builder->AddMapping(ranges, 2, families, 1, collection.Get(), nullptr, nullptr, 1.0F)))
             return;
-        (void)factory->CreateFontCollectionFromFontSet(set.Get(), &collection);
+        ComPtr<IDWriteFontFallback> symbols;
+        if (SUCCEEDED(factory->GetSystemFontFallback(&symbols)))
+            (void)fallback_builder->AddMappings(symbols.Get());
+        (void)fallback_builder->CreateFontFallback(&fallback);
+    #ifndef NDEBUG
+        if (fallback) std::fputs("UI_FONT_COLLECTION_READY latin=SAOUI cjk=ZhuZiAYuanJWD\n", stderr);
+    #endif
     }
     ~EmbeddedDisplayFont() {
+        fallback.Reset();
         collection.Reset();
         if (registered)
             (void)factory->UnregisterFontFileLoader(loader.Get());
@@ -315,27 +345,11 @@ TextMetricsCache& text_metrics_cache() noexcept {
     return cache;
 }
 
-ClassicTextStyle resolved_text_style(const std::wstring& text) noexcept {
+ClassicTextStyle resolved_text_style(const std::wstring&) noexcept {
     ClassicTextStyle style = active_classic_text_style();
-    if (style.role == ClassicTextRole::Display &&
-        std::any_of(text.begin(), text.end(), [](wchar_t c) { return c > 127; }))
-        style.role = ClassicTextRole::Body;
     if (style.role == ClassicTextRole::Auto)
         style.role = ClassicTextRole::Body;
     return style;
-}
-
-const wchar_t* family_for_role(ClassicTextRole role) noexcept {
-    switch (role) {
-    case ClassicTextRole::Display:
-        return L"SAO UI";
-    case ClassicTextRole::Monospace:
-        return L"Consolas";
-    case ClassicTextRole::Body:
-    case ClassicTextRole::Auto:
-    default:
-        return L"Microsoft YaHei UI";
-    }
 }
 
 DWRITE_FONT_WEIGHT weight_for_role(ClassicTextWeight weight) noexcept {
@@ -354,16 +368,21 @@ HRESULT create_text_format(DwriteBackend& backend, float size_px, ClassicTextSty
                            IDWriteTextFormat** out_format) noexcept {
     if (out_format == nullptr)
         return E_INVALIDARG;
-    IDWriteFontCollection* collection =
-        style.role == ClassicTextRole::Display && backend.display_font
-            ? backend.display_font->collection.Get()
-            : nullptr;
-    const wchar_t* family = style.role == ClassicTextRole::Display && !collection
-                                ? L"Segoe UI"
-                                : family_for_role(style.role);
-    return backend.dwrite->CreateTextFormat(family, collection, weight_for_role(style.weight),
-                                            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                                            size_px, L"", out_format);
+    *out_format = nullptr;
+    if (!backend.display_font || !backend.display_font->collection || !backend.display_font->fallback)
+        return E_FAIL;
+    ComPtr<IDWriteTextFormat> format;
+    HRESULT status = backend.dwrite->CreateTextFormat(L"SAO UI", backend.display_font->collection.Get(),
+        weight_for_role(style.weight), DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        size_px, L"", &format);
+    if (FAILED(status)) return status;
+    ComPtr<IDWriteTextFormat1> format1;
+    status = format.As(&format1);
+    if (FAILED(status)) return status;
+    status = format1->SetFontFallback(backend.display_font->fallback.Get());
+    if (FAILED(status)) return status;
+    *out_format = format.Detach();
+    return S_OK;
 }
 
 // Render `text` at `size_px` into a tight WIC bitmap (premultiplied BGRA)
@@ -449,6 +468,13 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float 
 }
 
 } // namespace
+
+HRESULT create_product_text_format(float size_px, IDWriteTextFormat** out_format) noexcept {
+    auto& backend = DwriteBackend::instance();
+    if (!backend.ready()) return E_FAIL;
+    return create_text_format(backend, size_px,
+        {ClassicTextRole::Body, ClassicTextWeight::Normal}, out_format);
+}
 
 bool prepare_gpu_text_dwrite(const char* text_utf8, float size_px, std::wstring* out_text,
                              void** out_format) noexcept {

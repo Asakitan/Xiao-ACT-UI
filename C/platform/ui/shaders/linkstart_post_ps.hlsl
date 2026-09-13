@@ -41,27 +41,37 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     if (bloomExtract > 1.5) {
     const float2 direction = p / max(radius, 0.0001) / float2(aspect, 1.0);
     const float speed = reducedMotion > 0.5 ? 0.0 : saturate(motionMix);
-    const float smear = min(7.0 / max(resolution.y, 1.0), 0.009 * speed) *
+    const float smear = min(6.0 / max(resolution.y, 1.0), 0.0078 * speed) *
                          speed * smoothstep(0.03, 0.50, radius);
-    float3 color = 0.0;
+    const float4 current = sceneTexture.Sample(linearSampler, uv);
+    const float currentCoverage = saturate(current.a);
+    const float2 bodyUv = uv + direction * max(smear * 1.6, 1.5 / max(resolution.y, 1.0));
+    const float aheadCoverage = sceneTexture.Sample(linearSampler, bodyUv).a;
+    const float bodyCoverage = all(bodyUv >= 0.0) && all(bodyUv <= 1.0)
+        ? currentCoverage * smoothstep(0.25, 0.90, aheadCoverage) : 0.0;
+    const float motionMask = (1.0 - currentCoverage) + bodyCoverage * speed * 0.36;
+    float3 color = current.rgb;
+    float tailWeight = 0.0;
     const float weights[5] = {0.40, 0.25, 0.18, 0.11, 0.06};
-    [unroll] for (int sampleIndex = 0; sampleIndex < 5; ++sampleIndex) {
-        const float2 sampleUv = uv - direction * smear * float(sampleIndex) * 0.40;
-        const float3 sampleColor = sceneTexture.Sample(linearSampler, sampleUv).rgb;
-        color += sampleColor * weights[sampleIndex];
+    [unroll] for (int sampleIndex = 1; sampleIndex < 5; ++sampleIndex) {
+        const float2 sampleUv = uv + direction * smear * float(sampleIndex) * 0.40;
+        const float4 sampleColor = sceneTexture.Sample(linearSampler, sampleUv);
+        const float weight = weights[sampleIndex] * saturate(sampleColor.a) * motionMask;
+        color += (sampleColor.rgb - current.rgb) * weight;
+        tailWeight += weight;
     }
     const float split = speed * smoothstep(0.18, 0.65, radius) * 0.65 / max(1.0, resolution.x);
     const float2 dispersed = float2(sceneTexture.Sample(linearSampler, uv + direction * split).r,
-                                    sceneTexture.Sample(linearSampler, uv - direction * split).b);
-    color.rb = lerp(color.rb, dispersed, speed * 0.16);
+                                    sceneTexture.Sample(linearSampler, uv + direction * split * 0.5).b);
+    color.rb = lerp(color.rb, dispersed, speed * 0.16 * saturate(tailWeight));
     float3 glow = 0.0;
     if (reducedMotion < 0.5) {
-        glow = bloomTexture.Sample(linearSampler, uv).rgb * 0.22 +
-               wideBloomTexture.Sample(linearSampler, uv).rgb * 0.08;
+         glow = bloomTexture.Sample(linearSampler, uv).rgb * 0.19 +
+             wideBloomTexture.Sample(linearSampler, uv).rgb * 0.07;
     }
     const float2 historyUv = 0.5 + (uv - 0.5) / max(1.0, historyScale);
     const float3 history = max(0.0, historyTexture.Sample(linearSampler, historyUv).rgb);
-    color = lerp(max(0.0, color + glow), history, saturate(padding1));
+    color = lerp(max(0.0, color + glow), history, saturate(padding1) * motionMask);
     return float4(color, 1.0);
     }
     float3 color = max(0.0, sceneTexture.Sample(linearSampler, uv).rgb);

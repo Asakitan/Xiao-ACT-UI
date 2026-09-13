@@ -16,6 +16,10 @@
 #include <string>
 #include <vector>
 
+namespace sao::ui::detail {
+HRESULT create_product_text_format(float size_px, IDWriteTextFormat** out_format) noexcept;
+}
+
 namespace sao::ui::entity_text {
 namespace {
 
@@ -121,11 +125,8 @@ HRESULT create_text_format(IDWriteFactory* factory, FontRole role, float pixel_s
                            FormatEntry* entry) {
     if (factory == nullptr || entry == nullptr)
         return E_INVALIDARG;
-    const wchar_t* family = role == FontRole::Icon ? L"Segoe UI Symbol" : L"Microsoft YaHei UI";
     ComPtr<IDWriteTextFormat> format;
-    HRESULT result = factory->CreateTextFormat(family, nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-                                               DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                                               pixel_size, L"", &format);
+    HRESULT result = sao::ui::detail::create_product_text_format(pixel_size, &format);
     if (FAILED(result))
         return result;
     result = format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);

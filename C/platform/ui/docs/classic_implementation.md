@@ -1,6 +1,209 @@
 # Classic SAO implementation and acceptance
 
+Current packaging authority (September 13): RelWithDebInfo and Hardened fresh
+acceptance each contains 22 directly loadable PEs and 76 exact manifest files plus
+the authenticated runtime bundle. The refreshed Debug ship has the same 22-PE/
+76-file surface. All three current trees have zero plaintext first-party DLLs,
+opaque helper DLLs, transaction locks, and LocalAppData generations after probes.
+The logical `sao_platform_ui` target and its ABI are unchanged, but its physical
+leaf is `ed0fa2d377a29333.dll` inside `runtime/ff22701a59858ebf`; no plaintext
+first-party UI DLL is shipped. Complete Debug and both release acceptance targets
+pass. All 38-PE/91-file and named-UI-DLL timestamps below are explicitly
+pre-bootstrap UI evidence, not the current artifact inventory.
+
+The current Debug, RelWithDebInfo, and Hardened build-tree DLLs export UI ABI 1.16
+(`65552`) and AI Editor ABI 1.2 (`65538`); each ship carries those inputs only in
+the authenticated bundle. UI minor 16 append-only adds tracked DC-mutation
+submit/wait/destroy while retaining the minor-15 Link End surface and all prior
+structure sizes. Debug build and ship bootstrap/bundle hashes match.
+
+The developer `sao_ui_preview` target now participates in the default build.
+This prevents a stale preview executable from retaining descriptive pre-rename
+DLL imports after the first-party outputs move to opaque leaves. The repaired
+Debug executable imports the current opaque AI/license/SDK/UI DLL names and a
+real launch reached input-idle with a nonzero top-level window handle.
+
 ## Current reconstruction status
+
+Panel movement/resize now compensates current versus initial panel origin before applying the
+pointer displacement. Only geometry modes1/2 use the host frame; widget modes3/4/5 remain local.
+An old-DLL native routing probe reproduced4wrong positions in8stationary events. Debug and
+shipped Release each pass203geometry observations through production compositor mouse dispatch:
+stationary/forward/reverse/negative positions, release/cancel and five edge/corner resizes.
+Source Review passes; ABI and existing size constraints are unchanged. This is a windowless
+native input/geometry inspection, not desktop frame-time or multi-DPI evidence. That inspection's
+pre-bootstrap Debug/Release build and resource hashes pass; the current encrypted Release/Hardened
+surface and opaque UI leaf are recorded above. Earlier module times below describe their original
+stages, not the current package.
+
+September 12 delivered layering: the root DComp rebuild appends ascending
+BELOW_NATIVE/native/ABOVE_NATIVE visuals with `AddVisual(child, FALSE, nullptr)`;
+attach, rebuild, rollback and recovery share that path. Existing `LayerLess` already orders
+band/z/creation; native CPU/GPU painting traverses forward and input traverses backward.
+Private `src/layer_order_internal.h` connects Entity to compositor-owned navigation state;
+public ABI, signatures and layouts remain unchanged. Menu/NerveGear retain raised z
+1500000000/1500000001 and rest at -10/-9, above the known fisheye at -50.
+Only false-to-true visibility or a changed z on a visible, non-clickthrough, non-navigation
+native layer at z>=0 yields both navigation layers under one compositor lock.
+Home raises the pair: visible-behind stays open, visible-front closes, closed opens in front.
+Repeated same visibility/z, rendering and ticks do not reclaim foreground. Guide remains modal
+ABOVE_NATIVE with background mouse/hotkeys blocked; native Home never crosses external bands.
+
+SDK registration now assigns final class z and alpha before initial visibility. This closes the
+temporary-z=0 bottom-HUD finding; focused follow-up Review returned pass with no additional edit.
+Negative-z HUD and clickthrough decorations remain excluded. Runtime/SDK panels, popups, dialogs
+and FilePicker use the inspected shared visibility/z paths; no public ABI or new sorting key.
+
+Debug UI compilation and a native overlapping-coordinate probe pass: new popup wins, Home makes
+the same coordinate route to Entity, reopening the popup wins again after service ticks, and Home
+front-close/reopen remains functional. Guide HTML_READY compositor=1 and graceful exit0 pass.
+Desktop captures did not contain the target UI; they were deleted and excluded from visual proof.
+Full Docs pixels, multi-DPI and individual popup-type live coverage remain open.
+The pre-bootstrap RelWithDebInfo acceptance and guide/font hashes remain valid UI evidence, but
+their 38PE/91-file inventory and named DLL times are historical. Current RelWithDebInfo/Hardened
+package acceptance is recorded above. Backend/production startup and full-DPI coverage remain
+outside this UI slice.
+
+### Previous UserMenu and guide review (pre-layering baseline)
+
+Final incremental review, September 12: no additional source defect found in user_menu.cpp/.h
+or the guide stylesheet; documentation corrections yield `passed-after-fix`, with no source
+modification or rebuild required by this review. The previous guide modal review and its built
+fixes are retained, not reopened. Earlier dated pending-build/review/no-release and dual-HTML
+statements below describe their original stages, not a new AI-main run or current release state.
+
+The actual UserMenu runtime panel uses `set_visible(false)` for repeated entry, forwards its
+titlebar close event to `menuAction("close")`, and includes a separate Close Menu button.
+Default size and positioning use400x440; failed initialization and destruction remove both
+handlers, and visibility telemetry is Debug-only. The parent's native input probe reports
+USER_MENU_X_CLOSE_OK, USER_MENU_BUTTON_CLOSE_OK, USER_MENU_REPEAT_ENTRY_CLOSE_OK and
+USER_MENU_CLOSE_PROBE_OK backend=offline exit=0. Each real state query returns visible=0;
+the panel is at70,0 with400x440 bounds. This is UserMenu evidence, not a Settings surrogate.
+
+Guide CSS restores SC1, particles, glow, scanlines and physical ripples: body isolation,
+cursor/ripple z6000/5500, glow z91 with18%/10% stops and scan opacity0.7. Exact-source headless
+Edge inspection at1280x820 reports document.hidden=false, visible SC1, glow on, particles
+opacity1, scan display:block/opacity0.7 and one ripple domain with domain/lighting opacity1,
+normal blend, energy4.1788 and6mapFrames. The parent visually inspected guide-effects-browser.png.
+HTML close and detail-Escape then guide-Escape pass through a recorded mock native bridge;
+390px close hit/no overflow and reduced-motion suppression pass. The narrow probe initially
+sampled an exiting detail barrier; waiting until hidden corrected only the probe. Native WebView
+CDP37829 refused connection: no native effects screenshot is claimed, and the integrated browser
+with document.hidden=true is excluded from effects-live evidence. Fault injection, multi-DPI
+and native Tab wrap remain source-reviewed/open.
+
+Historical parent verification covers Debug SaoAuto/Preview compilation, nine pages
+(root/settings/hotkeys/plugins/workshop/process/license/user/files) with font-ready and exit0,
+and native guide HTML_READY compositor=1/exit0. The latest combined export result contains only
+guide readiness, not AI-main completion. RelWithDebInfo acceptance passed38PE/91exact files/
+ship diagnostics absent; three binaries match bin/ship,18shipped guide files and8fonts match
+source. Extra source audio copies are not all shipped. Release SaoAuto is2614784bytes at
+2026-09-12T12:15:40Z; UI DLL is15621120bytes at12:15:28Z; full executable hash is in session-32.
+Hardened was unchanged in that historical UI slice; it has since been refreshed by session-33.
+These are explicit temporary UI/browser inspection probes, not unit/CTest
+tests or new repository tests. This review only reads source and edits existing documentation;
+no builds, tests, processes, production/backend startup, deployment or driver operations were run.
+
+### Earlier UI stages (historical evidence)
+
+The September12 click audit covered Entity/compositor coordinates, native panel/popups, HTML
+composition and owner dispatch. Two confirmed fixes landed: Entity uses physical client pixels
+without a second96/DPI conversion, and dropdown hit testing clears stale hover before checking
+separator/disabled/outside rows. Existing keyboard/lease contracts remain; source review is
+pass-with-notes. Debug nine-page/HTML/menu/36-frame/intro checks pass at96DPI; non96DPI and invalid
+dropdown-row behavior are source-verified, not newly runtime-probed.
+RelWithDebInfo Release is refreshed in build/windows-release/ship: acceptance exit0,38PEs,
+91files, diagnostics absent, three main bin/ship hashes and four web/eight font hashes match.
+Hardened remains at its previous baseline; no server deployment or production startup was run.
+The no-refresh notes in the preview history below refer only to those earlier captures.
+
+Scoped review findings were applied and read back by the parent: valid publication retains
+child transitions and closing rows, unchanged children are skipped, and keyboard activation/close
+synchronizes identity and input flags. The10:12Z UI rebuild and existing offline matrix pass.
+Publication-during-motion and keyboard/publication combinations remain source-traced only;
+older dated pending-review notes below are historical, not the current corrective status.
+
+Initial expansion and submenu switching are distinct. Switching joins old rows into one full
+mother bar for180ms, moves it to the new root with210ms quintic easing, then unfolds over270ms.
+The bar never exits or regenerates. New selections during opening queue behind the active motion,
+with the latest target winning; private snapshots preserve the source and queued state on rollback.
+Expanded rows align with the selected root, clamping upward only to keep the visible column
+inside local y40..418. Paint and input share the same column calculation; the connector follows.
+The09:45Z build and full offline matrix pass, including shared width/source anchor/latest target,
+Appearance top263/bottom354 and User top327/bottom418. Scoped review findings are corrected as above.
+
+NerveGear uses a60px circular monochrome/graphite face, a complete arched headband with solid
+visor and three menu dots instead of tiny labels. Hover scales the icon to1.04 with a0.5px lift;
+press scales it to0.94 with a1px depression and restrained face tint. Disabled/high-contrast
+palettes and separate linking/linked line indicators remain. Its72px canvas, hit geometry,
+drag/toggle logic and state machine are unchanged. The visual borrows clear-icon, spacing and
+press-state principles from Material FAB/Menu, Windows Buttons and Apple HIG Buttons, without
+adopting their platform-specific sizing or changing this menu's behavior. Debug UI/Preview
+compilation passed; no preview, image export or independent review was run, as requested.
+Reference pages: `https://m3.material.io/components/floating-action-button/overview`,
+`https://m3.material.io/components/fab-menu/overview`,
+`https://learn.microsoft.com/en-us/windows/apps/design/controls/buttons`,
+`https://developer.apple.com/design/human-interface-guidelines/buttons`.
+Root navigation
+cards are224x44 with8px corners, name/root-ID hierarchy, an independent ordinal chip and child
+chevron. Icons/cards follow by6px/18px; opening uses18ms per-item delay, closing reverses at12ms.
+The main menu slides with450ms cubic deceleration and300ms quadratic acceleration, not alpha fades.
+An initial root expansion grows for90ms, generates one parent bar for150ms, holds60ms, then splits into
+secondary rows for180ms. Secondary hit regions activate only after completion; reduced motion
+skips the animated stages. Root/child motion uses opaque content and shared clipped hit geometry.
+Owner-tick paint is coalesced; visibility input flags update immediately. A scoped suppression
+flag prevents self-input callbacks from reentering a locked visual commit. Wheel/home/lifecycle
+paths remain. Host-backed GPU composition uses the host dimensions, not moving-layer bounds;
+headless composition keeps its previous extent rule. Menu shadow remains, backdrop blur is removed.
+The09:15Z Debug/export/font/HTML/interaction/intro-order matrix passes, including black-white
+switching and grow/generate/split/ready markers.36 native frames hold1264x821 with monotonically
+moving opaque header pixels1256→842. This was not final desktop or full-DPI acceptance; the
+then-pending combined review and later scoped corrections are recorded above. Earlier click timing
+comparisons remain historical message timings.
+
+Startup hides both Entity menu and NerveGear until Link Start completes, then opens the menu once.
+Production preserves the guide's completion event and restores UI on render/device termination,
+not offline/teardown/bootstrap failure. Preview opens directly without an intro and retains the
+audition auto-exit. Default-timeline offline samples0/1800/10000ms contain no menu-open event;
+11200ms contains exactly one natural-completion/menu-open event.
+Root buttons now use layered metallic rims, inset faces, directional highlights and short status
+arcs. Numbered cards and child icon wells share the material; faces are opaque, root pitch,
+callbacks and fonts are unchanged. High contrast omits material overlays; bevel highlights are
+static. The current screenshot shows no overlapping text or ring-clipped icons.
+
+Menu actions toggle existing management panels; guide and AI panels expose visibility queries,
+and a second AI launch request can suppress a pending show. Root and child menu headers have a
+close button with matching paint/input/public hit geometry. Reopening during the close animation
+clears stale child state. NerveGear uses a headset device tile, a DPI-scaled threshold and client-pixel drag
+clamped to the host; release after drag does not open the menu. Position is session-local.
+
+Only the Link Start GPU scene and fisheye backdrop layers use opacity0.93; the fisheye shader
+retains its fade but no extra0.95 multiplier. Production and preview hide the shared fisheye while
+the intro is active, avoiding nearly opaque stacking. Intro layers stay above menu utility layers;
+foreground status/text/control/panel alpha and global compositor opacity are unchanged.
+The09:15Z Debug build, nine exports, eight font hashes and both hosted HTML ready/exit checks pass.
+The offline96-DPI probe passes menu/settings toggles, black-white, drag, root/child close and cancel.
+Native BGRA exports report left-side background alpha237 for intro and fisheye. At1.8s the intro
+contains no menu/opaque UI pixels; the root page has73243 opaque pixels. These are compositor
+snapshots, not desktop captures. Full DPI, AI launch races, live fisheye input and subjective
+acceptance remain open; this stage did not record an independent review.
+
+The global typography rule is SAOUI.ttf for Latin/numbers and ZhuZiAYuanJWD.ttf for Chinese.
+Both native DirectWrite paths share one private embedded collection, font mapping and measurement
+format across Display/Body/Monospace roles. HTML editor, guide and built-in panels ship matching
+files and range-limited font faces; a font-only virtual host supplies opaque embedded frames.
+Shared neutral surfaces, soft badges, measured vertical text alignment and navigation states
+replace the earlier flat chrome. Settings and Process receive new page organization; the menu
+uses selected-state material instead of continuously rotating decoration. Other management pages
+inherit shared styling, not a separate per-page layout rewrite in this continuation.
+Debug build and nine native exports passed with both fonts ready; eight staged font hashes match.
+Browser editor/guide font faces loaded, and hosted HTML readiness/normal exit passed. Process was
+captured loading; populated rows, terminal proportional-cell alignment, missing glyphs, full DPI
+and subjective acceptance remain open. Focused final review passed with notes after the parent
+fixed form-control font inheritance and tiny navigation-marker bounds. The final 05:29Z Debug
+rebuild and all nine exports passed again; all 326 editor form controls resolve to SAO Product.
+Common extension-frame defaults are supplied without replacing extension CSP or icon fonts.
+
 Session-32 makes the original HTML the editor surface, with its former native tools exposed
 inside an HTML tab; the native main now displays only loading/error/retry. The guide uses an
 owner-thread CompositionController on the same compositor, and the tray menu and asynchronous
@@ -23,7 +226,8 @@ Launcher restart confirmation is asynchronous, defaults to Cancel, and invokes t
 executor only after explicit approval is consumed by the owner tick. CLI help/version writes
 console or redirected output; shutdown drains at most 64 queued messages per iteration.
 Debug compilation, the eight-page exports and guide/editor readiness plus normal exit passed
-again. New confirmation/input behavior is source-reviewed only; independent review is pending.
+again. New confirmation/input behavior is source-reviewed only; independent review and interactive
+result delivery remain open.
 Dedicated Kernel Map selection and legacy synchronous/developer windows remain unchanged.
 
 The previous generic-card/AI-only Preview result was rejected as a complete visual rebuild.
@@ -69,7 +273,7 @@ https://makeagif.com/gif/sword-art-online-link-start-DZ4lIe
 https://tenor.com/view/link-start-sao-gif-24757565
 ```
 - Classic light remains the default: porcelain `#eeeae4`, card white `#faf9f6`, ink `#232724`, muted `#646a65`, rules `#d6d6ce`, and selection `#d99536`. Persisted dark uses graphite `#202421` / `#2b302c`, pale text `#eef0e8`, and `#edb45b` accent.
-- Display/Chinese body/monospace roles share DirectWrite measurement and paint configuration. The existing SAO UI font is embedded privately, with no system font installation. Resource provenance is in `classic_asset_sources.md` and the asset manifests; original repository font/audio rights remain unverified.
+- All text roles share DirectWrite measurement/paint and the two private embedded fonts; HTML uses the same asset bytes. Resource provenance is in `assets/fonts/SOURCE.md` and the existing asset manifests; no system font installation occurs.
 - Public sound cue 0–10 and Link Start config sizes remain unchanged. Cue 11–14, sound sessions, event prioritization, custom PCM WAV playback and dialog password options are append-only.
 - Hosted guide audio uses the native XAudio2 mixer; its local mute is an additional restriction. A separately opened browser uses bounded HTML audio. Global volume keeps the existing min(requested, global) ABI semantics.
 - TextField uses a compositor-owned Win32 EDIT proxy for selection, clipboard and IME, with native SAO rendering. Real-time values retain `text` and `value`; selection-only changes repaint without redispatching a business action.
@@ -81,21 +285,64 @@ https://tenor.com/view/link-start-sao-gif-24757565
 - Panels, Entity/NerveGear and Link Start text record immutable drawing commands. Direct2D 1.1 draws those primitives and DirectWrite text directly into compositor-owned BGRA8 D3D11 textures. Normal native pages no longer rasterize/upload complete CPU frames. Explicit panel rasterization and local image/custom-canvas content retain their separate CPU paths.
 - The one DirectComposition target now owns explicit `BELOW_NATIVE` and `ABOVE_NATIVE` external visual slots around the flattened native swapchain. Slot targets are generation-scoped across device loss, participate in host clipping and exact chorded L/R/M/X raw input without entering native snapshots/effects, and remain on the compositor owner thread.
 - AI main uses an in-process WebView2 CompositionController in the `BELOW_NATIVE` band at the fixed `https://sao-workbench.local/ai_editor_app.html` origin. Navigation challenges still bind requests and events. Native panels, menus and file selection can render above HTML; editor window commands no longer manipulate the platform HWND. The old main body is only a loading/error/retry view, not a native workbench fallback.
+- The full-page guide uses `ABOVE_NATIVE`, matching visual and mouse precedence. A full-client native input barrier at z=1700000000 remains active during loading/error/recovery, with the closable status panel above it; hide retires input and queued retry. Host keys and global shortcuts cannot act on underlying UI while the guide owns the screen. Both the HTML header and its intro expose close controls; nested detail/intro Escape takes precedence over closing the guide.
+- Source review fixes defer guide retry until async creation and callbacks drain, preserving the error barrier and resize service meanwhile. Tab traversal wraps within WebView; presentation failure withdraws its input/visual slot, with permanent failure exposing Retry and transient failure retried by the owner tick. Bounds must succeed before dimensions are cached, and visibility transitions participate in callback lifetime protection. These fixes were read back and covered by the completed Debug and pre-bootstrap RelWithDebInfo build plus `HTML_READY compositor=1` evidence above; fault injection, multi-DPI, and native Tab-wrap acceptance remain open.
+- UserMenu owns a runtime panel created with `sao_ui_panel_create`; repeated-click hide uses `sao_ui_panel_set_visible(false)`, not the distinct SDK registered-panel hide API. Existing Home/Entity navigation remains separate.
 - The current first-generation-inspired direction replaces the previous dark neon field with luminous white space, solid colored cylinders, pearl UI and blue/white second flight. Depth lighting, shallow bevels, restrained highlights and distance fog remain; it is not a return to flat ribbons or a claim of frame-exact official footage.
-- Each flight emits 720 finite columns using a 48-sided/four-band shared mesh (386 vertices, 2304 uint16 indices). Camera travel is 18000 times quintic smoothstep; normalized speed rises and falls symmetrically. Birth distance is `(18000 - spawnDepth - baseLength - 8) * i / 719`; geometry starts at zero size at the exact center and expands continuously over 320 travel units at far depth. Once born, it is not removed by density/near-alpha/group-fade gates: ordinary frustum clipping follows the complete body/tail leaving view. Physical length plus a bounded speed-driven extension produces straight trails; one 8.33ms exposure remains.
-- Distant columns retain a birth-scaled 0.85px minimum projected radius rather than disappearing below raster coverage. Stable material brightness, broader highlights and white depth fog replace shimmer. At phase end speed is zero and every tail, including the bevel, is behind the near plane with margin; zero-duration phases emit nothing. These are source-level lifecycle properties, not an all-resolution visual-parity claim.
+- Each flight emits 384 finite columns using a 48-sided/four-band mesh (386 vertices, 2304 uint16 indices). The CPU publishes a linear phase clock; each column has its own birth time (`0.45 * birthFraction`) and 0.55-phase lifetime. Radius, radial position and depth travel use age squared, starting at the exact center with zero velocity and accelerating outward without a late slowdown or a fast fixed-radius emergence. Length grows by at most 16%; per-column travel includes the stretched tail and bevel exit margin. Geometry exits through ordinary frustum clipping rather than alpha/density gates.
+- Stable material brightness and white depth fog remain. Zero-duration custom flight intervals emit nothing. Endpoint geometry is source-reviewed; it is not an all-resolution visual-parity claim.
 - Explicit custom timelines start colored flight at their prelude, while the default prelude-relative clock starts at zero. A positive custom prelude therefore begins at progress zero rather than mid-flight; `prelude == p1_end` emits no colored columns. These boundary cases were source-reviewed, not run as an automated or live custom-timeline matrix.
-- Seven single-sample RGBA16F targets are retained. A separate MSAA scene target and matching D32 depth prefer 4 samples, 2 above 2560x1440, then 1 if format/depth/resolve support is absent. The radial pass samples the scene seven times rather than fifteen; bloom extracts highlights rather than the white field. History retention is 0.06..0.22 with frame-interval decay and current-neighborhood clamping. Discontinuity/seed/reduced/blue-boundary resets, edge resolve and single sRGB conversion remain.
-- The five beats are sequential sensory indicators with LINK START, colored flight, pearl welcome UI, blue flight and a pale Connected confirmation. Quintic easing, overlaps and reading holds are retained. UI samples at 8/16ms have lower weights and appear only during motion; full-layer text shadows are disabled. The first background is opaque; zero custom prelude adds no startup card. Reduced motion remains 450ms without motion samples; public enums and bootstrap contracts are unchanged.
-- The shared procedural fisheye service renders an 85%-resolution GPU field and then applies lens distortion, blur and chromatic offsets. It includes frost noise, five rays, three data-rain layers, four drifting segmented gauge rings, three scanning beams, grid cells, six motes, scanlines and vignette. One layer is reused across 500ms show/400ms hide transitions; reduced motion freezes procedural time and resolves opacity immediately. The existing live-image and CPU inspection paths remain separate. `sao_ui_fisheye_backdrop_advance` adds deterministic owner-thread stepping (0..1000ms) without changing existing structure sizes.
+- Scene alpha stores column coverage, not final opacity. A bounded forward-coverage probe applies medium body blur with a maximum0.36×speed mask inside columns while protecting leading areas without forward coverage. The probe extends at least1.5 vertical-resolution pixels and rejects out-of-viewport coordinates. Four positive-radial taps keep rearward trails; historyScale=1 prevents forward reprojection. The7.5ms/0.10 exposure, original shutter radius, bloom0.19/0.07, MSAA, final opacity/sRGB and112-byte constants remain unchanged.
+- Sensory discs use pearl-white/silver glass matching the information panels, directionally lit bevels, inset silver tracks,24 fine ticks, moving glints and a subtle confirmation ripple; green is restricted to small status accents. The centered label type scale was doubled from0.17 to0.34 of the disc radius (clamps18/80). The white plate is now a snug translucent band behind the glyphs: width `max(textWidth*1.14+6, 0.5*radius)` capped at1.5 radius, height1.22*textHeight, plate alpha80%, shadow16% and top highlight80%; disc radius, rings, ticks, colors and motion are unchanged. Maximum active radius is38% of viewport height capped by28% width; dock radius38 and spacing86 enlarge both states. The0.30-phase motion, curved return and16ms staggered offscreen exits remain. Audio/onsets/10.500680s total and Connected layout are unchanged; global fonts remain outside this slice.
+- The 1000ms vertical background reveal keeps 48 silver/cyan columns, dark downward and light upward. Each column maps global progress through its own start (0..0.24), finish (0.68..1) and acceleration exponent (1.10..2.30), so the actual color boundary advances in staggered streams rather than one shared front. Small time-noise offsets taper to zero at local endpoints. Long, faint filaments coexist with short packets; packet lengths vary per cell, spacing per column, and tail lengths span 0.035..0.36 before a 0.85..1.15 noise scale. Packet travel integrates a sinusoidal speed modulation: base speed 8..26 phase units/s with bounded ±30% variation, replacing elapsed-time multiplied by a changing speed. Existing snapping, reversal progress, 32-byte constants, 85% field resolution, visibility timing, opacity and live-image paths remain. Debug UI shader regeneration and relink returned 0; no preview, tests or repack were run.
+- Lens compositing eases each coordinate toward an inset mapping in the outer 20% of its axis instead of allowing outward distortion to clamp into repeated edge texels. The inset includes both outer radial blur taps, RGB separation and half a source texel obtained from the field texture dimensions. The central region retains its original UVs; no field-target expansion, edge-cover overlay or menu modification is used. Debug UI compilation returned 0; the edge appearance has not been previewed and remains for user acceptance.
+- Light/Dark action IDs take precedence over icon tokens in native root/child paint and software child paint, so old Home/Lock tokens no longer override Sun/Moon. Preview appearance rows and default children explicitly use `sao:sun`/`sao:moon`; existing SVG sources, stroke geometry and manifest hashes remain unchanged. Both light and dark selected root buttons omit the black drop shadow/recess/lower arc and white outer highlight; continuous selection-colored rims and restrained face highlights replace the mismatched ring. Unselected and high-contrast rendering remain unchanged. Debug UI compilation succeeded (DLL timestamp 2026-09-13 05:56:56Z); Preview source was synchronized but not rebuilt or run, and its previously reported settings-page declaration failure was not rechecked. No image export or release repack was performed.
+- Entity foreground retains its 1000ms reveal and 12..160 horizontal strips across buttons, bars, icons, text and NerveGear. Per-row start/finish windows (0..0.24 / 0.68..1) and stable 1.10..2.30 exponents replace time-varying exponents: the main cut advances monotonically with progress rather than sliding backward when noise changes. Independently sized notches, main chips, echoes and 0..8px flecks keep evolving through 480ms random interpolation. All cut edges are integer-aligned, chips are bounded and each echo is followed by its own gap, keeping both palette masks complementary and fragments inside the endpoint margins. Clock sharing, transparent gaps, input, snapping, actual CLOSED gate, fonts, sound and public interfaces remain unchanged. Debug UI compilation returned 0; no preview, tests, export or release repack were run.
 - Native menu keeps 70px slots, 54..70px circles and two-neighbor focus. Orbit arcs, selection trails/press pulses and a status marker strip accompany translucent menu surfaces. Root hover is 200ms in/out; child entry is 240ms with 28ms row stagger; the bounded existing 450ms root popup remains. Existing hit regions, callbacks, scrolling and high-contrast action colors are preserved.
 - Native pointer and keyboard skip affordances are removed. Both intro layers retain full rectangular input coverage; Launcher and production Preview consume intro keys without dismissal. Public programmatic dismissal, window shutdown and error completion remain unchanged. Late ticks do not replay expired cues. Preview parent-window input still uses the compositor and screen-space wheel coordinates.
 - Guide intro owns focus and makes existing background nodes inert through its exit, restores their prior state, and supports short keyboard/complete-pointer skip. The native completion fragment and existing session preference still suppress duplicate introductions.
 - Zero-duration P1/P3 phases emit no particles; positive phases budget complete column travel before their boundary without changing public completion time. Guide pointer leave and lost capture still clear only the matching armed pointer.
-- Default sound is one source voice with all three buffers queued before Start: LINK_START (44116 frames), NERVEGEAR (171990), ALO_WELCOME (246974), all PCM16/stereo/44100Hz. Only the last buffer carries END_OF_STREAM. SamplesPlayed drives visual time and the atomic OnStreamEnd callback confirms completion; callbacks do not take the playback mutex and voices are destroyed outside it. Four bounded sequence slots are pruned on the worker's 50ms wake-up.
+- Default sound uses one source voice and three PCM16/stereo/44100Hz buffers: LINK_START (44116 frames), private NERVEGEAR/SENSORY premix (171990), ALO_WELCOME (246974). Resource616 supplies the premix only to default Link Start; public NerveGear611 and original assets remain unchanged. The premix is original audio at unity gain plus the sensory clip at 0.8 gain, starting101430frames into the flight buffer; no original ducking, pitch shift or speed change. Only the last buffer carries END_OF_STREAM; SamplesPlayed and existing group/worker cleanup remain authoritative.
+- Sensory asset provenance: user-provided `sword_art_online_sao_link_start_short_custom_transition.webm`, audio3.45..7.00s; `atempo=2.0,atempo=1.109375` compresses only this new effect while preserving pitch. `loudnorm=I=-20:TP=-6:LRA=7`, resampling to44100Hz, padding/trimming to70560frames and12ms/40ms fades produce `Transition.SAO.Sensory.wav`. Overlay at2300ms with `volume=0.8` and `amix=duration=first:normalize=0` produces `Startup.SAO.NerveGear.Sensory.wav`; final SHA256=`84c09aeee1a9aafee09e3f5de64a015994d2c9853276bda626b71532f522860c`. The standalone clip is source material, not another playback buffer.
 - No additional Welcome plays after completion. The experimental handoff cue, Preview tail delay and fourth muxed cue were removed at the user's request; intro and Preview audio behavior return to the existing three-cue contract.
-- Default boundaries: voice/first flight1.000363s; Online/title4.900363s; blue6.655363s; title end7.150363s (card exit through7.330363s); Connected entry10.100680s; audio end10.500680s; hold end11.400680s; completion12.150680s. The interface frame starts preparing0.20s before Online, but title text never appears early. Silent/interrupted/750ms stalled fallback, explicit custom timing/natural audio tails, cancellation/error/destruction/replay and reduced-motion suppression remain.
+- Default absolute boundaries: visual prelude/first flight0.800290s, first PCM end1.000363s, colored flight end3.420363s, sensory sound/left-right zoom3.300363..4.900363s within the first stage, right-hand dock/green/exit crossfade through5.300363s. Welcome4.900363..7.150363s (card through7.375363s), blue6.475363s, Connected8.300680s, hold9.700680s, audio/completion10.500680s remain unchanged. Calibration is default-only; custom timings and450ms reduced motion are preserved.
 - Bootstrap/hold integration was added concurrently in session-31 and is outside this visual/audio slice's changes and verification; the separate section below describes that work. Offline frame export runs without backend activation or telemetry.
+
+## Reusable native Link End outro
+
+- UI minor 15 appended `sao_ui_linkstart_show_outro(handle)` and completion reason
+	`SAO_UI_LINKSTART_COMPLETION_OUTRO = 8`; current ABI1.16 retains both, and config24/GPU Constants112/Instance52 bytes remain unchanged.
+- The opaque handle owns the mode. Startup `show` restores startup mode and its existing
+	NATURAL completion. Outro entry cancels the current startup playback/group, clears hold,
+	telemetry and pending completion, and creates no sound group or playback.
+- Normal duration is900ms, reduced motion180ms, advanced only by caller tick deltas with
+	endpoint clamping. Enabling reduced motion during outro shortens its deadline to180ms;
+	disabling it does not extend that run. Repeated entry while outro is active is a no-op.
+- Existing phase queries report CONNECTED with outro progress, then COMPLETE after natural
+	completion. Polling delivers OUTRO once; subsequent polls return NONE. Explicit dismissal
+	keeps its existing reasons and does not accept OUTRO as a caller-supplied reason.
+- Resize, dismiss and destroy retain existing resource ownership. Valid hold/telemetry/release
+	calls are no-ops in outro mode, including failed-hold release. Entry/render/resize errors
+	return status so the caller can continue shutdown; outro does not advance the startup NerveGear clock.
+- The existing GPU renderer and recorded paint layer draw a pearl-white `LINK END` /
+	`SYSTEM >> DISCONNECTED` panel, contracting calibration rings and96 restrained pale blue/white
+	forward columns. Reduced motion freezes geometry and omits flight. Mode changes invalidate
+	temporal history and select cached mode-specific instance colors; no new device, swapchain or asset.
+- A shared quintic entrance/exit envelope fades the panel and final GPU output to zero;
+	GPU layer alpha remains0.93 and scene alpha remains column coverage. Existing0.36 body blur,
+	rearward trails, shaders, startup timing and0.8 sensory sound assets remain unchanged.
+- Normal launcher quit now runs the outro before teardown, suppressing menu/guide and queued
+	navigation work; failure/session shutdown bypasses it. The1500ms loop deadline is cooperative.
+	Completion and cancellation hide the overlay host before background cleanup, avoiding panel flashback.
+- Final Debug UI/SaoAuto/Preview and RelWithDebInfo release acceptance completed (38 PE audit).
+	Offline `--outro` exported90frames at60fps/1280x832, with completion at900ms; live preview
+	reported reason8/failed0 at922ms and exited normally. Conflicting intro/outro options were rejected,
+	and the original660-frame startup movie was regenerated and decoded. Empty post-outro frames are
+	synthesized only after successful completion; startup menu restoration stays suppressed.
+- Feature review fixes were read back and rebuilt; the final host-hide delta review passed.
+	Actual production quit, session shutdown, injected failures and reduced-motion runtime remain
+	unmeasured. Exit preview `.sao/ui-preview/linkend.mp4` SHA256 is
+	`8cb1e0773d591703946cb5a911fd672ef5ba54f8e6dcad4fcda4fb54f8fb3e54`.
 
 ## Source coverage and remaining acceptance
 | Surface | Source change | Visual/runtime acceptance |
@@ -109,11 +356,11 @@ https://tenor.com/view/link-start-sao-gif-24757565
 | AI main / Control Center | Full original editor HTML, native tools tab, single-path HTML actions, script dialogs and runtime notifications; native loading/error/retry only | Session-32 Debug build and HTML_READY compositor=1 with normal exit verified; generic picker frame exported; full interaction/backend and new script-dialog result delivery still pending |
 | Embedded AI pages | Classic light/default and neutral-dark CSS | Source review; hosted WebView runtime pending |
 | User guide | Classic CSS, shorter interactions, native sound bridge and real WAV copies | Browser inspected at 1280×900 and 390×844, no horizontal overflow or broken images |
-| Link Start | Center-born 720-column flights, 48-sided mesh, complete exit instead of visibility toggles, slow-fast-slow travel, stable highlights and unchanged three-cue audio | Review's custom-prelude start defect fixed by parent and read back; four shaders /WX and Debug UI/Preview rebuilt;22stills and780-frame/60fps/13s movie regenerated and decoded, audio=0/status=0 with natural exit. Three180-frame render/readback runs approximately1.03s, not presentationFPS. Custom boundaries are source-reviewed; appearance/DPI/device/acoustic acceptance remains open |
+| Link Start | Medium column-body blur with forward-edge protection and rearward trails; enlarged pearl-white discs and unchanged audio | Debug UI/Preview, four shaders /WX,31 stills,660-frame/60fps/1280x832/11s decode and natural audition10.848s passed; audio=0/status=0. Three180-frame exports1.65/1.63/1.63s completed; not presentationFPS. Full custom/DPI/device/subjective acceptance remains open |
 
 ## Manual gates (not claimed as passed)
 - Five-beat code review passed after parent repaired short-hold opacity: entry ends by the hold boundary, overall entrance ends by its absolute timestamp, old samples stop after entry, active hold forces opacity1, and parking rounds upward to a representable millisecond. Zero/100ms/submillisecond/early holds were statically reviewed, not claimed as a live runtime matrix; default timing remains unchanged. The previous review/persistence blocker is resolved.
-- Current full preview is `.sao/ui-preview/linkstart-center-flight.mp4` (SHA256 `541f207f92592d56f4b0f980a27d367b06e271405aa4a68176da22fd7609677b`); first-generation/flow/five-stage/upgraded/reference movies are historical. Current Debug UI SHA256 is `6a52f9a490b1c4ea1efe1118c52cd1d2a42c84c88c08e281929738c12f33a63a`.
+- Startup regression preview after outro integration `.sao/ui-preview/linkstart-smooth-tunnel.mp4` SHA256=`5db4993aef3d4b4f4b599495f13ad50f7ffd49377345fa9a39a601584da039a0`; Debug UI SHA256=`0bb74464c239bdc6be0c40411c763433da345429d0331631fb0a9ad198168eac` (current encrypted-runtime build renames the module to a hash basename). The660-frame/11s video was regenerated and fully decoded after the label-size change; animation/audio remains10.500680s. Earlier preview hashes are historical.
 - 1080p / 1440p / 4K and 100% / 150% / 200% DPI; high contrast, reduced motion, long Chinese labels, dense/empty/loading/error/disabled pages.
 - Chinese IME composition/candidate positioning, selection/paste/password, stable refresh, nested scroll, fixed composer and modal focus.
 - Rapid click/focus sound deduplication, live master/local mute, custom WAV playback, unskippable intro with normal shutdown and no residual sound, subjective A/B timbre matching.
@@ -130,7 +377,7 @@ https://tenor.com/view/link-start-sao-gif-24757565
 
 ## Build / preview (no automated tests)
 Production compilation targets: `sao_platform_ui sao_plugin_ai_editor SaoAuto` in `C/build/windows-debug`, Debug.
-Developer preview: target `sao_ui_preview`; uses the real overlay host + DComp compositor, not a screenshot display loop.
+Developer preview: default-build target `sao_ui_preview`; uses the real overlay host + DComp compositor, not a screenshot display loop.
 - Default: the actual Entity root menu with Launcher Settings, Hotkeys, Plugins, Workshop, Process Selector, License, User Menu and Guide owners. AI main/settings are menu entries, not the whole application.
 - `--workspace PATH --backend EXE`: explicit native AI process/workspace selection. No AI backend starts without `--backend`; `--offline` suppresses even that explicit backend option.
 - Workshop remains detached, plugin runtime is not started, and Process Selector has no RT I/O provider in this developer shell. These are the production pages' own empty/error states, not connected-backend evidence.

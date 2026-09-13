@@ -56,6 +56,9 @@ struct ChildMenuSnapshot {
     int32_t phase_elapsed_ms{};
     std::string displayed_parent_name;
     std::string pending_parent_name;
+    std::string child_bridge_source;
+    bool child_switching{};
+    bool child_transition_queued{};
     int32_t child_hover_idx{-1};
     int32_t child_slide_elapsed_ms{};
     float child_fade_t{1.0F};
@@ -66,6 +69,9 @@ struct ChildMenuSnapshot {
 struct Snapshot {
     int32_t active_root_idx{-1};
     int32_t displayed_parent_idx{-1};
+    int32_t child_source_idx{-1};
+    bool child_switching{};
+    bool child_joining{};
     int32_t child_hover_idx{-1};
     SaoUiMenuPhase phase{SAO_UI_MENU_PHASE_CLOSED};
     float fade_t{1.0F};

@@ -35,6 +35,8 @@ enum class IconId : uint8_t {
     Keyboard,
     Workshop,
     Process,
+    Sun,
+    Moon,
 };
 
 struct Stroke {
@@ -191,6 +193,34 @@ inline constexpr Stroke kProcess[] = {
     {11.0F, 12.0F, 17.0F, 12.0F}, {7.0F, 15.5F, 9.0F, 15.5F},  {11.0F, 15.5F, 17.0F, 15.5F},
 };
 
+inline constexpr Stroke kSun[] = {
+    {16.5F,12.0F,16.16F,13.72F}, {16.16F,13.72F,15.18F,15.18F},
+    {15.18F,15.18F,13.72F,16.16F}, {13.72F,16.16F,12.0F,16.5F},
+    {12.0F,16.5F,10.28F,16.16F}, {10.28F,16.16F,8.82F,15.18F},
+    {8.82F,15.18F,7.84F,13.72F}, {7.84F,13.72F,7.5F,12.0F},
+    {7.5F,12.0F,7.84F,10.28F}, {7.84F,10.28F,8.82F,8.82F},
+    {8.82F,8.82F,10.28F,7.84F}, {10.28F,7.84F,12.0F,7.5F},
+    {12.0F,7.5F,13.72F,7.84F}, {13.72F,7.84F,15.18F,8.82F},
+    {15.18F,8.82F,16.16F,10.28F}, {16.16F,10.28F,16.5F,12.0F},
+    {12.0F,2.0F,12.0F,5.2F}, {12.0F,18.8F,12.0F,22.0F},
+    {2.0F,12.0F,5.2F,12.0F}, {18.8F,12.0F,22.0F,12.0F},
+    {4.9F,4.9F,7.2F,7.2F}, {16.8F,16.8F,19.1F,19.1F},
+    {4.9F,19.1F,7.2F,16.8F}, {16.8F,7.2F,19.1F,4.9F},
+};
+inline constexpr Stroke kMoon[] = {
+    {12.0F,3.5F,8.75F,4.2F}, {8.75F,4.2F,6.05F,6.05F},
+    {6.05F,6.05F,4.2F,8.75F}, {4.2F,8.75F,3.5F,12.0F},
+    {3.5F,12.0F,4.2F,15.25F}, {4.2F,15.25F,6.05F,17.95F},
+    {6.05F,17.95F,8.75F,19.8F}, {8.75F,19.8F,12.0F,20.5F},
+    {12.0F,20.5F,15.25F,19.8F}, {15.25F,19.8F,17.95F,17.95F},
+    {17.95F,17.95F,19.8F,15.25F}, {19.8F,15.25F,20.5F,12.0F},
+    {20.5F,12.0F,18.0F,13.4F}, {18.0F,13.4F,15.2F,13.5F},
+    {15.2F,13.5F,12.75F,12.6F}, {12.75F,12.6F,10.9F,10.7F},
+    {10.9F,10.7F,10.2F,8.2F}, {10.2F,8.2F,10.5F,5.7F},
+    {10.5F,5.7F,12.0F,3.5F},
+    {18.5F,3.7F,18.5F,7.3F}, {16.7F,5.5F,20.3F,5.5F},
+};
+
 inline constexpr Definition kDefinitions[] = {
     {IconId::Menu, "menu", kMenu, stroke_count(kMenu)},
     {IconId::Confirm, "confirm", kConfirm, stroke_count(kConfirm)},
@@ -214,6 +244,8 @@ inline constexpr Definition kDefinitions[] = {
     {IconId::Keyboard, "keyboard", kKeyboard, stroke_count(kKeyboard)},
     {IconId::Workshop, "workshop", kWorkshop, stroke_count(kWorkshop)},
     {IconId::Process, "process", kProcess, stroke_count(kProcess)},
+    {IconId::Sun, "sun", kSun, stroke_count(kSun)},
+    {IconId::Moon, "moon", kMoon, stroke_count(kMoon)},
 };
 
 inline const Definition& definition(IconId id) noexcept {

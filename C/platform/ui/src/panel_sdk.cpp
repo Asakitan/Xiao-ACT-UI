@@ -806,14 +806,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_register(sao_ui_compositor_hand
         if (status == SAO_STATUS_OK)
             status = sao_ui_panel_set_event_handler(rec->runtime_panel, &runtime_panel_event,
                                                     &rec->geometry_persistence);
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_panel_set_visible(rec->runtime_panel, rec->visible);
         const sao_ui_layer_handle_t layer = sao_ui_panel_layer(rec->runtime_panel);
         if (status == SAO_STATUS_OK && layer != nullptr)
             status =
                 sao_ui_layer_set_z_order(layer, global_z_key(rec->z_class, rec->z_within_class));
         if (status == SAO_STATUS_OK && layer != nullptr)
             status = sao_ui_layer_set_alpha(layer, rec->opacity_0_to_1);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_panel_set_visible(rec->runtime_panel, rec->visible);
         if (status != SAO_STATUS_OK)
             return status;
         initialize_body_model(*rec->body);

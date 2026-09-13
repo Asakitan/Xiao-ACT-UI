@@ -47,5 +47,6 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     color = saturate(color);
     const float3 linearColor = lerp(color / 12.92, pow((color + 0.055) / 1.055, 2.4),
                                     step(0.04045, color));
-    return float4(linearColor, 1.0);
+    // Scene alpha stores column coverage; post-processing resolves output opacity.
+    return float4(linearColor, 0.0);
 }

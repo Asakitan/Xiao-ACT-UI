@@ -32,6 +32,10 @@ seal_recording_paint_context(sao_ui_paint_ctx_handle_t context,
 sao_status_t replay_paint_display_list(const PaintDisplayList& display_list,
                                        sao_ui_paint_ctx_handle_t gpu_target) noexcept;
 
+sao_status_t compose_theme_paint(std::shared_ptr<const PaintDisplayList> light,
+                                 std::shared_ptr<const PaintDisplayList> dark, float progress,
+                                 std::shared_ptr<const PaintDisplayList>* out) noexcept;
+
 sao_status_t paint_rounded_rect(sao_ui_paint_ctx_handle_t context, float x, float y, float width,
                                 float height, float radius, uint32_t argb) noexcept;
 

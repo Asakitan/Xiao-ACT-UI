@@ -28,6 +28,7 @@ struct FrameState {
     bool reduced_motion{};
     bool scene_timeline{};
     bool hold_active{};
+    bool outro{};
 };
 
 sao_status_t create(Renderer** out_renderer) noexcept;

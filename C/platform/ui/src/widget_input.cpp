@@ -1177,6 +1177,7 @@ sao_ui_dropdown_button_popup_hit(sao_ui_widget_handle_t handle, int32_t x, int32
         if (!lease)
             return SAO_STATUS_ERR_HANDLE_INVALID;
         std::lock_guard<std::mutex> guard(lease->mtx);
+        lease->hover_entry = -1;
         if (lease->disabled || !lease->open || lease->popup_w <= 0 || lease->popup_h <= 0) {
             lease->last_popup_hit_inside = false;
             return SAO_STATUS_OK;

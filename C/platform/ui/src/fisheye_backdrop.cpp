@@ -28,6 +28,7 @@ constexpr size_t kMaxFrameBytes = static_cast<size_t>(SAO_UI_SOPF_MMF_MAX_MAPPIN
 constexpr uint32_t kLiveAcquireTimeoutMs = 16;
 constexpr auto kLiveRetryDelay = std::chrono::milliseconds(120);
 constexpr auto kLiveCreateRetryDelay = std::chrono::milliseconds(300);
+constexpr float kBackdropOpacity = 0.93F;
 
 constexpr auto kGlassBackground =
     sao::ui::kSaoThemeGlassColors[SAO_UI_TOKEN_APP_BG];
@@ -412,6 +413,11 @@ struct sao_ui_fisheye_backdrop_s {
     float opacity{};
     float fade_from{};
     uint32_t fade_elapsed{};
+    bool theme_initialized{};
+    float theme_mix{};
+    float theme_from{};
+    float theme_target{};
+    uint32_t theme_elapsed{};
     uint64_t visual_ms{};
     std::chrono::steady_clock::time_point last_tick{std::chrono::steady_clock::now()};
 
@@ -794,11 +800,35 @@ sao_status_t render_procedural_vector(const SaoUiFisheyeBackdropRect& rect,
 sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGeometry& geometry,
                               bool visible, uint64_t revision, uint32_t delta_ms) {
     const bool reduced = sao_ui_reduced_motion_enabled();
+    SaoUiThemeId theme = SAO_UI_THEME_LIGHT;
+    const sao_status_t theme_status = sao_ui_theme_get_active_id(&theme);
+    if (theme_status != SAO_STATUS_OK) return theme_status;
+    const float target_theme = theme == SAO_UI_THEME_DARK ? 1.0F : 0.0F;
     float opacity = 0.0F;
     float seconds = 0.0F;
+    float theme_mix = target_theme;
+    float theme_direction = 0.0F;
     sao_ui_layer_handle_t layer = nullptr;
     {
         std::lock_guard lock(handle->mutex);
+        constexpr uint32_t theme_duration = 1000u;
+        if (!handle->theme_initialized || !handle->gpu_bound || handle->opacity <= 0.001F || reduced) {
+            handle->theme_initialized = true;
+            handle->theme_mix = handle->theme_from = handle->theme_target = target_theme;
+            handle->theme_elapsed = theme_duration;
+        } else if (target_theme != handle->theme_target) {
+            handle->theme_from = handle->theme_mix;
+            handle->theme_target = target_theme;
+            handle->theme_elapsed = 0u;
+        }
+        handle->theme_elapsed = std::min(theme_duration,
+            handle->theme_elapsed + std::min(delta_ms, theme_duration));
+        float blend = static_cast<float>(handle->theme_elapsed) / theme_duration;
+        blend = blend * blend * blend * (blend * (blend * 6.0F - 15.0F) + 10.0F);
+        handle->theme_mix = handle->theme_from + (handle->theme_target - handle->theme_from) * blend;
+        theme_mix = handle->theme_mix;
+        if (handle->theme_elapsed < theme_duration)
+            theme_direction = target_theme > theme_mix ? 1.0F : -1.0F;
         if (visible != handle->fade_target) {
             handle->fade_target = visible;
             handle->fade_from = handle->opacity;
@@ -836,9 +866,10 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
         const auto status = sao::ui::fisheye_gpu::create(&handle->gpu);
         if (status != SAO_STATUS_OK) return status;
     }
-    sao::ui::fisheye_gpu::update(handle->gpu, seconds, opacity, reduced);
+    sao::ui::fisheye_gpu::update(handle->gpu, seconds, opacity, reduced, theme_mix, theme_direction);
     sao_status_t status = sao_ui_layer_set_geometry(layer, geometry.rect.x, geometry.rect.y,
                                                     geometry.rect.width, geometry.rect.height);
+    if (status == SAO_STATUS_OK) status = sao_ui_layer_set_alpha(layer, kBackdropOpacity);
     if (status == SAO_STATUS_OK) status = sao_ui_layer_set_z_order(layer, geometry.z_order);
     if (status == SAO_STATUS_OK && !handle->gpu_bound) {
         status = sao_ui_layer_set_d3d11_render_fn(layer, sao::ui::fisheye_gpu::render, handle->gpu);
@@ -1173,6 +1204,7 @@ static sao_status_t tick_backdrop(sao_ui_fisheye_backdrop_handle_t handle, uint3
 
         sao_status_t status = sao_ui_layer_set_geometry(layer, geometry.rect.x, geometry.rect.y,
                                                         geometry.rect.width, geometry.rect.height);
+        if (status == SAO_STATUS_OK) status = sao_ui_layer_set_alpha(layer, kBackdropOpacity);
         if (status == SAO_STATUS_OK) {
             status = sao_ui_layer_set_z_order(layer, geometry.z_order);
         }

@@ -368,7 +368,8 @@ HRESULT rebuild_visual_order(sao_ui_dcomp_bridge_s* bridge) noexcept {
         if (FAILED(hr))
             return hr;
         const auto append = [&](IDCompositionVisual* child) -> HRESULT {
-            return bridge->dc_root->AddVisual(child, TRUE, nullptr);
+            // A null reference with FALSE inserts above all existing siblings.
+            return bridge->dc_root->AddVisual(child, FALSE, nullptr);
         };
         for (const auto* visual : ordered) {
             if (visual->config.band < 0 && SUCCEEDED(hr))

@@ -164,8 +164,8 @@ sao_status_t parse_pcm_wave(const uint8_t* bytes, size_t byte_count,
     return SAO_STATUS_OK;
 }
 
-sao_status_t load_embedded_wave(SaoUiSoundCue cue, WaveResource* out_wave) noexcept {
-    if (!valid_cue(cue) || out_wave == nullptr)
+sao_status_t load_wave_resource(int32_t resource_id, WaveResource* out_wave) noexcept {
+    if (out_wave == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     HMODULE module = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -173,7 +173,7 @@ sao_status_t load_embedded_wave(SaoUiSoundCue cue, WaveResource* out_wave) noexc
                           reinterpret_cast<LPCWSTR>(&g_sound_volume), &module) || module == nullptr)
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     const HRSRC resource = FindResourceW(module,
-        MAKEINTRESOURCEW(kSoundResourceIds[static_cast<size_t>(cue)]), RT_RCDATA);
+        MAKEINTRESOURCEW(resource_id), RT_RCDATA);
     if (resource == nullptr)
         return SAO_STATUS_ERR_NOT_FOUND;
     const DWORD size = SizeofResource(module, resource);
@@ -183,14 +183,21 @@ sao_status_t load_embedded_wave(SaoUiSoundCue cue, WaveResource* out_wave) noexc
                                         : parse_pcm_wave(bytes, size, out_wave);
 }
 
+sao_status_t load_embedded_wave(SaoUiSoundCue cue, WaveResource* out_wave) noexcept {
+    if (!valid_cue(cue))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    return load_wave_resource(kSoundResourceIds[static_cast<size_t>(cue)], out_wave);
+}
+
 sao_status_t load_linkstart_waves(std::array<WaveResource, 3>& waves,
                                   sao::ui::sound_detail::LinkStartAudioSnapshot& output) noexcept {
-    constexpr std::array<SaoUiSoundCue, 3> cues{
-        SAO_UI_SOUND_LINK_START, SAO_UI_SOUND_NERVEGEAR, SAO_UI_SOUND_ALO_WELCOME};
+    constexpr std::array<int32_t, 3> resources{
+        SAO_UI_SOUND_ASSET_LINK_START, SAO_UI_SOUND_ASSET_SENSORY_TRANSITION,
+        SAO_UI_SOUND_ASSET_ALO_WELCOME};
     sao::ui::sound_detail::LinkStartAudioSnapshot candidate{};
     uint64_t frames = 0u;
-    for (size_t index = 0; index < cues.size(); ++index) {
-        const auto status = load_embedded_wave(cues[index], &waves[index]);
+    for (size_t index = 0; index < resources.size(); ++index) {
+        const auto status = load_wave_resource(resources[index], &waves[index]);
         if (status != SAO_STATUS_OK)
             return status;
         const auto& format = waves[index].format;

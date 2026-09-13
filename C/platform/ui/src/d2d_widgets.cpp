@@ -906,6 +906,14 @@ std::string ellipsize_utf8(std::string_view text, float size, float available_wi
     }
     return result;
 }
+float measured_line_height(std::string_view text, float size) {
+    const std::string line(text.substr(0, text.find('\n')));
+    float width = 0.0F, height = 0.0F;
+    if (sao::ui::detail::measure_text_dwrite(line.empty() ? "Ag中" : line.c_str(), size, &width, &height) &&
+        std::isfinite(height) && height > 0.0F) return height;
+    return size * 1.4F;
+}
+
 size_t wrap_prefix(std::string_view text, float size, float width) {
     if (text.empty()) return 0;
     std::vector<size_t> ends{0};
@@ -961,7 +969,10 @@ uint32_t style_color(std::string_view style, const char* role, uint32_t fallback
     } else if (style == "subtitle" || style == "mono" || style == "muted") {
         token = SAO_UI_TOKEN_APP_TEXT_DIM;
         resolved = std::strcmp(role, "fg") == 0;
-    } else if (style == "value" || style == "gold") {
+    } else if (style == "value") {
+        token = SAO_UI_TOKEN_APP_TEXT;
+        resolved = std::strcmp(role, "fg") == 0;
+    } else if (style == "gold") {
         token = SAO_UI_TOKEN_APP_GOLD;
         resolved = std::strcmp(role, "fg") == 0 || std::strcmp(role, "accent") == 0;
     } else if (style == "ok") {
@@ -980,11 +991,11 @@ uint32_t style_color(std::string_view style, const char* role, uint32_t fallback
         token = SAO_UI_TOKEN_APP_ACCENT;
         resolved = std::strcmp(role, "fg") == 0 || std::strcmp(role, "accent") == 0 ||
                    std::strcmp(role, "fill") == 0;
-    } else if (style == "ghost") {
-        if (std::strcmp(role, "fill") == 0)
+    } else if (style == "ghost" || style == "nav" || style == "nav-active") {
+        if (std::strcmp(role, "fill") == 0 || std::strcmp(role, "border") == 0)
             return 0x00000000U;
-        token = SAO_UI_TOKEN_APP_ACCENT;
-        resolved = std::strcmp(role, "border") == 0 || std::strcmp(role, "accent") == 0;
+        token = style == "nav-active" ? SAO_UI_TOKEN_APP_TEXT : SAO_UI_TOKEN_APP_TEXT_2;
+        resolved = std::strcmp(role, "fg") == 0;
     }
     return resolved ? sao::ui::detail::panel_theme_color(token) : fallback;
 }
@@ -1080,8 +1091,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         style_color(style, "fill",
                     widget.active ? accent
                                   : sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_CARD)));
-    uint32_t border =
-        widget_color(widget, "border", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER));
+    uint32_t border = widget_color(widget, "border",
+        style_color(style, "border", sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BORDER)));
     const SaoUiColorToken foreground_token =
         widget.kind == SAO_UI_WIDGET_TEXT || widget.kind == SAO_UI_WIDGET_MORE_INDICATOR
             ? SAO_UI_TOKEN_APP_TEXT_2
@@ -1091,6 +1102,19 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         style_color(style, "fg",
                     sao::ui::detail::panel_theme_color(widget.enabled ? foreground_token
                                                                       : SAO_UI_TOKEN_DISABLED_FG)));
+    if (!high_contrast && widget.enabled) {
+        if (widget.kind == SAO_UI_WIDGET_STATUS_BADGE) {
+            fill = (accent & 0x00ffffffU) | 0x14000000U;
+            border = (accent & 0x00ffffffU) | 0x24000000U;
+            if (style == "muted" || style.empty()) {
+                fill = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_APP_BG);
+                border = 0;
+            }
+        } else if (style == "nav-active") {
+            fill = (accent & 0x00ffffffU) | 0x18000000U;
+            border = 0;
+        } else if (is_filled_semantic_control(widget)) border = fill;
+    }
     const bool hovered = widget.enabled && widget.hovered;
     const bool pressed = widget.enabled && widget.pressed;
     const bool focused = widget.enabled && widget.focused;
@@ -1116,8 +1140,13 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         high_contrast && widget.active &&
         (widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
          widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON || widget.kind == SAO_UI_WIDGET_STATUS_BADGE);
+    if (high_contrast && widget.enabled && style == "nav-active") {
+        fill = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_FOCUS_RING);
+        foreground = sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE);
+    }
     if (visual_state != sao::ui::detail::ControlVisualState::Disabled &&
-        (is_filled_semantic_control(widget) || active_highlight_control) &&
+        ((is_filled_semantic_control(widget) &&
+          (widget.kind != SAO_UI_WIDGET_STATUS_BADGE || high_contrast)) || active_highlight_control) &&
         !has_foreground_override)
         foreground = high_contrast ? sao::ui::detail::panel_theme_color(SAO_UI_TOKEN_WHITE)
                                    : contrast_foreground(fill);
@@ -1161,7 +1190,7 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         if (empty)
             display = widget.placeholder;
         const float size = 14.0F;
-        const float line_height = 20.0F;
+        const float line_height = std::max(20.0F, measured_line_height("Ag中", size));
         const size_t caret = std::min(widget.selection_end, widget.text.size());
         std::string prefix = widget.text.substr(0, caret);
         if (widget.password) {
@@ -1181,8 +1210,9 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             if (line >= first_line && line < first_line + visible_lines) {
                 std::string row =
                     display.substr(begin, end == std::string::npos ? end : end - begin);
-                const float line_y =
-                    text_clip.y + static_cast<float>(line - first_line) * line_height;
+                const float line_y = text_clip.y + (widget.multiline ? 0.0F :
+                    std::max(0.0F, (text_clip.height - line_height) * 0.5F)) +
+                    static_cast<float>(line - first_line) * line_height;
                 const size_t prefix_start = prefix.find_last_of('\n');
                 const std::string caret_prefix =
                     prefix.substr(prefix_start == std::string::npos ? 0 : prefix_start + 1);
@@ -1279,7 +1309,7 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         if (!widget.text.empty()) {
             const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - 4.0F));
             draw_widget_text(context, bounds, box_bounds.x + box + 4.0F,
-                             bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F), widget.text,
+                             bounds.y + std::max(0.0F, (bounds.height - measured_line_height(widget.text, text_size)) * 0.5F), widget.text,
                              text_size, foreground);
         }
         return;
@@ -1304,7 +1334,7 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         if (!widget.text.empty()) {
             const float text_size = std::max(5.0F, std::min(15.0F, bounds.height - 4.0F));
             draw_widget_text(context, bounds, ring_bounds.x + ring + 4.0F,
-                             bounds.y + std::max(1.0F, (bounds.height - 12.0F) * 0.5F), widget.text,
+                             bounds.y + std::max(0.0F, (bounds.height - measured_line_height(widget.text, text_size)) * 0.5F), widget.text,
                              text_size, foreground);
         }
         return;
@@ -1363,6 +1393,8 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
         if (line > 0.0F && valid_rect(outline.width, outline.height))
             (void)stroke_rounded_outline(context, outline, std::max(0.0F, widget.radius - line * 0.5F), line, border);
     }
+    if (style == "nav-active" && widget.enabled && bounds.width >= 5.0F && bounds.height > 16.0F)
+        fill_rounded_rect(context, {bounds.x + 2.0F, bounds.y + 8.0F, 3.0F, bounds.height - 16.0F}, 1.5F, accent);
     if (widget.kind == SAO_UI_WIDGET_BAR)
         fill_rect(context,
                   {bounds.x, bounds.y, bounds.width * std::clamp(widget.value, 0.0F, 1.0F),
@@ -1388,25 +1420,30 @@ void paint_widget(sao_ui_widget_s& widget, sao_ui_paint_ctx_s& context, Rect bou
             fill_rect(context, {bounds.x, row, bounds.width, 1.0F}, border);
     }
     if (!widget.text.empty()) {
-        const float padding =
+        const bool navigation = style == "nav" || style == "nav-active";
+        const bool control = widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
+            widget.kind == SAO_UI_WIDGET_STATUS_BADGE || widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON;
+        const float padding = navigation ? 14.0F : control ? 10.0F :
             static_cast<float>(sao::ui::detail::panel_theme_metric(SAO_UI_METRIC_PADDING_S));
         const float pressed_offset = pressed && (widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
                                                  widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON)
                                          ? 1.0F
                                          : 0.0F;
-        const float preferred_size = widget.kind == SAO_UI_WIDGET_TEXT && style != "title" ? 13.0F : 15.0F;
-        const float text_size = std::max(5.0F, std::min(preferred_size, bounds.height - padding));
-        const bool centered = widget.kind == SAO_UI_WIDGET_ACTION_BUTTON ||
+        const float preferred_size = style == "title" ? 22.0F : style == "subtitle" ? 16.0F :
+            widget.kind == SAO_UI_WIDGET_STATUS_BADGE ? 13.0F : 14.0F;
+        const float text_size = std::max(5.0F, std::min(preferred_size, bounds.height - 4.0F));
+        const bool centered = (widget.kind == SAO_UI_WIDGET_ACTION_BUTTON && !navigation) ||
                               widget.kind == SAO_UI_WIDGET_STATUS_BADGE ||
                               widget.kind == SAO_UI_WIDGET_ICON;
         const float text_x =
             centered ? std::max(padding,
                                 (bounds.width - measured_text_width(widget.text, text_size)) * 0.5F)
                      : padding;
-        const float text_y = centered || widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON
-                                 ? std::max(0.0F, (bounds.height - text_size) * 0.5F)
+        const float measured_height = measured_line_height(widget.text, text_size);
+        const float text_y = centered || navigation || widget.kind == SAO_UI_WIDGET_DROPDOWN_BUTTON
+                     ? std::max(0.0F, (bounds.height - measured_height) * 0.5F)
                                  : padding;
-        const float line_height = text_size + 4.0F;
+        const float line_height = std::max(text_size + 4.0F, measured_height);
         const int lines = widget.kind == SAO_UI_WIDGET_TEXT
             ? std::clamp(static_cast<int>((bounds.height - text_y) / line_height), 1, 256) : 1;
         std::string_view remaining(widget.text);

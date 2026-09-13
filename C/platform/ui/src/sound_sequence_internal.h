@@ -8,6 +8,8 @@
 
 namespace sao::ui::sound_detail {
 
+inline constexpr uint32_t kSensoryTransitionFrames = 70560u;
+
 enum class LinkStartPlaybackState {
     silent,
     playing,

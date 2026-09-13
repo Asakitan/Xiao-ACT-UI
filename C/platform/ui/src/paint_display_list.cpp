@@ -1,8 +1,10 @@
 #include "classic_text_roles.h"
+#include "gpu_paint_internal.h"
 #include "widget_paint_internal.h"
 #include "widget_raster_internal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -94,7 +96,37 @@ struct PaintDisplayList {
     uint32_t width{};
     uint32_t height{};
     std::vector<PaintCommand> commands;
+    std::shared_ptr<const PaintDisplayList> theme_light;
+    std::shared_ptr<const PaintDisplayList> theme_dark;
+    float theme_progress{};
 };
+
+sao_status_t compose_theme_paint(std::shared_ptr<const PaintDisplayList> light,
+                                 std::shared_ptr<const PaintDisplayList> dark, float progress,
+                                 std::shared_ptr<const PaintDisplayList>* out) noexcept {
+    if (!out)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out = {};
+    if (!light || !dark || light->width != dark->width || light->height != dark->height ||
+        light->theme_light || dark->theme_light || !std::isfinite(progress))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (progress <= 0.0F || progress >= 1.0F) {
+        *out = progress <= 0.0F ? std::move(light) : std::move(dark);
+        return SAO_STATUS_OK;
+    }
+    try {
+        auto list = std::make_shared<PaintDisplayList>();
+        list->width = light->width;
+        list->height = light->height;
+        list->theme_light = std::move(light);
+        list->theme_dark = std::move(dark);
+        list->theme_progress = progress;
+        *out = std::move(list);
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
 
 void paint_display_list_size(const PaintDisplayList& list, uint32_t* width,
                              uint32_t* height) noexcept {
@@ -461,21 +493,36 @@ sao_status_t replay_paint_display_list(const PaintDisplayList& list,
     sao_status_t status = sao_ui_paint_ctx_begin_frame(target);
     if (status != SAO_STATUS_OK)
         return status;
-    for (size_t index = 0; index < list.commands.size(); ++index) {
-        const auto& command = list.commands[index];
-        status = replay_command(command, target);
-        if (status != SAO_STATUS_OK) {
+    const auto replay = [&](const PaintDisplayList& source) {
+        for (size_t index = 0; index < source.commands.size(); ++index) {
+            const auto& command = source.commands[index];
+            status = replay_command(command, target);
+            if (status != SAO_STATUS_OK) {
 #ifndef NDEBUG
-            log_replay_failure(index, command, status, *target);
+                log_replay_failure(index, command, status, *target);
 #endif
-            break;
+                break;
+            }
         }
-    }
-    if (status != SAO_STATUS_OK) {
-        while (!target->clips.empty())
-            (void)sao_ui_paint_ctx_pop_clip(target);
-        while (target->opacity_stack.size() > 1U)
-            (void)sao_ui_paint_ctx_pop_opacity(target);
+        if (status != SAO_STATUS_OK) {
+            while (!target->clips.empty())
+                (void)sao_ui_paint_ctx_pop_clip(target);
+            while (target->opacity_stack.size() > 1U)
+                (void)sao_ui_paint_ctx_pop_opacity(target);
+        }
+    };
+    if (list.theme_light && list.theme_dark) {
+        for (int pass = 0; pass < 2 && status == SAO_STATUS_OK; ++pass) {
+            status = push_gpu_theme_mask(target, list.theme_progress, pass != 0);
+            if (status != SAO_STATUS_OK)
+                break;
+            replay(pass == 0 ? *list.theme_light : *list.theme_dark);
+            const auto pop_status = pop_gpu_theme_mask(target);
+            if (status == SAO_STATUS_OK)
+                status = pop_status;
+        }
+    } else {
+        replay(list);
     }
     const sao_status_t end = sao_ui_paint_ctx_end_frame(target);
 #ifndef NDEBUG

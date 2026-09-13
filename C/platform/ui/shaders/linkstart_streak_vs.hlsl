@@ -35,15 +35,17 @@ VertexOutput main(VertexInput input) {
     const float guardRadius = input.radius * 1.05;
     const float2 edgeDepth = (abs(input.center.xy) - guardRadius) * projection;
     const float exitDepth = max(edgeDepth.x, edgeDepth.y) - guardRadius * 0.18 - 32.0;
-    const float lastBirth = min(flightSpan - 400.0,
-        flightSpan - input.center.z - input.length + exitDepth);
-    const float birthDistance = lerp(-birthLead, lastBirth, input.birthFraction);
-    const float travel = cameraZ - birthDistance;
-    const float emergence = smoothstep(0.0, 400.0, travel);
+    const float progress = cameraZ / max(1.0, flightSpan);
+    const float age = saturate((progress - input.birthFraction * 0.45) / 0.55);
+    const float acceleration = age * age;
+    const float maxStretch = 1.16;
+    const float flightDistance = max(1.0,
+        input.center.z + input.length * maxStretch - exitDepth);
+    const float travel = flightDistance * acceleration;
     const float baseDepth = input.center.z - travel;
-    const float radius = input.radius * radiusMul * emergence;
-    const float columnLength = input.length;
-    const float2 xy = input.center.xy * emergence + input.position.xy * radius;
+    const float radius = input.radius * radiusMul * acceleration;
+    const float columnLength = input.length * lerp(1.0, maxStretch, acceleration);
+    const float2 xy = input.center.xy * acceleration + input.position.xy * radius;
     const float capDepth = 0.18;
     const float axial = input.position.z * columnLength + input.normal.z * radius * capDepth;
     const float depth = baseDepth + axial;

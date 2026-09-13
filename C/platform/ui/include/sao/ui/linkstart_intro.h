@@ -37,6 +37,7 @@ enum SaoUiLinkStartCompletionReason : int32_t {
     // Deferred completion released as a failure edge: the holder armed a
     // bootstrap hold and a driver/engine stage failed while it was held.
     SAO_UI_LINKSTART_COMPLETION_BOOTSTRAP_FAILED = 7,
+    SAO_UI_LINKSTART_COMPLETION_OUTRO = 8,
 };
 
 enum SaoUiLinkStartAudioState : int32_t {
@@ -128,6 +129,9 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_poll_completion(
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_linkstart_get_audio_state(sao_ui_linkstart_handle_t handle,
                                  SaoUiLinkStartAudioState* out_state, sao_status_t* out_status);
+
+// Silent 900ms outro (180ms reduced motion); repeated calls while active preserve its clock.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_linkstart_show_outro(sao_ui_linkstart_handle_t handle);
 
 #ifdef __cplusplus
 }

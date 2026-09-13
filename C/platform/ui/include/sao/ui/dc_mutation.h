@@ -48,6 +48,21 @@ extern "C" {
 
 typedef struct sao_ui_dc_mutation_coordinator_s* sao_ui_dc_mutation_coordinator_handle_t;
 typedef struct sao_ui_dc_mutation_barrier_s* sao_ui_dc_mutation_barrier_handle_t;
+typedef struct sao_ui_dc_mutation_submission_s* sao_ui_dc_mutation_submission_handle_t;
+
+#define SAO_UI_DC_MUTATION_DISPATCH_RESULT_ABI_VERSION 1u
+
+typedef struct SaoDcMutationDispatchResult {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t completed;
+    sao_status_t dispatch_status;
+} SaoDcMutationDispatchResult;
+
+#ifdef __cplusplus
+static_assert(sizeof(SaoDcMutationDispatchResult) == 16u,
+              "DC mutation dispatch result ABI size must remain 16 bytes");
+#endif
 
 typedef struct SaoUiDcMutationRect {
     int32_t left;
@@ -67,8 +82,9 @@ typedef sao_status_t(SAO_UI_CALL* sao_ui_dc_mutation_hide_exstyle_fn_t)(void* us
 // Physical z-order sibling-chain unlink (hide_z_order).  The provider removes
 // the window from the win32k z-order sibling chain so external EnumWindows /
 // z-order walks no longer observe it; the DWM composition tree is untouched.
-typedef sao_status_t(SAO_UI_CALL* sao_ui_dc_mutation_unlink_z_order_fn_t)(
-    void* user_data, void* hwnd, uint32_t timeout_ms);
+typedef sao_status_t(SAO_UI_CALL* sao_ui_dc_mutation_unlink_z_order_fn_t)(void* user_data,
+                                                                          void* hwnd,
+                                                                          uint32_t timeout_ms);
 
 typedef struct SaoUiDcMutationProvider {
     sao_ui_dc_mutation_hide_window_rect_fn_t hide_window_rect;
@@ -163,6 +179,25 @@ sao_ui_dc_mutation_coordinator_submit_dc(sao_ui_dc_mutation_coordinator_handle_t
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
     sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
     const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms, uint32_t timeout_ms);
+
+// Tracked submits bypass coalescing; wait reports their exact execution result.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_dc_tracked(
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, const char* operation_utf8,
+    const char* method_name_utf8, const uint8_t* args_json_utf8, size_t args_len,
+    sao_ui_dc_mutation_submission_handle_t* out_submission);
+
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_hide_window_rect_tracked(
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
+    const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms, uint32_t timeout_ms,
+    sao_ui_dc_mutation_submission_handle_t* out_submission);
+
+// Timeout leaves the submission valid; completion reports the exact executor status.
+SAO_UI_API sao_status_t SAO_UI_CALL
+sao_ui_dc_mutation_submission_wait(sao_ui_dc_mutation_submission_handle_t submission,
+                                   uint32_t wait_ms, SaoDcMutationDispatchResult* out_result);
+
+SAO_UI_API void SAO_UI_CALL
+sao_ui_dc_mutation_submission_destroy(sao_ui_dc_mutation_submission_handle_t submission);
 
 // Typed physical z-order sibling-chain unlink. The lane is fixed to operation
 // "host-z-order" and method "hide_z_order" and does not parse JSON. timeout_ms

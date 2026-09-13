@@ -63,8 +63,8 @@ inline sao_status_t apply(sao_ui_menu_handle_t menu) noexcept {
         return status;
 
     const std::array<SaoUiMenuItem, 2> skins{{
-        {"全部 Light", "🎨", SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, true, {false, false, false}},
-        {"全部 Dark", "🌙", SAO_UI_ENTITY_ACTION_SET_ALL_DARK, true, {false, false, false}},
+        {"全部 Light", "sao:sun", SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, true, {false, false, false}},
+        {"全部 Dark", "sao:moon", SAO_UI_ENTITY_ACTION_SET_ALL_DARK, true, {false, false, false}},
     }};
     return sao_ui_menu_set_children(menu, "Skins", skins.data(), skins.size());
 }

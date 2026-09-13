@@ -34,8 +34,11 @@ sao_ui_nervegear_tick(sao_ui_nervegear_handle_t handle, int32_t dt_ms);
 namespace {
 
 constexpr uint32_t kDefaultParticleSeed = 0x51a0c3d7u;
-constexpr int32_t kLinkStartZOrder = 5000;
+constexpr int32_t kLinkStartZOrder = 1'600'000'000;
+constexpr float kSceneOpacity = 0.93F;
 constexpr int32_t kReducedMotionDurationMs = 450;
+constexpr int32_t kOutroDurationMs = 900;
+constexpr int32_t kReducedMotionOutroDurationMs = 180;
 // Reduced motion skips the tunnel: holding at 0.20s keeps the CONNECTED plate
 // fully lit without letting the fade curve start.
 constexpr int32_t kReducedMotionHoldMs = 200;
@@ -67,16 +70,16 @@ SaoUiLinkStartTimeline sequence_timeline() noexcept {
     sao::ui::sound_detail::LinkStartAudioSnapshot audio{};
     (void)sao::ui::sound_detail::linkstart_audio_info(&audio);
     const double rate = static_cast<double>(audio.sample_rate);
-    const float voice = static_cast<float>(static_cast<double>(audio.cue_end_frames[0]) / rate);
-    const float first = static_cast<float>(
-        static_cast<double>(audio.cue_end_frames[1] - audio.cue_end_frames[0]) / rate);
+    const float voice = static_cast<float>(static_cast<double>(audio.cue_end_frames[0]) / rate) * 0.80F;
+    const float first = static_cast<float>(static_cast<double>(audio.cue_end_frames[1]) / rate) - voice;
     const float second = static_cast<float>(
         static_cast<double>(audio.cue_end_frames[2] - audio.cue_end_frames[1]) / rate);
     const float end = first + second;
     const float title_duration = std::min(2.25F, second * 0.41F);
     const float connected = end - std::min(2.20F, second * 0.40F);
     const float departure = end - std::min(0.80F, second * 0.15F);
-    return {voice, first, first, first + title_duration,
+    const float calibration = static_cast<float>(sao::ui::sound_detail::kSensoryTransitionFrames / rate);
+    return {voice, first - calibration, first, first + title_duration,
             first + title_duration * 0.70F, connected, connected, departure, end, end};
 }
 
@@ -125,6 +128,8 @@ struct sao_ui_linkstart_s {
     bool default_timeline{};
     int32_t elapsed_ms{};
     bool active{};
+    bool outro{};
+    int32_t outro_duration_ms{kOutroDurationMs};
     bool completion_emitted{};
     bool completion_pending{};
     sao::ui::sound_detail::LinkStartAudioHandle audio_playback;
@@ -223,19 +228,20 @@ sao_status_t complete_locked(sao_ui_linkstart_s* handle, SaoUiLinkStartCompletio
     if (reset_elapsed)
         handle->elapsed_ms = 0;
     sao_status_t result = status;
+    const bool natural = reason == SAO_UI_LINKSTART_COMPLETION_NATURAL ||
+                         reason == SAO_UI_LINKSTART_COMPLETION_OUTRO;
     result = first_failure(result, sao_ui_layer_set_visible(handle->layer, false));
     result = first_failure(result, sao_ui_layer_set_visible(handle->gpu_layer, false));
     if (handle->default_timeline || reason != SAO_UI_LINKSTART_COMPLETION_NATURAL ||
         result != SAO_STATUS_OK)
         record_audio_status_locked(handle, release_sound_group(handle));
-    if (!reset_elapsed && reason == SAO_UI_LINKSTART_COMPLETION_NATURAL &&
-        result != SAO_STATUS_OK)
+    if (!reset_elapsed && natural && result != SAO_STATUS_OK)
         handle->elapsed_ms = 0;
     if (!handle->completion_emitted) {
         handle->completion_emitted = true;
         handle->completion_pending = true;
         handle->completion_reason =
-            reason == SAO_UI_LINKSTART_COMPLETION_NATURAL && result != SAO_STATUS_OK
+            natural && result != SAO_STATUS_OK
                 ? completion_reason_for_status(result)
                 : reason;
     }
@@ -296,7 +302,9 @@ void destroy_resources(sao_ui_linkstart_s* handle) {
 
 sao_status_t centered_text(sao_ui_paint_ctx_handle_t ctx, float cx, float y, const char* text,
                            float size, uint32_t color, sao::ui::detail::ClassicTextRole role) {
-    sao::ui::detail::ScopedTextRole font(role);
+    const bool ascii = std::all_of(text, text + std::strlen(text),
+        [](unsigned char ch) { return ch < 0x80u; });
+    sao::ui::detail::ScopedTextRole font(ascii ? sao::ui::detail::ClassicTextRole::Display : role);
     float width = static_cast<float>(std::strlen(text)) * size * 0.55F;
     float height = size;
     (void)sao::ui::detail::measure_text_dwrite(text, size, &width, &height);
@@ -352,7 +360,7 @@ template <size_t Size>
 sao_status_t centered_ascii_caption(sao_ui_paint_ctx_handle_t ctx, float cx, float y,
                                      const char (&text)[Size], float size, float tracking,
                                      uint32_t color) {
-    sao::ui::detail::ScopedTextRole font(sao::ui::detail::ClassicTextRole::Body);
+    sao::ui::detail::ScopedTextRole font(sao::ui::detail::ClassicTextRole::Display);
     std::array<float, Size - 1> advances{};
     float total = 0.0F;
     for (size_t index = 0; index + 1 < Size; ++index) {
@@ -383,10 +391,11 @@ float timeline_seconds(const sao_ui_linkstart_s& handle, float elapsed_seconds) 
 // Runtime-length twin of `centered_ascii_caption`: bootstrap captions are
 // composed at render time, so their length is not a template argument.
 sao_status_t centered_ascii_text(sao_ui_paint_ctx_handle_t ctx, float cx, float y,
-                                 const char* text, float size, float tracking, uint32_t color) {
+                                 const char* text, float size, float tracking, uint32_t color,
+                                 float max_width = 0.0F) {
     if (text == nullptr || text[0] == '\0')
         return SAO_STATUS_OK;
-    sao::ui::detail::ScopedTextRole font(sao::ui::detail::ClassicTextRole::Body);
+    sao::ui::detail::ScopedTextRole font(sao::ui::detail::ClassicTextRole::Display);
     const size_t length = std::strlen(text);
     float total = 0.0F;
     for (size_t index = 0; index < length; ++index) {
@@ -397,6 +406,12 @@ sao_status_t centered_ascii_text(sao_ui_paint_ctx_handle_t ctx, float cx, float 
         total += width * size / 48.0F;
         if (index != 0u)
             total += tracking;
+    }
+    if (max_width > 0.0F && total > max_width) {
+        const float fit = max_width / total;
+        size *= fit;
+        tracking *= fit;
+        total = max_width;
     }
     float x = cx - total * 0.5F;
     for (size_t index = 0; index < length; ++index) {
@@ -432,6 +447,11 @@ SaoUiLinkStartPhase phase_at(const sao_ui_linkstart_s& handle, float seconds, fl
     const float scene_seconds = timeline_seconds(handle, seconds);
     if (!handle.active && seconds <= 0.0F) {
         phase = SAO_UI_LINKSTART_PHASE_HIDDEN;
+    } else if (handle.outro) {
+        progress = interval_progress(seconds, 0.0F,
+            static_cast<float>(handle.outro_duration_ms) / 1000.0F);
+        phase = progress >= 1.0F ? SAO_UI_LINKSTART_PHASE_COMPLETE
+                                : SAO_UI_LINKSTART_PHASE_CONNECTED;
     } else if (seconds < handle.timeline.startup_prelude ||
                scene_seconds < handle.timeline.p2_start) {
         phase = SAO_UI_LINKSTART_PHASE_PARTICLE_TUNNEL;
@@ -459,17 +479,20 @@ SaoUiLinkStartPhase phase_at(const sao_ui_linkstart_s& handle, float seconds, fl
 }
 
 sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
-    const bool reduced_motion = sao_ui_reduced_motion_enabled();
+    const bool reduced_motion = sao_ui_reduced_motion_enabled() ||
+        (handle->outro && handle->outro_duration_ms == kReducedMotionOutroDurationMs);
     const float elapsed_seconds = static_cast<float>(handle->elapsed_ms) / 1000.0F;
     const float seconds =
-        reduced_motion ? handle->timeline.p4_start +
+        reduced_motion && !handle->outro ? handle->timeline.p4_start +
                              (handle->default_timeline ? handle->timeline.startup_prelude : 0.0F)
                        : elapsed_seconds;
     const float scene_seconds = timeline_seconds(*handle, seconds);
     float phase_progress = 0.0F;
     const SaoUiLinkStartPhase phase = phase_at(*handle, seconds, &phase_progress);
     const float connected_alpha =
-        handle->bootstrap_hold_active ? 1.0F : reduced_motion
+        handle->outro ? eased_progress(phase_progress, 0.0F, 0.18F) *
+                           (1.0F - eased_progress(phase_progress, 0.64F, 1.0F))
+        : handle->bootstrap_hold_active ? 1.0F : reduced_motion
             ? 1.0F - eased_progress(elapsed_seconds, 0.20F,
                                      static_cast<float>(kReducedMotionDurationMs) / 1000.0F)
             : 1.0F;
@@ -487,11 +510,13 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
     gpu_frame.p4_start = handle->timeline.p4_start;
     gpu_frame.p4_hold_end = handle->timeline.p4_hold_end;
     gpu_frame.p4_fade_end = handle->timeline.p4_fade_end;
-    gpu_frame.total_duration = handle->timeline.total_duration;
+    gpu_frame.total_duration = handle->outro
+        ? static_cast<float>(handle->outro_duration_ms) / 1000.0F : handle->timeline.total_duration;
     gpu_frame.seed = handle->seed;
     gpu_frame.reduced_motion = reduced_motion;
     gpu_frame.scene_timeline = handle->default_timeline;
     gpu_frame.hold_active = handle->bootstrap_hold_active;
+    gpu_frame.outro = handle->outro;
     sao::ui::linkstart_gpu::update(handle->gpu_renderer, gpu_frame);
     sao_status_t status = sao_ui_layer_request_redraw(handle->gpu_layer);
     if (status != SAO_STATUS_OK)
@@ -514,7 +539,7 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
     const float welcome_end = std::min(handle->timeline.total_duration,
         handle->timeline.p2_end + (handle->default_timeline ? std::min(0.25F, welcome_duration * 0.10F) : 0.0F));
     const float welcome_departure = std::clamp(handle->timeline.p3_start, welcome_entry_end, welcome_end);
-    const bool welcome_visible = !reduced_motion && welcome_duration > 0.0F &&
+    const bool welcome_visible = !handle->outro && !reduced_motion && welcome_duration > 0.0F &&
                                  scene_seconds >= welcome_prepare && scene_seconds < welcome_end + 0.034F;
     const auto draw_motion = [&](auto&& draw, float at, float motion) {
         const float amount = reduced_motion ? 0.0F : std::clamp(motion, 0.0F, 1.0F);
@@ -529,7 +554,36 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
         effects.struct_size = sizeof(effects);
         status = sao_ui_layer_set_effects(handle->layer, &effects);
     }
-    if (status == SAO_STATUS_OK && !reduced_motion && handle->timeline.startup_prelude > 0.0F &&
+    if (status == SAO_STATUS_OK && handle->outro) {
+        const float contraction = reduced_motion ? 0.0F : eased_progress(phase_progress, 0.18F, 1.0F);
+        const float scale = ui_scale * (1.0F - contraction * 0.06F);
+        const float ring_scale = ui_scale * (1.0F - contraction * 0.28F);
+        const float spin = reduced_motion ? 0.0F : elapsed_seconds * 0.25F;
+        status = calibration_ring(paint_ctx, center_x, center_y, 186.0F * ring_scale,
+            spin, 0.42F, 0xff9fbacau);
+        if (status == SAO_STATUS_OK)
+            status = calibration_ring(paint_ctx, center_x, center_y, 166.0F * ring_scale,
+                -spin, 0.28F, 0xffbdcdd7u);
+        if (status == SAO_STATUS_OK)
+            status = interface_frame(paint_ctx, center_x, center_y, 570.0F, 214.0F,
+                scale, 1.0F, true);
+        if (status == SAO_STATUS_OK)
+            status = calibration_ring(paint_ctx, center_x, center_y - 67.0F * scale,
+                (22.0F - contraction * 10.0F) * scale, spin, 0.8F, 0xff92afc0u);
+        if (status == SAO_STATUS_OK)
+            status = centered_text(paint_ctx, center_x, center_y - 33.0F * scale,
+                "LINK END", 52.0F * scale, 0xff41515du,
+                sao::ui::detail::ClassicTextRole::Display);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_paint_ctx_stroke_line(paint_ctx,
+                center_x - 185.0F * scale, center_y + 33.0F * scale,
+                center_x + 185.0F * scale, center_y + 33.0F * scale,
+                scale, 0x99b6c8d2u);
+        if (status == SAO_STATUS_OK)
+            status = centered_ascii_caption(paint_ctx, center_x, center_y + 54.0F * scale,
+                "SYSTEM >> DISCONNECTED", 17.0F * scale, 1.5F * scale, 0xff708694u);
+    }
+    if (status == SAO_STATUS_OK && !handle->outro && !reduced_motion && handle->timeline.startup_prelude > 0.0F &&
         seconds < handle->timeline.startup_prelude + 0.034F && handle->overlay_width >= 360 &&
         handle->overlay_height >= 150) {
         const auto draw_startup = [&](float sample_time, float weight) {
@@ -574,6 +628,175 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
             handle->timeline.startup_prelude * 0.28F) + eased_progress(seconds - 1.0F / 60.0F,
             handle->timeline.startup_prelude * 0.52F, handle->timeline.startup_prelude);
         draw_motion(draw_startup, seconds, std::abs(travel - previous) * 18.0F);
+    }
+
+    const float calibration_span = handle->timeline.p2_start - handle->timeline.p1_end;
+    const float calibration_begin = handle->timeline.p1_end;
+    const float calibration_end = welcome_entry_end;
+    if (status == SAO_STATUS_OK && !handle->outro && handle->default_timeline && !reduced_motion && calibration_span > 0.0F &&
+        scene_seconds >= calibration_begin && scene_seconds < calibration_end) {
+        sao::ui::detail::ScopedTextRole font(sao::ui::detail::ClassicTextRole::Display);
+        const float progress = interval_progress(scene_seconds, calibration_begin, handle->timeline.p2_start);
+        const float confirmed = eased_progress(progress, 0.94F, 1.0F);
+        const float dock_x = center_x + static_cast<float>(handle->overlay_width) * 0.30F;
+        const float large_radius = std::min(static_cast<float>(handle->overlay_width) * 0.28F,
+                    static_cast<float>(handle->overlay_height) * 0.38F);
+        const auto blend_ink = [](uint32_t a, uint32_t b, float mix) {
+            uint32_t result = 0xff000000u;
+            for (uint32_t shift = 0u; shift < 24u; shift += 8u) {
+                const float first = static_cast<float>((a >> shift) & 0xffu);
+                const float second = static_cast<float>((b >> shift) & 0xffu);
+                result |= static_cast<uint32_t>(std::lround(first + (second - first) * mix)) << shift;
+            }
+            return result;
+        };
+        constexpr std::array<const char*, 5> senses{"TOUCH", "SIGHT", "TASTE", "HEARING", "SMELL"};
+        constexpr std::array<float, 5> onset{0.0F, 0.14F, 0.33F, 0.48F, 0.63F};
+        for (size_t index = 0; index < senses.size() && status == SAO_STATUS_OK; ++index) {
+            const float age = interval_progress(progress, onset[index], onset[index] + 0.30F);
+            if (age <= 0.0F)
+                continue;
+            const float side = index % 2u == 0u ? -1.0F : 1.0F;
+            const float arrive = eased_progress(age, 0.0F, 0.40F);
+            const float settle = eased_progress(age, 0.48F, 1.0F);
+            const float focus = arrive * (1.0F - settle);
+            const float active_x = center_x + side * static_cast<float>(handle->overlay_width) * 0.19F * arrive;
+            const float active_y = center_y + (static_cast<float>(index % 3u) - 1.0F) *
+                static_cast<float>(handle->overlay_height) * 0.06F;
+            const float dock_y = center_y + (static_cast<float>(index) - 2.0F) * 86.0F * ui_scale;
+            const float departure = eased_progress(scene_seconds,
+                handle->timeline.p2_start + static_cast<float>(index) * 0.016F, calibration_end);
+            const float exit_x = side < 0.0F ? -64.0F * ui_scale
+                : static_cast<float>(handle->overlay_width) + 64.0F * ui_scale;
+            const float cx = active_x + (dock_x - active_x) * settle + (exit_x - dock_x) * departure;
+            const float cy = active_y + (dock_y - active_y) * settle -
+                side * std::sin(settle * 3.141592654F) * large_radius * 0.10F;
+            const float radius = (38.0F * ui_scale * arrive +
+                (large_radius - 38.0F * ui_scale) * focus) * (1.0F + departure * 0.20F);
+            const float opacity = arrive * (1.0F - eased_progress(departure, 0.55F, 1.0F));
+            const float spin = (scene_seconds - calibration_begin - onset[index] * calibration_span) * 1.1F +
+                (arrive - settle) * side * 0.4F;
+            const uint32_t color = blend_ink(0xff83949eu, 0xff7d9a8bu, confirmed);
+            if (radius < 0.75F || opacity < 0.002F)
+                continue;
+            for (int layer = 4; layer > 0 && status == SAO_STATUS_OK; --layer) {
+                const float halo_radius = radius * (1.0F + static_cast<float>(layer) * 0.018F);
+                status = sao_ui_paint_ctx_fill_ellipse(paint_ctx, cx - halo_radius,
+                    cy - halo_radius + radius * 0.025F, halo_radius * 2.0F, halo_radius * 2.0F,
+                    with_alpha(0xff657681u, opacity * 0.030F));
+            }
+            if (status != SAO_STATUS_OK)
+                break;
+            status = sao_ui_paint_ctx_fill_ellipse(paint_ctx, cx - radius, cy - radius,
+                radius * 2.0F, radius * 2.0F, with_alpha(0xfff8fafbu, opacity * 0.98F));
+            const int glass_layers = radius > 80.0F * ui_scale ? 32 : 12;
+            for (int layer = 0; layer < glass_layers && status == SAO_STATUS_OK; ++layer) {
+                const float depth = static_cast<float>(layer) / static_cast<float>(glass_layers - 1);
+                const float glass_radius = radius * (0.975F - depth * 0.72F);
+                const float highlight = depth * (2.0F - depth);
+                const uint32_t glass = blend_ink(0xffd1dbe0u, 0xffffffffu, highlight * 0.94F);
+                const uint32_t tint = blend_ink(glass, 0xfff6faf7u, confirmed * 0.18F);
+                status = sao_ui_paint_ctx_fill_ellipse(paint_ctx,
+                    cx - radius * depth * 0.10F - glass_radius,
+                    cy - radius * depth * 0.13F - glass_radius,
+                    glass_radius * 2.0F, glass_radius * 2.0F, with_alpha(tint, opacity * 0.92F));
+            }
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_paint_ctx_fill_ellipse(paint_ctx,
+                    cx - radius * 0.58F, cy - radius * 0.58F,
+                    radius * 1.16F, radius * 1.16F, with_alpha(0xffaebdc5u, opacity * 0.08F));
+            const int rim_segments = radius > 80.0F * ui_scale ? 128 : 48;
+            for (int segment = 0; segment < rim_segments && status == SAO_STATUS_OK; ++segment) {
+                const float a = static_cast<float>(segment) * 6.283185307F / static_cast<float>(rim_segments);
+                const float b = static_cast<float>(segment + 1) * 6.283185307F / static_cast<float>(rim_segments);
+                const float highlight = std::pow(0.5F + 0.5F * std::cos(a + 2.20F), 4.0F);
+                status = sao_ui_paint_ctx_stroke_line(paint_ctx,
+                    cx + std::cos(a) * radius * 0.989F, cy + std::sin(a) * radius * 0.989F,
+                    cx + std::cos(b) * radius * 0.989F, cy + std::sin(b) * radius * 0.989F,
+                    std::max(0.8F * ui_scale, radius * 0.009F),
+                    with_alpha(blend_ink(0xff9eafb9u, 0xffffffffu, highlight), opacity * 0.94F));
+            }
+            if (status == SAO_STATUS_OK)
+                status = calibration_ring(paint_ctx, cx, cy, radius * 0.84F, spin * 0.70F,
+                    opacity * 0.90F, 0xffffffffu);
+            if (status == SAO_STATUS_OK)
+                status = calibration_ring(paint_ctx, cx, cy, radius * 0.48F, -spin * 0.50F,
+                    opacity * 0.75F, 0xffbfcbd2u);
+            for (int band = 0; band < 3 && status == SAO_STATUS_OK; ++band) {
+                for (int segment = 0; segment < 48 && status == SAO_STATUS_OK; ++segment) {
+                    if ((segment + band * 3) % 12 >= 8)
+                        continue;
+                    const float a = spin * (band % 2 == 0 ? 0.90F : -0.70F) +
+                        static_cast<float>(segment) * 0.130899694F;
+                    const float b = a + 0.135F;
+                    const float band_radius = radius * (0.90F - static_cast<float>(band) * 0.17F);
+                    const float glint = std::pow(0.5F + 0.5F * std::cos(a - spin * 1.65F), 20.0F) * focus;
+                    const bool status_mark = band == 1 && segment % 12 < 2;
+                    const uint32_t metal = blend_ink(
+                        (segment / 12 + band) % 2 == 0 ? 0xffaabac3u : 0xffd4dde2u,
+                        status_mark ? 0xff8faa9au : 0xffc9d3d8u, confirmed);
+                    const uint32_t band_color = blend_ink(metal, 0xffffffffu, glint * 0.92F);
+                    status = sao_ui_paint_ctx_stroke_line(paint_ctx,
+                        cx + std::cos(a) * band_radius, cy + std::sin(a) * band_radius,
+                        cx + std::cos(b) * band_radius, cy + std::sin(b) * band_radius,
+                        std::max(1.0F * ui_scale, radius * 0.026F + 1.3F * ui_scale),
+                        with_alpha(0xff71828eu, opacity * 0.22F));
+                    if (status == SAO_STATUS_OK)
+                        status = sao_ui_paint_ctx_stroke_line(paint_ctx,
+                            cx + std::cos(a) * band_radius, cy + std::sin(a) * band_radius,
+                            cx + std::cos(b) * band_radius, cy + std::sin(b) * band_radius,
+                            std::max(0.75F * ui_scale, radius * 0.026F),
+                            with_alpha(band_color, opacity * 0.90F));
+                }
+            }
+            for (int tick = 0; tick < 24 && status == SAO_STATUS_OK; ++tick) {
+                const float angle = static_cast<float>(tick) * 0.261799388F + spin * 0.18F;
+                const float inner = tick % 3 == 0 ? 0.925F : 0.940F;
+                status = sao_ui_paint_ctx_stroke_line(paint_ctx,
+                    cx + std::cos(angle) * radius * inner, cy + std::sin(angle) * radius * inner,
+                    cx + std::cos(angle) * radius * 0.953F, cy + std::sin(angle) * radius * 0.953F,
+                    std::max(0.65F, ui_scale * 0.75F), with_alpha(0xff8e9fa9u, opacity * 0.50F));
+            }
+            if (status == SAO_STATUS_OK && confirmed > 0.0F && confirmed < 1.0F)
+                status = calibration_ring(paint_ctx, cx, cy, radius * (1.02F + confirmed * 0.14F),
+                    spin * 0.25F, opacity * std::sin(confirmed * 3.141592654F) * 0.32F, 0xffb5c9bdu);
+            for (int marker = 0; marker < 5 && status == SAO_STATUS_OK; ++marker) {
+                const float marker_size = std::max(ui_scale, radius * 0.035F);
+                status = sao_ui_paint_ctx_fill_rounded_rect(paint_ctx, cx - radius * 1.14F,
+                    cy + (static_cast<float>(marker) - 2.0F) * radius * 0.14F,
+                    marker_size, marker_size, 0.0F, with_alpha(color, opacity * 0.75F));
+            }
+            if (status == SAO_STATUS_OK && radius > 12.0F * ui_scale) {
+                const char* label = age >= 0.70F ? "OK" : senses[index];
+                float size = std::clamp(radius * 0.34F, 18.0F * ui_scale, 80.0F * ui_scale);
+                float text_width = 0.0F;
+                float text_height = size;
+                (void)sao::ui::detail::measure_text_dwrite(label, size, &text_width, &text_height);
+                const float fit = std::min(1.0F, radius * 1.334F / std::max(1.0F, text_width));
+                size *= fit;
+                text_height *= fit;
+                const float plate_width = std::clamp(text_width * 1.14F + 6.0F * ui_scale,
+                    radius * 0.50F, radius * 1.50F);
+                const float plate_height = text_height * 1.22F;
+                status = sao_ui_paint_ctx_fill_rounded_rect(paint_ctx,
+                    cx - plate_width * 0.5F, cy - plate_height * 0.5F + ui_scale,
+                    plate_width, plate_height, 2.0F * ui_scale,
+                    with_alpha(0xff72838eu, opacity * 0.16F));
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_fill_rounded_rect(paint_ctx,
+                    cx - plate_width * 0.5F, cy - plate_height * 0.5F,
+                    plate_width, plate_height, 2.0F * ui_scale,
+                    with_alpha(0xfff8fafbu, opacity * 0.80F));
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_paint_ctx_stroke_line(paint_ctx,
+                        cx - plate_width * 0.42F, cy - plate_height * 0.5F,
+                        cx + plate_width * 0.42F, cy - plate_height * 0.5F,
+                        std::max(0.65F, ui_scale * 0.7F), with_alpha(0xffffffffu, opacity * 0.80F));
+                if (status == SAO_STATUS_OK)
+                    status = centered_text(paint_ctx, cx, cy - text_height * 0.5F, label, size,
+                        with_alpha(0xff41545eu, opacity), sao::ui::detail::ClassicTextRole::Display);
+            }
+        }
     }
 
     if (status == SAO_STATUS_OK && welcome_visible) {
@@ -621,7 +844,7 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
                     (std::abs(entry - previous_entry) + std::abs(leave - previous_leave)) * 18.0F);
     }
 
-    if (status == SAO_STATUS_OK && scene_seconds >= handle->timeline.p4_start) {
+    if (status == SAO_STATUS_OK && !handle->outro && scene_seconds >= handle->timeline.p4_start) {
         const float entry_end = std::min(handle->timeline.p4_start + 0.40F,
                                          handle->timeline.p4_hold_end);
         const auto draw_connected = [&](float sample_time, float weight) {
@@ -655,8 +878,8 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
                 handle->bootstrap_hold_active ? "PREPARING INTERFACE" : "FULL DIVE INITIALIZED",
                 12.0F * scale, 2.5F * scale, with_alpha(0xff73858fu, opacity));
         if (status == SAO_STATUS_OK)
-            status = sao_ui_paint_ctx_stroke_line(paint_ctx, center_x - 90.0F * scale, cy + 84.0F * scale,
-                center_x + 90.0F * scale, cy + 84.0F * scale, scale, with_alpha(0xff659b89u, opacity * 0.5F));
+            status = sao_ui_paint_ctx_stroke_line(paint_ctx, center_x - 90.0F * scale, cy + 73.0F * scale,
+                center_x + 90.0F * scale, cy + 73.0F * scale, scale, with_alpha(0xff659b89u, opacity * 0.5F));
         };
         const float entry = eased_progress(scene_seconds, handle->timeline.p4_start,
                                             entry_end);
@@ -670,19 +893,21 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
         draw_motion(draw_connected, scene_seconds, motion);
     }
 
-    const auto footer_pose = reduced_motion || handle->bootstrap_hold_active
+    const auto footer_pose = reduced_motion ||
+        (handle->bootstrap_hold_active && scene_seconds < handle->timeline.p4_start)
         ? InterfacePose{ui_scale, center_y, true}
         : interface_pose(scene_seconds, handle->timeline.p4_start,
             std::min(handle->timeline.p4_start + 0.40F, handle->timeline.p4_hold_end),
-            handle->timeline.p4_hold_end, handle->timeline.p4_fade_end, center_y, ui_scale, 252.0F);
-    if (status == SAO_STATUS_OK && handle->overlay_width >= 240u && handle->overlay_height >= 120u &&
+            handle->timeline.p4_hold_end, handle->timeline.p4_fade_end, center_y, ui_scale, 252.0F,
+            handle->bootstrap_hold_active);
+    if (status == SAO_STATUS_OK && !handle->outro && handle->overlay_width >= 240u && handle->overlay_height >= 120u &&
         (handle->bootstrap_hold_active || scene_seconds >= handle->timeline.p4_start) && footer_pose.visible) {
         const uint32_t ink = 0xff647b89u;
         const float footer_scale = footer_pose.scale;
         const float rail_width = 176.0F * footer_scale;
-        const float rail_y = handle->bootstrap_hold_active
+        const float rail_y = handle->bootstrap_hold_active && scene_seconds < handle->timeline.p4_start
             ? static_cast<float>(handle->overlay_height) - 42.0F * footer_scale
-            : footer_pose.y + 103.0F * footer_scale;
+            : footer_pose.y + 88.0F * footer_scale;
         // While the bootstrap hold is armed the rail reports driver/engine
         // stage progress instead of the animation clock.
         const bool bootstrap_telemetry =
@@ -727,10 +952,10 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
             (void)std::snprintf(caption, sizeof(caption), "LINK SEQUENCE");
         }
         if (status == SAO_STATUS_OK)
-            status = centered_ascii_text(paint_ctx, center_x, rail_y + 16.0F * footer_scale,
+            status = centered_ascii_text(paint_ctx, center_x, rail_y + 12.0F * footer_scale,
                                          caption, 9.0F * footer_scale, 1.6F * footer_scale,
                                          with_alpha(handle->bootstrap_failed ? 0xffd98b8bu : ink,
-                                                    0.65F));
+                                                    0.65F), 550.0F * footer_scale);
     }
 
     if (status == SAO_STATUS_OK)
@@ -824,6 +1049,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_create(sao_ui_compositor_ha
         if (status == SAO_STATUS_OK)
             status = sao_ui_layer_create(compositor, &gpu_config, &handle->gpu_layer);
         if (status == SAO_STATUS_OK)
+            status = sao_ui_layer_set_alpha(handle->gpu_layer, kSceneOpacity);
+        if (status == SAO_STATUS_OK)
             status = sao_ui_layer_set_d3d11_render_fn(
                 handle->gpu_layer, &sao::ui::linkstart_gpu::render, handle->gpu_renderer);
         if (status == SAO_STATUS_OK)
@@ -908,7 +1135,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_resize(sao_ui_linkstart_han
                 : sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
         return first_failure(status, nervegear_status);
     } catch (...) {
-        stop_audio_after_error(handle);
+        std::lock_guard lock(handle->mutex);
+        if (handle->outro)
+            (void)complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED,
+                                  SAO_STATUS_ERR_UNKNOWN, true);
+        else
+            record_audio_status_locked(handle, release_sound_group(handle));
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
@@ -938,6 +1170,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
         {
             std::lock_guard lock(handle->mutex);
             handle->elapsed_ms = 0;
+            handle->outro = false;
             handle->active = true;
             handle->bootstrap_hold_active = false;
             handle->bootstrap_failed = false;
@@ -1017,11 +1250,70 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show(sao_ui_linkstart_handl
     }
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_show_outro(sao_ui_linkstart_handle_t handle) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        sao_ui_nervegear_handle_t nervegear = nullptr;
+        sao_status_t status = SAO_STATUS_OK;
+        {
+            std::lock_guard lock(handle->mutex);
+            if (handle->outro && handle->active)
+                return SAO_STATUS_OK;
+            handle->outro = true;
+            handle->elapsed_ms = 0;
+            handle->outro_duration_ms = sao_ui_reduced_motion_enabled()
+                ? kReducedMotionOutroDurationMs : kOutroDurationMs;
+            handle->active = true;
+            handle->bootstrap_hold_active = false;
+            handle->bootstrap_failed = false;
+            handle->bootstrap_stage_index = 0u;
+            handle->bootstrap_stage_count = 0u;
+            handle->bootstrap_stage_progress = 0.0F;
+            handle->bootstrap_caption[0] = '\0';
+            handle->completion_emitted = false;
+            handle->completion_pending = false;
+            handle->completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
+            handle->last_audio_samples = 0u;
+            handle->audio_stall_ms = 0;
+            handle->audio_clock_complete = true;
+            handle->audio_state = SAO_UI_LINKSTART_AUDIO_SUPPRESSED;
+            handle->audio_status = SAO_STATUS_OK;
+            status = release_sound_group(handle);
+            record_audio_status_locked(handle, status);
+            if (status == SAO_STATUS_OK)
+                status = render_frame_locked(handle);
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_layer_set_visible(handle->gpu_layer, true);
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_layer_set_visible(handle->layer, true);
+            if (status != SAO_STATUS_OK)
+                (void)complete_locked(handle, completion_reason_for_status(status), status, true);
+            nervegear = handle->nervegear;
+        }
+        const sao_status_t nervegear_status = nervegear == nullptr ? SAO_STATUS_OK
+            : sao_ui_nervegear_transition(nervegear, SAO_UI_NG_STATE_IDLE);
+        status = first_failure(status, nervegear_status);
+        if (status != SAO_STATUS_OK) {
+            std::lock_guard lock(handle->mutex);
+            (void)complete_locked(handle, completion_reason_for_status(status), status, true);
+        }
+        return status;
+    } catch (...) {
+        std::lock_guard lock(handle->mutex);
+        (void)complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED,
+                              SAO_STATUS_ERR_UNKNOWN, true);
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
 extern "C" sao_status_t SAO_UI_CALL
 sao_ui_linkstart_arm_bootstrap_hold(sao_ui_linkstart_handle_t handle) {
     if (handle == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     std::lock_guard lock(handle->mutex);
+    if (handle->outro)
+        return SAO_STATUS_OK;
     handle->bootstrap_hold_active = true;
     return SAO_STATUS_OK;
 }
@@ -1038,6 +1330,8 @@ sao_ui_linkstart_set_bootstrap(sao_ui_linkstart_handle_t handle,
     if (declared != SAO_UI_LINKSTART_BOOTSTRAP_V1_SIZE)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard lock(handle->mutex);
+    if (handle->outro)
+        return SAO_STATUS_OK;
     handle->bootstrap_stage_index = state->stage_index;
     handle->bootstrap_stage_count = state->stage_count;
     handle->bootstrap_stage_progress = std::clamp(state->stage_progress, 0.0F, 1.0F);
@@ -1061,6 +1355,8 @@ sao_ui_linkstart_release_bootstrap_hold(sao_ui_linkstart_handle_t handle, int32_
     sao_status_t status = SAO_STATUS_OK;
     {
         std::lock_guard lock(handle->mutex);
+        if (handle->outro)
+            return SAO_STATUS_OK;
         handle->bootstrap_hold_active = false;
         if (failed != 0 && handle->active) {
             status = complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_BOOTSTRAP_FAILED,
@@ -1132,6 +1428,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
             if (delta_ms == 0)
                 return SAO_STATUS_OK;
+            if (handle->outro) {
+                if (sao_ui_reduced_motion_enabled())
+                    handle->outro_duration_ms = kReducedMotionOutroDurationMs;
+                handle->elapsed_ms = static_cast<int32_t>(std::min<int64_t>(
+                    static_cast<int64_t>(handle->elapsed_ms) + delta_ms, handle->outro_duration_ms));
+                result = render_frame_locked(handle);
+                if (result != SAO_STATUS_OK)
+                    return complete_locked(handle, completion_reason_for_status(result), result, true);
+                if (handle->elapsed_ms >= handle->outro_duration_ms)
+                    return complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_OUTRO,
+                                           SAO_STATUS_OK, false);
+                return SAO_STATUS_OK;
+            }
             const int32_t previous_elapsed_ms = handle->elapsed_ms;
             const bool reduced_motion = sao_ui_reduced_motion_enabled();
             const int64_t next_elapsed = static_cast<int64_t>(previous_elapsed_ms) + delta_ms;
@@ -1188,7 +1497,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_tick(sao_ui_linkstart_handl
             stop_audio_after_error(handle);
         return first_failure(result, nervegear_status);
     } catch (...) {
-        stop_audio_after_error(handle);
+        std::lock_guard lock(handle->mutex);
+        if (handle->outro)
+            (void)complete_locked(handle, SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED,
+                                  SAO_STATUS_ERR_UNKNOWN, true);
+        else
+            record_audio_status_locked(handle, release_sound_group(handle));
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
@@ -1202,14 +1516,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_linkstart_get_phase(sao_ui_linkstart_
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::lock_guard lock(handle->mutex);
     if (handle->completion_emitted &&
-        handle->completion_reason == SAO_UI_LINKSTART_COMPLETION_NATURAL) {
+        (handle->completion_reason == SAO_UI_LINKSTART_COMPLETION_NATURAL ||
+         handle->completion_reason == SAO_UI_LINKSTART_COMPLETION_OUTRO)) {
         *out_phase = SAO_UI_LINKSTART_PHASE_COMPLETE;
         *out_phase_progress = 1.0F;
         return SAO_STATUS_OK;
     }
     const float elapsed_seconds = static_cast<float>(handle->elapsed_ms) / 1000.0F;
     const float seconds =
-        handle->active && sao_ui_reduced_motion_enabled()
+        handle->active && !handle->outro && sao_ui_reduced_motion_enabled()
             ? handle->timeline.p4_start +
                   (handle->default_timeline ? handle->timeline.startup_prelude : 0.0F)
             : elapsed_seconds;

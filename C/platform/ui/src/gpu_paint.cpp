@@ -41,11 +41,13 @@ struct GpuPaintState {
     ComPtr<ID2D1Device> device;
     ComPtr<ID2D1DeviceContext> device_context;
     ComPtr<ID2D1Bitmap1> target_bitmap;
+    ComPtr<ID2D1PathGeometry> theme_mask;
     ComPtr<ID2D1RenderTarget> target;
     ComPtr<IDWriteFactory> borrowed_dwrite;
     DWORD owner_thread{};
     uint32_t width{};
     uint32_t height{};
+    uint64_t theme_noise_ms{};
     size_t clip_depth{};
     bool drawing{};
 };
@@ -84,6 +86,10 @@ void destroy(void* opaque) noexcept {
             state->target->PopAxisAlignedClip();
             --state->clip_depth;
         }
+        if (state->theme_mask) {
+            state->target->PopLayer();
+            state->theme_mask.Reset();
+        }
         (void)state->target->EndDraw();
     }
     delete state;
@@ -114,6 +120,10 @@ sao_status_t end_frame(void* opaque) noexcept {
     while (state->clip_depth != 0) {
         state->target->PopAxisAlignedClip();
         --state->clip_depth;
+    }
+    if (state->theme_mask) {
+        state->target->PopLayer();
+        state->theme_mask.Reset();
     }
     state->drawing = false;
     return map_hresult(state->target->EndDraw());
@@ -291,6 +301,106 @@ sao_ui_paint_ctx_s* allocate_context(std::unique_ptr<GpuPaintState> state) noexc
 } // namespace
 
 namespace sao::ui::detail {
+sao_status_t push_gpu_theme_mask(sao_ui_paint_ctx_handle_t context, float progress,
+                                 bool dark) noexcept {
+    if (!context || context->gpu_dispatch != &kDispatch || !std::isfinite(progress))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    auto* state = static_cast<GpuPaintState*>(context->gpu_state);
+    if (!owner(state) || !state->drawing || !state->factory || state->theme_mask || state->clip_depth)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    ComPtr<ID2D1PathGeometry> geometry;
+    ComPtr<ID2D1GeometrySink> sink;
+    HRESULT hr = state->factory->CreatePathGeometry(&geometry);
+    if (SUCCEEDED(hr))
+        hr = geometry->Open(&sink);
+    if (FAILED(hr))
+        return map_hresult(hr);
+    const float width = static_cast<float>(state->width);
+    const float height = static_cast<float>(state->height);
+    sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
+    const auto rectangle = [&](float left, float top, float right, float bottom) {
+        left = std::clamp(left, 0.0F, width);
+        right = std::clamp(right, 0.0F, width);
+        if (right <= left || bottom <= top)
+            return;
+        sink->BeginFigure(D2D1::Point2F(left, top), D2D1_FIGURE_BEGIN_FILLED);
+        sink->AddLine(D2D1::Point2F(right, top));
+        sink->AddLine(D2D1::Point2F(right, bottom));
+        sink->AddLine(D2D1::Point2F(left, bottom));
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    };
+    if (!dark) {
+        state->theme_noise_ms = GetTickCount64();
+        rectangle(0.0F, 0.0F, width, height);
+    }
+    const uint32_t epoch = static_cast<uint32_t>(state->theme_noise_ms / 480u);
+    float noise_blend = static_cast<float>(state->theme_noise_ms % 480u) / 480.0F;
+    noise_blend = noise_blend * noise_blend * (3.0F - 2.0F * noise_blend);
+    const auto mix_seed = [](uint32_t value) {
+        value ^= value >> 16u;
+        value *= 0x85ebca6bu;
+        value ^= value >> 13u;
+        return value;
+    };
+    const uint32_t rows = std::clamp(state->height / 5u, 12u, 160u);
+    const float reach = std::clamp(width * 0.14F, 12.0F, 72.0F);
+    const float margin = reach * 2.0F + 80.0F;
+    const float phase = std::clamp(progress, 0.0F, 1.0F);
+    for (uint32_t row = 0; row < rows; ++row) {
+        const uint32_t seed = mix_seed((row + 1u) * 0x9e3779b9u);
+        const uint32_t first = mix_seed(seed + epoch * 0x9e3779b9u);
+        const uint32_t next = mix_seed(seed + (epoch + 1u) * 0x9e3779b9u);
+        const auto sample = [&](uint32_t shift, uint32_t mask) {
+            const float a = static_cast<float>((first >> shift) & mask);
+            const float b = static_cast<float>((next >> shift) & mask);
+            return a + (b - a) * noise_blend;
+        };
+        const float start = static_cast<float>(seed & 255u) / 255.0F * 0.24F;
+        const float finish = 0.68F + static_cast<float>((seed >> 8u) & 255u) / 255.0F * 0.32F;
+        const float local = std::clamp((phase - start) / (finish - start), 0.0F, 1.0F);
+        const float curve = 1.10F + static_cast<float>((seed >> 16u) & 255u) / 255.0F * 1.20F;
+        const float eased = std::pow(local, curve);
+        const float x = std::round(-margin + (width + 2.0F * margin) * eased);
+        const float top = std::floor(height * static_cast<float>(row) / static_cast<float>(rows));
+        const float bottom = std::floor(height * static_cast<float>(row + 1u) / static_cast<float>(rows));
+        const float gap = std::round(3.0F + sample(8u, 15u));
+        const float lengthScale = 0.45F + sample(19u, 15u) * 0.11F;
+        const float chip = std::round(std::clamp(
+            (3.0F + reach * (0.04F + sample(11u, 15u) * 0.022F)) * lengthScale,
+            2.0F, reach * 0.70F + 10.0F));
+        const float notch = std::round(2.0F + reach * 0.30F * sample(0u, 255u) / 255.0F);
+        const float split = std::floor((top + bottom) * 0.5F);
+        rectangle(0.0F, top, x, bottom);
+        rectangle(x - gap - notch, top, x - gap, split);
+        rectangle(x + gap, top, x + gap + chip, bottom);
+        const float shard = x + gap * 2.0F + chip;
+        const float echo = std::round(2.0F + (reach * 0.45F + 4.0F) * sample(20u, 15u) / 15.0F);
+        rectangle(shard, split, shard + echo, bottom);
+        const float fleck = std::round(sample(16u, 7u) / 7.0F * (1.0F + 7.0F * sample(21u, 15u) / 15.0F));
+        rectangle(shard + echo + gap, top, shard + echo + gap + fleck, split);
+    }
+    hr = sink->Close();
+    if (FAILED(hr))
+        return map_hresult(hr);
+    // Complementary masks share integer edges so opaque surfaces keep their coverage.
+    const auto parameters = D2D1::LayerParameters(D2D1::RectF(0.0F, 0.0F, width, height),
+        geometry.Get(), D2D1_ANTIALIAS_MODE_ALIASED);
+    state->target->PushLayer(&parameters, nullptr);
+    state->theme_mask = std::move(geometry);
+    return SAO_STATUS_OK;
+}
+
+sao_status_t pop_gpu_theme_mask(sao_ui_paint_ctx_handle_t context) noexcept {
+    if (!context || context->gpu_dispatch != &kDispatch)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    auto* state = static_cast<GpuPaintState*>(context->gpu_state);
+    if (!owner(state) || !state->drawing || !state->theme_mask || state->clip_depth)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    state->target->PopLayer();
+    state->theme_mask.Reset();
+    return SAO_STATUS_OK;
+}
+
 sao_status_t create_gpu_paint_context(void* raw_device, void* raw_texture, uint32_t width,
                                       uint32_t height, sao_ui_paint_ctx_handle_t* out) noexcept {
     if (!raw_device || !raw_texture || !out || !width || !height)
@@ -384,6 +494,12 @@ sao_status_t create_borrowed_d2d_paint_context(void* raw_target, void* raw_dwrit
 
 #else
 namespace sao::ui::detail {
+sao_status_t push_gpu_theme_mask(sao_ui_paint_ctx_handle_t, float, bool) noexcept {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
+sao_status_t pop_gpu_theme_mask(sao_ui_paint_ctx_handle_t) noexcept {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
 sao_status_t create_gpu_paint_context(void*, void*, uint32_t, uint32_t,
                                       sao_ui_paint_ctx_handle_t* out) noexcept {
     if (out)

@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -44,9 +45,11 @@ struct MutationKey {
     uintptr_t hwnd;
     uint64_t generation;
     std::string op;
+    uint64_t tracked_sequence;
 
     bool operator==(const MutationKey& o) const noexcept {
-        return hwnd == o.hwnd && generation == o.generation && op == o.op;
+        return hwnd == o.hwnd && generation == o.generation && op == o.op &&
+               tracked_sequence == o.tracked_sequence;
     }
 };
 
@@ -55,6 +58,7 @@ struct MutationKeyHash {
         size_t h = std::hash<uintptr_t>{}(k.hwnd);
         h = h * 131u + std::hash<uint64_t>{}(k.generation);
         h = h * 131u + std::hash<std::string>{}(k.op);
+        h = h * 131u + std::hash<uint64_t>{}(k.tracked_sequence);
         return h;
     }
 };
@@ -82,6 +86,24 @@ struct Token {
     uint32_t thread_id;
 };
 
+struct SubmissionCompletion {
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+    sao_status_t dispatch_status = SAO_STATUS_ERR_CANCELLED;
+
+    void finish(sao_status_t status) noexcept {
+        {
+            std::lock_guard<std::mutex> guard(mu);
+            if (done)
+                return;
+            dispatch_status = status;
+            done = true;
+        }
+        cv.notify_all();
+    }
+};
+
 enum class MutationKind : uint8_t {
     kSetBounds,
     kHideExstyle,
@@ -107,6 +129,7 @@ struct Mutation {
     std::string method_name;
     std::string args_json;
     MutationPayload payload;
+    std::shared_ptr<SubmissionCompletion> completion;
 };
 
 struct FailedGeneration {
@@ -282,8 +305,7 @@ sao_status_t parse_mutation(std::string_view operation, std::string_view method,
             // physical transaction budget.  No other keys are meaningful.
             payload.timeout_ms = kPhysicalExStyleTimeoutMs;
             for (const auto& item : document.items()) {
-                if (item.key() != "timeout_ms" ||
-                    !json_uint32(item.value(), &payload.timeout_ms) ||
+                if (item.key() != "timeout_ms" || !json_uint32(item.value(), &payload.timeout_ms) ||
                     payload.timeout_ms == 0) {
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 }
@@ -343,6 +365,7 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
     std::unordered_set<uintptr_t> invalidating;
     std::unordered_map<uintptr_t, FailedGeneration> failed;
     uint64_t next_generation = 1;
+    uint64_t next_tracked_sequence = 1;
     uint32_t total_invalidations = 0;
     uint32_t failed_invalidations = 0;
     bool accepting = true;
@@ -384,6 +407,10 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             std::lock_guard<std::mutex> guard(mu);
             accepting = false;
             stop_requested = true;
+            for (auto& item : pending) {
+                if (item.second.completion != nullptr)
+                    item.second.completion->finish(SAO_STATUS_ERR_CANCELLED);
+            }
             pending.clear();
             queue.clear();
             queued.clear();
@@ -412,7 +439,8 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
                     }
                     key = queue.front();
                     const auto ready = ready_at.find(key);
-                    if (ready != ready_at.end() && std::chrono::steady_clock::now() < ready->second) {
+                    if (ready != ready_at.end() &&
+                        std::chrono::steady_clock::now() < ready->second) {
                         cv.wait_until(lock, ready->second);
                         continue;
                     }
@@ -429,23 +457,33 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
                 }
             }
 
+            sao_status_t dispatch_status = SAO_STATUS_ERR_CANCELLED;
             if (task.has_value()) {
-                const sao_status_t status = execute(*task);
-                std::lock_guard<std::mutex> log_guard(dispatch_mu);
-                last_dispatch_status = status;
-                if (status == SAO_STATUS_OK) {
-                    dispatch_log.push_back({
-                        task->key.hwnd,
-                        task->key.generation,
-                        task->key.op,
-                        task->method_name,
-                        task->args_json,
-                    });
-                } else {
-                    ++failed_dispatches;
+                try {
+                    dispatch_status = execute(*task);
+                } catch (...) {
+                    dispatch_status = SAO_STATUS_ERR_UNKNOWN;
+                }
+                try {
+                    std::lock_guard<std::mutex> log_guard(dispatch_mu);
+                    last_dispatch_status = dispatch_status;
+                    if (dispatch_status == SAO_STATUS_OK) {
+                        dispatch_log.push_back({
+                            task->key.hwnd,
+                            task->key.generation,
+                            task->key.op,
+                            task->method_name,
+                            task->args_json,
+                        });
+                    } else {
+                        ++failed_dispatches;
+                    }
+                } catch (...) {
                 }
             }
 
+            if (task.has_value() && task->completion != nullptr)
+                task->completion->finish(dispatch_status);
             if (task.has_value()) {
                 std::lock_guard<std::mutex> guard(mu);
                 const GenerationKey generation_key{key.hwnd, key.generation};
@@ -511,7 +549,8 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
 
     sao_status_t submit_dc(uintptr_t hwnd, const std::string& op, const std::string& method_name,
                            const std::string& args_json, const MutationPayload& payload,
-                           bool requires_rect_provider) {
+                           bool requires_rect_provider,
+                           std::shared_ptr<SubmissionCompletion> completion = {}) {
         std::lock_guard<std::mutex> guard(mu);
         if (!accepting || invalidating.count(hwnd) != 0 || failed.count(hwnd) != 0) {
             return SAO_STATUS_ERR_ACCESS_DENIED;
@@ -532,12 +571,21 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
         }
         const Token token = tok_it->second;
         const uint64_t generation = token.generation;
-        MutationKey key{hwnd, generation, op};
+        uint64_t tracked_sequence = 0;
+        if (completion != nullptr) {
+            do {
+                tracked_sequence = next_tracked_sequence++;
+            } while (tracked_sequence == 0);
+        }
+        MutationKey key{hwnd, generation, op, tracked_sequence};
         Mutation task{
-            token, key, method_name, args_json, payload,
+            token, key, method_name, args_json, payload, std::move(completion),
         };
         // Coalesce: the map replace keeps the "latest" args for this
         // key; the queued flag prevents double-enqueue.
+        const auto previous = pending.find(key);
+        if (previous != pending.end() && previous->second.completion != nullptr)
+            previous->second.completion->finish(SAO_STATUS_ERR_CANCELLED);
         pending[key] = std::move(task);
         if (queued.insert(key).second) {
             queue.push_back(key);
@@ -735,19 +783,19 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
             tokens.erase(hwnd);
             // Drop any queued entries for this hwnd — but leave
             // inflight to drain naturally.
-            std::deque<MutationKey> keep;
-            while (!queue.empty()) {
-                auto k = queue.front();
-                queue.pop_front();
-                if (k.hwnd == hwnd) {
-                    pending.erase(k);
-                    queued.erase(k);
-                    ready_at.erase(k);
+            for (auto queue_it = queue.begin(); queue_it != queue.end();) {
+                if (queue_it->hwnd == hwnd) {
+                    const auto pending_it = pending.find(*queue_it);
+                    if (pending_it != pending.end() && pending_it->second.completion != nullptr)
+                        pending_it->second.completion->finish(SAO_STATUS_ERR_CANCELLED);
+                    pending.erase(*queue_it);
+                    queued.erase(*queue_it);
+                    ready_at.erase(*queue_it);
+                    queue_it = queue.erase(queue_it);
                     continue;
                 }
-                keep.push_back(k);
+                ++queue_it;
             }
-            queue.swap(keep);
             total_invalidations += 1u;
             cv.notify_all();
         }
@@ -761,9 +809,15 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
         {
             std::unique_lock<std::mutex> lock(mu);
             auto in_flight_or_pending = [this, hwnd, invalidated_generation] {
-                if (invalidated_generation != 0 &&
-                    inflight.count(GenerationKey{hwnd, invalidated_generation}) != 0)
-                    return true;
+                if (invalidated_generation != 0) {
+                    if (inflight.count(GenerationKey{hwnd, invalidated_generation}) != 0)
+                        return true;
+                } else {
+                    for (const auto& item : inflight) {
+                        if (item.first.hwnd == hwnd)
+                            return true;
+                    }
+                }
                 for (auto const& kv : pending) {
                     if (kv.first.hwnd == hwnd && (invalidated_generation == 0 ||
                                                   kv.first.generation == invalidated_generation))
@@ -783,7 +837,6 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
 
         {
             std::lock_guard<std::mutex> guard(mu);
-            invalidating.erase(hwnd);
             if (drained) {
                 failed.erase(hwnd);
             } else {
@@ -793,6 +846,7 @@ struct Coordinator : std::enable_shared_from_this<Coordinator> {
                 };
                 failed_invalidations += 1u;
             }
+            invalidating.erase(hwnd);
             cv.notify_all();
         }
 
@@ -878,6 +932,9 @@ struct CoordinatorHandle {
 };
 struct BarrierHandle {
     Barrier* bar;
+};
+struct SubmissionHandle {
+    std::shared_ptr<SubmissionCompletion> completion;
 };
 
 } // namespace
@@ -1014,9 +1071,57 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_dc(
         auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
         const std::string op(*operation);
         const std::string method_name(*method);
-        const std::string args_json(reinterpret_cast<const char*>(args_json_utf8), args_len);
+        const std::string args_json =
+            args_len == 0 ? std::string{}
+                          : std::string(reinterpret_cast<const char*>(args_json_utf8), args_len);
         return h->coord->submit_dc(reinterpret_cast<uintptr_t>(hwnd), op, method_name, args_json,
                                    payload, false);
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+#endif
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_dc_tracked(
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, const char* operation_utf8,
+    const char* method_name_utf8, const uint8_t* args_json_utf8, size_t args_len,
+    sao_ui_dc_mutation_submission_handle_t* out_submission) {
+    if (out_submission == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_submission = nullptr;
+    if (handle == nullptr || hwnd == nullptr || ((args_json_utf8 == nullptr) != (args_len == 0))) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const auto operation = bounded_string(operation_utf8, kMaxOperationBytes);
+    const auto method = bounded_string(method_name_utf8, kMaxMethodBytes);
+    if (!operation.has_value() || !method.has_value())
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    MutationPayload payload{};
+    const sao_status_t parse_status =
+        parse_mutation(*operation, *method, args_json_utf8, args_len, &payload);
+    if (parse_status != SAO_STATUS_OK)
+        return parse_status;
+#if !defined(_WIN32)
+    return SAO_STATUS_ERR_CAPABILITY_MISSING;
+#else
+    try {
+        auto completion = std::make_shared<SubmissionCompletion>();
+        auto submission = std::make_unique<SubmissionHandle>();
+        submission->completion = completion;
+        auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
+        const std::string op(*operation);
+        const std::string method_name(*method);
+        const std::string args_json =
+            args_len == 0 ? std::string{}
+                          : std::string(reinterpret_cast<const char*>(args_json_utf8), args_len);
+        const sao_status_t status =
+            h->coord->submit_dc(reinterpret_cast<uintptr_t>(hwnd), op, method_name, args_json,
+                                payload, false, std::move(completion));
+        if (status != SAO_STATUS_OK)
+            return status;
+        *out_submission =
+            reinterpret_cast<sao_ui_dc_mutation_submission_handle_t>(submission.release());
+        return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -1050,6 +1155,78 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_hide_w
     }
 }
 
+extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_hide_window_rect_tracked(
+    sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd,
+    const SaoUiDcMutationRect* fake_rect, uint32_t settle_ms, uint32_t timeout_ms,
+    sao_ui_dc_mutation_submission_handle_t* out_submission) {
+    if (out_submission == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_submission = nullptr;
+    if (handle == nullptr || hwnd == nullptr || fake_rect == nullptr ||
+        fake_rect->right <= fake_rect->left || fake_rect->bottom <= fake_rect->top) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        auto completion = std::make_shared<SubmissionCompletion>();
+        auto submission = std::make_unique<SubmissionHandle>();
+        submission->completion = completion;
+        MutationPayload payload{};
+        payload.kind = MutationKind::kHideWindowRect;
+        payload.fake_rect = *fake_rect;
+        payload.settle_ms = settle_ms;
+        payload.timeout_ms = timeout_ms;
+        const std::string args_json = "{\"left\":" + std::to_string(fake_rect->left) +
+                                      ",\"top\":" + std::to_string(fake_rect->top) +
+                                      ",\"right\":" + std::to_string(fake_rect->right) +
+                                      ",\"bottom\":" + std::to_string(fake_rect->bottom) +
+                                      ",\"settle_ms\":" + std::to_string(settle_ms) +
+                                      ",\"timeout_ms\":" + std::to_string(timeout_ms) + "}";
+        auto* coordinator = reinterpret_cast<CoordinatorHandle*>(handle);
+        const sao_status_t status = coordinator->coord->submit_dc(
+            reinterpret_cast<uintptr_t>(hwnd), "host-rect-scrub", "hide_window_rect", args_json,
+            payload, true, std::move(completion));
+        if (status != SAO_STATUS_OK)
+            return status;
+        *out_submission =
+            reinterpret_cast<sao_ui_dc_mutation_submission_handle_t>(submission.release());
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_dc_mutation_submission_wait(sao_ui_dc_mutation_submission_handle_t submission,
+                                   uint32_t wait_ms, SaoDcMutationDispatchResult* out_result) {
+    if (submission == nullptr || out_result == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        *out_result = {};
+        out_result->struct_size = sizeof(*out_result);
+        out_result->abi_version = SAO_UI_DC_MUTATION_DISPATCH_RESULT_ABI_VERSION;
+        auto* handle = reinterpret_cast<SubmissionHandle*>(submission);
+        if (handle->completion == nullptr)
+            return SAO_STATUS_ERR_HANDLE_INVALID;
+        std::unique_lock<std::mutex> lock(handle->completion->mu);
+        if (!handle->completion->done &&
+            (wait_ms == 0u ||
+             !handle->completion->cv.wait_for(lock, std::chrono::milliseconds(wait_ms),
+                                              [handle] { return handle->completion->done; }))) {
+            return SAO_STATUS_ERR_TIMEOUT;
+        }
+        out_result->completed = 1u;
+        out_result->dispatch_status = handle->completion->dispatch_status;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+extern "C" void SAO_UI_CALL
+sao_ui_dc_mutation_submission_destroy(sao_ui_dc_mutation_submission_handle_t submission) {
+    delete reinterpret_cast<SubmissionHandle*>(submission);
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_unlink_z_order(
     sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, uint32_t timeout_ms) {
     if (handle == nullptr || hwnd == nullptr)
@@ -1058,8 +1235,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_unlink
         MutationPayload payload{};
         payload.kind = MutationKind::kUnlinkZOrder;
         payload.timeout_ms = timeout_ms != 0 ? timeout_ms : kPhysicalExStyleTimeoutMs;
-        const std::string args_json =
-            "{\"timeout_ms\":" + std::to_string(payload.timeout_ms) + "}";
+        const std::string args_json = "{\"timeout_ms\":" + std::to_string(payload.timeout_ms) + "}";
         auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
         return h->coord->submit_dc(reinterpret_cast<uintptr_t>(hwnd), "host-z-order",
                                    "hide_z_order", args_json, payload, false);
@@ -1070,18 +1246,29 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_coordinator_submit_unlink
 
 extern "C" bool SAO_UI_CALL sao_ui_dc_mutation_coordinator_invalidate(
     sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd, double timeout_sec) {
-    if (handle == nullptr || hwnd == nullptr)
+    constexpr double kMaximumTimeoutSeconds =
+        static_cast<double>(std::numeric_limits<int64_t>::max() / 1'000'000);
+    if (handle == nullptr || hwnd == nullptr || !std::isfinite(timeout_sec) ||
+        timeout_sec > kMaximumTimeoutSeconds)
         return false;
-    auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
-    return h->coord->invalidate(reinterpret_cast<uintptr_t>(hwnd), timeout_sec, nullptr);
+    try {
+        auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
+        return h->coord->invalidate(reinterpret_cast<uintptr_t>(hwnd), timeout_sec, nullptr);
+    } catch (...) {
+        return false;
+    }
 }
 
 extern "C" bool SAO_UI_CALL sao_ui_dc_mutation_coordinator_clear_failed(
     sao_ui_dc_mutation_coordinator_handle_t handle, void* hwnd) {
     if (handle == nullptr || hwnd == nullptr)
         return false;
-    auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
-    return h->coord->clear_failed(reinterpret_cast<uintptr_t>(hwnd));
+    try {
+        auto* h = reinterpret_cast<CoordinatorHandle*>(handle);
+        return h->coord->clear_failed(reinterpret_cast<uintptr_t>(hwnd));
+    } catch (...) {
+        return false;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_dc_mutation_barrier_wait(

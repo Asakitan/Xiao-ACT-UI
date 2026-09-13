@@ -50,11 +50,9 @@ class ScopedTextRole final {
     ClassicTextStyle previous_{};
 };
 
-// Display uses the embedded SAO UI resource through a private DirectWrite collection.
-// See assets/fonts/SOURCE.md for provenance and distribution review.
-// Body/Monospace use system families; no machine-wide font registration occurs.
+// Every role uses the same private Latin/CJK collection, including technical values.
 constexpr const char* kClassicDisplayFontFamily = "SAO UI";
-constexpr const char* kClassicBodyFontFamily = "Microsoft YaHei UI";
-constexpr const char* kClassicMonospaceFontFamily = "Consolas";
+constexpr const char* kClassicBodyFontFamily = "SAO UI";
+constexpr const char* kClassicMonospaceFontFamily = "SAO UI";
 
 } // namespace sao::ui::detail

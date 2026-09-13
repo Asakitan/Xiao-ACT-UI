@@ -57,6 +57,7 @@
 #include "dcomp_bridge_internal.h"
 
 #include "input_router_internal.h"
+#include "layer_order_internal.h"
 #include "layer_paint_internal.h"
 
 #include <algorithm>
@@ -174,6 +175,10 @@ struct sao_ui_layer_s {
     int32_t width{0};
     int32_t height{0};
     int32_t z_order{0};
+    bool navigation_layer{false};
+    bool navigation_behind{false};
+    int32_t navigation_resting_z{0};
+    int32_t navigation_raised_z{0};
     bool click_through{true};
     bool rect_hit{false};
     bool bgra_swizzle{false};
@@ -958,6 +963,26 @@ void mark_layer_dirty(sao_ui_layer_s* layer, bool content_changed = false) {
         ++layer->content_revision;
 }
 
+void yield_navigation_locked(sao_ui_compositor_s* comp, const sao_ui_layer_s* foreground) {
+    if (foreground->navigation_layer || foreground->composition_band != 0 ||
+        foreground->click_through || !foreground->visible || foreground->z_order < 0)
+        return;
+    bool changed = false;
+    for (const auto& layer : comp->layers) {
+        if (!layer->navigation_layer || layer->navigation_behind) continue;
+        layer->navigation_behind = true;
+        layer->z_order = layer->navigation_resting_z;
+        mark_layer_dirty(layer.get());
+        changed = true;
+    }
+    if (changed) {
+        std::sort(comp->layers.begin(), comp->layers.end(), LayerLess{});
+#ifndef NDEBUG
+        std::fprintf(stderr, "NAVIGATION_PRIORITY=behind foreground=%s\n", foreground->name.c_str());
+#endif
+    }
+}
+
 #if defined(_WIN32)
 void release_shared_texture_objects(sao_ui_layer_s* layer);
 
@@ -1370,6 +1395,23 @@ bool has_visible_native_layer_locked(const sao_ui_compositor_s* compositor) {
 
 bool gpu_composition_extent_locked(const sao_ui_compositor_s* compositor, uint32_t* out_width,
                                    uint32_t* out_height) {
+    if (compositor->host != nullptr) {
+        SaoOverlayHostState state{};
+        if (sao_ui_overlay_host_get_state(compositor->host, &state) != SAO_STATUS_OK)
+            return false;
+        if (state.geometry.width <= 0 || state.geometry.height <= 0) {
+            *out_width = *out_height = 0;
+            return true;
+        }
+        const auto width = static_cast<uint32_t>(state.geometry.width);
+        const auto height = static_cast<uint32_t>(state.geometry.height);
+        size_t bytes = 0;
+        if (!checked_bgra_buffer_size(width, height, &bytes))
+            return false;
+        *out_width = width;
+        *out_height = height;
+        return true;
+    }
     int64_t right = 0;
     int64_t bottom = 0;
     for (const auto& layer : compositor->layers) {
@@ -3130,11 +3172,44 @@ extern "C" void SAO_UI_CALL sao_ui_layer_destroy(sao_ui_layer_handle_t layer) {
 // Layer state mutators used by production and tests.
 // ---------------------------------------------------------------------------
 
+sao_status_t sao::ui::detail::configure_navigation_layer(sao_ui_layer_handle_t layer,
+                                                         int32_t resting_z) noexcept {
+    return with_active_layer_locked(layer, [resting_z](sao_ui_compositor_s*, sao_ui_layer_s* active) {
+        active->navigation_layer = true;
+        active->navigation_resting_z = resting_z;
+        active->navigation_raised_z = active->z_order;
+        return SAO_STATUS_OK;
+    });
+}
+
+sao_status_t sao::ui::detail::raise_navigation_layers(sao_ui_layer_handle_t anchor,
+                                                      bool* out_was_behind) noexcept {
+    if (out_was_behind == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_was_behind = false;
+    return with_active_layer_locked(anchor, [out_was_behind](sao_ui_compositor_s* comp, sao_ui_layer_s* active) {
+        if (!active->navigation_layer) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        *out_was_behind = active->navigation_behind;
+        for (const auto& layer : comp->layers) {
+            if (!layer->navigation_layer) continue;
+            layer->navigation_behind = false;
+            layer->z_order = layer->navigation_raised_z;
+            mark_layer_dirty(layer.get());
+        }
+        std::sort(comp->layers.begin(), comp->layers.end(), LayerLess{});
+#ifndef NDEBUG
+        std::fprintf(stderr, "NAVIGATION_PRIORITY=front was_behind=%d\n", *out_was_behind ? 1 : 0);
+#endif
+        return SAO_STATUS_OK;
+    });
+}
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_z_order(sao_ui_layer_handle_t layer,
                                                              int32_t z_order) {
     return with_active_layer_locked(
         layer, [z_order](sao_ui_compositor_s* comp, sao_ui_layer_s* active) {
+            const bool changed = active->z_order != z_order;
             active->z_order = z_order;
+            if (changed) yield_navigation_locked(comp, active);
             std::stable_sort(comp->layers.begin(), comp->layers.end(), LayerLess{});
             mark_layer_dirty(active);
             return SAO_STATUS_OK;
@@ -3176,8 +3251,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_get_effects(sao_ui_layer_handle
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_visible(sao_ui_layer_handle_t layer,
                                                              bool visible) {
-    return mutate_input_layer(layer, [visible](sao_ui_compositor_s*, sao_ui_layer_s* active) {
+    return mutate_input_layer(layer, [visible](sao_ui_compositor_s* comp, sao_ui_layer_s* active) {
+        const bool opening = visible && !active->visible;
         active->visible = visible;
+        if (opening) yield_navigation_locked(comp, active);
         mark_layer_dirty(active);
         return SAO_STATUS_OK;
     });
