@@ -1456,85 +1456,88 @@ bool build_menu_snapshot(NativeMenuBridge* bridge) {
 }
 
 #if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
-int32_t SAO_PLUGINS_CALL native_menu_snapshot(loader::entity_menu_row* rows, std::uint32_t capacity,
-                                              std::uint32_t* out_count, std::uint64_t* out_revision,
-                                              void* user_data) {
-    if (out_count == nullptr || out_revision == nullptr || user_data == nullptr ||
-        (capacity > 0 && rows == nullptr)) {
+int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
+    void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes,
+    std::uint32_t* out_count, std::uint64_t* out_revision,
+    loader::entity_snapshot_content_token_t* out_content_token,
+    std::uint32_t* out_row_stride_bytes, void* user_data) {
+    if (out_count == nullptr || out_revision == nullptr || out_content_token == nullptr ||
+        out_row_stride_bytes == nullptr || user_data == nullptr ||
+        (capacity > 0 && rows == nullptr) || (rows == nullptr && row_stride_bytes != 0)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     auto* bridge = static_cast<NativeMenuBridge*>(user_data);
     if (!enter_callback(bridge->gate))
         return loader::SAO_PLUGINS_ERR_BUSY;
     PyGILState_STATE gil = PyGILState_Ensure();
-    if (rows == nullptr && !build_menu_snapshot(bridge)) {
+    try {
+        if (rows == nullptr && !build_menu_snapshot(bridge)) {
+            PyErr_Clear();
+            leave_callback(bridge->gate);
+            drain_retired_contexts();
+            PyGILState_Release(gil);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        *out_count = static_cast<std::uint32_t>(bridge->rows.size());
+        *out_revision = bridge->revision;
+        *out_content_token = bridge->revision == loader::kInvalidEntitySnapshotContentToken
+                                 ? 1
+                                 : bridge->revision;
+        *out_row_stride_bytes =
+            bridge->rows.empty()
+                ? 0
+                : static_cast<std::uint32_t>(sizeof(loader::entity_menu_row_v2));
+        if (capacity < bridge->rows.size()) {
+            leave_callback(bridge->gate);
+            drain_retired_contexts();
+            PyGILState_Release(gil);
+            return SAO_ERR_BUFFER_TOO_SMALL;
+        }
+        if (!bridge->rows.empty() &&
+            row_stride_bytes < sizeof(loader::entity_menu_row_v2)) {
+            leave_callback(bridge->gate);
+            drain_retired_contexts();
+            PyGILState_Release(gil);
+            return loader::SAO_PLUGINS_ERR_ABI_MISMATCH;
+        }
+        if (!bridge->rows.empty() &&
+            row_stride_bytes % alignof(loader::entity_menu_row_v2) != 0) {
+            leave_callback(bridge->gate);
+            drain_retired_contexts();
+            PyGILState_Release(gil);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        for (std::size_t index = 0; index < bridge->rows.size(); ++index) {
+            const auto& source = bridge->rows[index];
+            const loader::entity_menu_row_v2 row{
+                sizeof(loader::entity_menu_row_v2),
+                bridge->contribution_id.c_str(),
+                bridge->name.c_str(),
+                bridge->icon.c_str(),
+                bridge->priority,
+                source.label.c_str(),
+                source.icon.c_str(),
+                source.action_id.c_str(),
+                source.payload_json.c_str(),
+                static_cast<std::uint8_t>(source.can_activate),
+                static_cast<std::uint8_t>(source.keep_menu_open),
+                static_cast<std::uint8_t>(source.close_menu_before),
+                {},
+            };
+            std::memcpy(static_cast<std::byte*>(rows) + index * row_stride_bytes,
+                        &row, sizeof(row));
+        }
+        leave_callback(bridge->gate);
+        drain_retired_contexts();
+        PyGILState_Release(gil);
+        return SAO_OK;
+    } catch (...) {
         PyErr_Clear();
         leave_callback(bridge->gate);
         drain_retired_contexts();
         PyGILState_Release(gil);
         return SAO_ERR_OS_CALL_FAILED;
     }
-    *out_count = static_cast<std::uint32_t>(bridge->rows.size());
-    *out_revision = bridge->revision;
-    if (capacity < bridge->rows.size()) {
-        leave_callback(bridge->gate);
-        drain_retired_contexts();
-        PyGILState_Release(gil);
-        return SAO_ERR_BUFFER_TOO_SMALL;
-    }
-    for (std::size_t index = 0; index < bridge->rows.size(); ++index) {
-        const auto& source = bridge->rows[index];
-        rows[index] = {
-            sizeof(loader::entity_menu_row),
-            bridge->contribution_id.c_str(),
-            bridge->name.c_str(),
-            bridge->icon.c_str(),
-            bridge->priority,
-            source.label.c_str(),
-            source.icon.c_str(),
-            source.action_id.c_str(),
-            source.payload_json.c_str(),
-            static_cast<std::uint8_t>(source.can_activate),
-            static_cast<std::uint8_t>(source.keep_menu_open),
-            static_cast<std::uint8_t>(source.close_menu_before),
-            {},
-        };
-    }
-    leave_callback(bridge->gate);
-    drain_retired_contexts();
-    PyGILState_Release(gil);
-    return SAO_OK;
-}
-
-int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const char*,
-                                            void* user_data) {
-    if (action_id_utf8 == nullptr || user_data == nullptr) {
-        return SAO_ERR_INVALID_ARGUMENT;
-    }
-    auto* bridge = static_cast<NativeMenuBridge*>(user_data);
-    if (!enter_callback(bridge->gate))
-        return loader::SAO_PLUGINS_ERR_BUSY;
-    PyGILState_STATE gil = PyGILState_Ensure();
-    const auto found = bridge->actions.find(action_id_utf8);
-    if (found == bridge->actions.end() || found->second == nullptr) {
-        leave_callback(bridge->gate);
-        drain_retired_contexts();
-        PyGILState_Release(gil);
-        return SAO_ERR_HANDLE_INVALID;
-    }
-    PyObject* result = PyObject_CallNoArgs(found->second);
-    if (result == nullptr) {
-        PyErr_Clear();
-        leave_callback(bridge->gate);
-        drain_retired_contexts();
-        PyGILState_Release(gil);
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-    Py_DECREF(result);
-    leave_callback(bridge->gate);
-    drain_retired_contexts();
-    PyGILState_Release(gil);
-    return SAO_OK;
 }
 
 PyObject* parse_action_payload(const char* payload_json_utf8) {
@@ -1575,6 +1578,82 @@ PyObject* serialize_action_result(PyObject* value) {
     return serialized;
 }
 
+int32_t submit_python_action_result(PyObject* value, bool none_is_decline,
+                                    loader::entity_action_result_sink_v2_fn result_sink,
+                                    void* result_sink_user_data) {
+    if (value == nullptr || result_sink == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    loader::entity_action_result_v2 native_result{
+        sizeof(loader::entity_action_result_v2),
+        loader::kEntityActionAbiVersion2,
+        static_cast<std::uint8_t>(value == Py_None ? !none_is_decline : 1),
+        {},
+        nullptr};
+    PyObject* serialized = nullptr;
+    if (value != Py_None) {
+        serialized = serialize_action_result(value);
+        if (serialized == nullptr || !PyUnicode_Check(serialized)) {
+            Py_XDECREF(serialized);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        Py_ssize_t result_size = 0;
+        const char* result_json = PyUnicode_AsUTF8AndSize(serialized, &result_size);
+        if (result_json == nullptr || result_size < 0 ||
+            static_cast<std::size_t>(result_size) >
+                loader::kMaximumEntityActionResultJsonBytes ||
+            std::memchr(result_json, '\0', static_cast<std::size_t>(result_size)) != nullptr ||
+            !valid_menu_json(
+                std::string_view(result_json, static_cast<std::size_t>(result_size)))) {
+            Py_DECREF(serialized);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        native_result.result_json_utf8 = result_json;
+    }
+    const int32_t status = result_sink(&native_result, result_sink_user_data);
+    Py_XDECREF(serialized);
+    return status;
+}
+
+int32_t SAO_PLUGINS_CALL native_menu_action_v2(
+    const char* action_id_utf8, const char* payload_json_utf8,
+    loader::entity_action_result_sink_v2_fn result_sink, void* result_sink_user_data,
+    void* user_data) {
+    if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
+        user_data == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto* bridge = static_cast<NativeMenuBridge*>(user_data);
+    if (!enter_callback(bridge->gate))
+        return loader::SAO_PLUGINS_ERR_BUSY;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    const auto finish = [bridge, gil](int32_t status) {
+        leave_callback(bridge->gate);
+        drain_retired_contexts();
+        PyGILState_Release(gil);
+        return status;
+    };
+    try {
+        const auto found = bridge->actions.find(action_id_utf8);
+        if (found == bridge->actions.end() || found->second == nullptr)
+            return finish(
+                submit_python_action_result(Py_None, true, result_sink, result_sink_user_data));
+        PyObject* result = PyObject_CallNoArgs(found->second);
+        if (result == nullptr) {
+            PyErr_Clear();
+            return finish(SAO_ERR_OS_CALL_FAILED);
+        }
+        const int32_t status =
+            submit_python_action_result(result, false, result_sink, result_sink_user_data);
+        Py_DECREF(result);
+        if (status != SAO_OK)
+            PyErr_Clear();
+        return finish(status);
+    } catch (...) {
+        PyErr_Clear();
+        return finish(SAO_ERR_OS_CALL_FAILED);
+    }
+}
+
 int32_t SAO_PLUGINS_CALL native_action_v2(const char* action_id_utf8, const char* payload_json_utf8,
                                           loader::entity_action_result_sink_v2_fn result_sink,
                                           void* result_sink_user_data, void* user_data) {
@@ -1611,40 +1690,11 @@ int32_t SAO_PLUGINS_CALL native_action_v2(const char* action_id_utf8, const char
             PyErr_Clear();
             return finish(SAO_ERR_OS_CALL_FAILED);
         }
-
-        loader::entity_action_result_v2 native_result{
-            sizeof(loader::entity_action_result_v2),
-            loader::kEntityActionAbiVersion2,
-            static_cast<std::uint8_t>(result == Py_None ? 0 : 1),
-            {},
-            nullptr};
-        PyObject* serialized = nullptr;
-        if (result != Py_None) {
-            serialized = serialize_action_result(result);
-            if (serialized == nullptr || !PyUnicode_Check(serialized)) {
-                Py_XDECREF(serialized);
-                Py_DECREF(result);
-                PyErr_Clear();
-                return finish(SAO_ERR_INVALID_ARGUMENT);
-            }
-            Py_ssize_t result_size = 0;
-            const char* result_json = PyUnicode_AsUTF8AndSize(serialized, &result_size);
-            if (result_json == nullptr || result_size < 0 ||
-                static_cast<std::size_t>(result_size) >
-                    loader::kMaximumEntityActionResultJsonBytes ||
-                std::memchr(result_json, '\0', static_cast<std::size_t>(result_size)) != nullptr ||
-                !valid_menu_json(
-                    std::string_view(result_json, static_cast<std::size_t>(result_size)))) {
-                Py_DECREF(serialized);
-                Py_DECREF(result);
-                PyErr_Clear();
-                return finish(SAO_ERR_INVALID_ARGUMENT);
-            }
-            native_result.result_json_utf8 = result_json;
-        }
-        const int32_t status = result_sink(&native_result, result_sink_user_data);
-        Py_XDECREF(serialized);
+        const int32_t status =
+            submit_python_action_result(result, true, result_sink, result_sink_user_data);
         Py_DECREF(result);
+        if (status != SAO_OK)
+            PyErr_Clear();
         return finish(status);
     } catch (...) {
         PyErr_Clear();
@@ -3371,15 +3421,17 @@ PyObject* PluginContext_register_menu_category(PluginContextObject* self, PyObje
         root.icon_utf8 = bridge->icon.c_str();
         root.priority = bridge->priority;
 
-        loader::context_entity_provider_descriptor provider{};
+        loader::context_entity_provider_descriptor_v3 provider{};
         provider.struct_size = sizeof(provider);
         provider.provider_id_utf8 = bridge->provider_id.c_str();
-        provider.snapshot = native_menu_snapshot;
-        provider.action_handler = native_menu_action;
+        provider.snapshot = native_menu_snapshot_v2;
+        provider.action_handler = nullptr;
         provider.user_data = bridge.get();
         provider.root_contribution = &root;
+        provider.action_handler_v2 = native_menu_action_v2;
+        provider.action_user_data = bridge.get();
         const int32_t status =
-            loader::sao_plugins_ctx_register_entity_provider(self->loader_context, &provider);
+            loader::sao_plugins_ctx_register_entity_provider_v3(self->loader_context, &provider);
         if (status != SAO_OK) {
             if (PySequence_DelItem(self->menus, record_index) != 0) {
                 PyErr_Clear();

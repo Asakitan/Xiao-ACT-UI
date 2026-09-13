@@ -1011,11 +1011,14 @@ bool build_menu_snapshot(emma_menu_bridge& bridge) {
     return true;
 }
 
-int32_t SAO_PLUGINS_CALL native_menu_snapshot(sao::plugins::loader::entity_menu_row* rows,
-                                              std::uint32_t capacity, std::uint32_t* out_count,
-                                              std::uint64_t* out_revision, void* user_data) {
-    if (out_count == nullptr || out_revision == nullptr || user_data == nullptr ||
-        (capacity > 0 && rows == nullptr)) {
+int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
+    void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes,
+    std::uint32_t* out_count, std::uint64_t* out_revision,
+    sao::plugins::loader::entity_snapshot_content_token_t* out_content_token,
+    std::uint32_t* out_row_stride_bytes, void* user_data) {
+    if (out_count == nullptr || out_revision == nullptr || out_content_token == nullptr ||
+        out_row_stride_bytes == nullptr || user_data == nullptr ||
+        (capacity > 0 && rows == nullptr) || (rows == nullptr && row_stride_bytes != 0)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     auto& bridge = *static_cast<emma_menu_bridge*>(user_data);
@@ -1033,12 +1036,29 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot(sao::plugins::loader::entity_menu_
             return SAO_ERR_OS_CALL_FAILED;
         *out_count = static_cast<std::uint32_t>(bridge.rows.size());
         *out_revision = bridge.revision;
+        *out_content_token =
+            bridge.revision == sao::plugins::loader::kInvalidEntitySnapshotContentToken
+                ? 1
+                : bridge.revision;
+        *out_row_stride_bytes =
+            bridge.rows.empty()
+                ? 0
+                : static_cast<std::uint32_t>(
+                      sizeof(sao::plugins::loader::entity_menu_row_v2));
         if (capacity < bridge.rows.size())
             return SAO_ERR_BUFFER_TOO_SMALL;
+        if (!bridge.rows.empty() &&
+            row_stride_bytes < sizeof(sao::plugins::loader::entity_menu_row_v2)) {
+            return sao::plugins::loader::SAO_PLUGINS_ERR_ABI_MISMATCH;
+        }
+        if (!bridge.rows.empty() &&
+            row_stride_bytes % alignof(sao::plugins::loader::entity_menu_row_v2) != 0) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
         for (std::size_t index = 0; index < bridge.rows.size(); ++index) {
             const auto& source = bridge.rows[index];
-            rows[index] = {
-                sizeof(sao::plugins::loader::entity_menu_row),
+            const sao::plugins::loader::entity_menu_row_v2 row{
+                sizeof(sao::plugins::loader::entity_menu_row_v2),
                 bridge.contribution_id.c_str(),
                 bridge.name.c_str(),
                 bridge.icon.c_str(),
@@ -1052,45 +1072,9 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot(sao::plugins::loader::entity_menu_
                 static_cast<std::uint8_t>(source.close_menu_before),
                 {},
             };
+            std::memcpy(static_cast<std::byte*>(rows) + index * row_stride_bytes, &row,
+                        sizeof(row));
         }
-        return SAO_OK;
-    } catch (...) {
-        return SAO_ERR_OS_CALL_FAILED;
-    }
-}
-
-int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const char*,
-                                            void* user_data) {
-    if (action_id_utf8 == nullptr || user_data == nullptr)
-        return SAO_ERR_INVALID_ARGUMENT;
-    auto& bridge = *static_cast<emma_menu_bridge*>(user_data);
-    auto* runtime = bridge.runtime;
-    if (runtime == nullptr || bridge.closing.load(std::memory_order_acquire))
-        return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-    try {
-        runtime_invocation_guard guard(runtime);
-        if (!guard.acquired())
-            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-        std::unique_lock invocation_lock(runtime->invocation_mutex, std::try_to_lock);
-        if (!invocation_lock.owns_lock() || bridge.closing.load(std::memory_order_acquire))
-            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-        const auto found = bridge.actions.find(action_id_utf8);
-        if (found == bridge.actions.end() || found->second == nullptr)
-            return SAO_ERR_HANDLE_INVALID;
-        std::string message;
-        emma_error error;
-        (void)runtime->interp->call_function(found->second, {}, message, &error);
-        if (error.kind != error_kind::none || !message.empty()) {
-            if (error.kind == error_kind::none) {
-                error.kind = error_kind::runtime_error;
-                error.status = SAO_ERR_OS_CALL_FAILED;
-                error.message = std::move(message);
-            }
-            const int32_t status = sao_plugins_emma_error_status(&error);
-            runtime->last_error = std::move(error);
-            return status;
-        }
-        runtime->last_error = {};
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1117,6 +1101,86 @@ int32_t submit_action_result(sao::plugins::loader::entity_action_result_sink_v2_
         result_json_utf8,
     };
     return sink(&result, sink_user_data);
+}
+
+int32_t submit_emma_action_value(
+    emma_plugin_runtime& runtime, const emma_value& value, bool null_is_decline,
+    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+    void* result_sink_user_data) {
+    if (std::holds_alternative<std::nullptr_t>(value)) {
+        const int32_t status = submit_action_result(result_sink, result_sink_user_data,
+                                                    !null_is_decline, nullptr);
+        if (status == SAO_OK) {
+            runtime.last_error = {};
+        } else {
+            remember_action_error(runtime, status,
+                                  null_is_decline ? "action result sink rejected decline"
+                                                  : "action result sink rejected result");
+        }
+        return status;
+    }
+
+    std::string serialized;
+    std::string conversion_error;
+    if (!detail::serialize_emma_value(value, serialized, conversion_error)) {
+        remember_action_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                              "action result cannot be converted to JSON: " + conversion_error);
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    const int32_t status =
+        submit_action_result(result_sink, result_sink_user_data, true, serialized.c_str());
+    if (status == SAO_OK) {
+        runtime.last_error = {};
+    } else {
+        remember_action_error(runtime, status, "action result sink rejected result");
+    }
+    return status;
+}
+
+int32_t SAO_PLUGINS_CALL native_menu_action_v2(
+    const char* action_id_utf8, const char* payload_json_utf8,
+    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+    void* result_sink_user_data, void* user_data) {
+    if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
+        user_data == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    auto& bridge = *static_cast<emma_menu_bridge*>(user_data);
+    auto* runtime = bridge.runtime;
+    if (runtime == nullptr || bridge.closing.load(std::memory_order_acquire))
+        return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+    try {
+        runtime_invocation_guard guard(runtime);
+        if (!guard.acquired())
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        std::unique_lock invocation_lock(runtime->invocation_mutex, std::try_to_lock);
+        if (!invocation_lock.owns_lock() || bridge.closing.load(std::memory_order_acquire))
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        const auto found = bridge.actions.find(action_id_utf8);
+        if (found == bridge.actions.end() || found->second == nullptr) {
+            const emma_value declined = nullptr;
+            return submit_emma_action_value(*runtime, declined, true, result_sink,
+                                            result_sink_user_data);
+        }
+
+        std::string message;
+        emma_error error;
+        emma_value value = runtime->interp->call_function(found->second, {}, message, &error);
+        if (error.kind != error_kind::none || !message.empty()) {
+            if (error.kind == error_kind::none) {
+                error.kind = error_kind::runtime_error;
+                error.status = SAO_ERR_OS_CALL_FAILED;
+                error.message = std::move(message);
+            }
+            const int32_t status = sao_plugins_emma_error_status(&error);
+            runtime->last_error = std::move(error);
+            return status;
+        }
+        return submit_emma_action_value(*runtime, value, false, result_sink,
+                                        result_sink_user_data);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 int32_t SAO_PLUGINS_CALL
@@ -1167,31 +1231,8 @@ native_action_handler(const char* action_id_utf8, const char* payload_json_utf8,
             return status;
         }
 
-        if (std::holds_alternative<std::nullptr_t>(value)) {
-            const int32_t status =
-                submit_action_result(result_sink, result_sink_user_data, false, nullptr);
-            if (status == SAO_OK) {
-                runtime->last_error = {};
-            } else {
-                remember_action_error(*runtime, status, "action result sink rejected decline");
-            }
-            return status;
-        }
-
-        std::string serialized;
-        if (!detail::serialize_emma_value(value, serialized, conversion_error)) {
-            remember_action_error(*runtime, SAO_ERR_INVALID_ARGUMENT,
-                                  "action result cannot be converted to JSON: " + conversion_error);
-            return SAO_ERR_INVALID_ARGUMENT;
-        }
-        const int32_t status =
-            submit_action_result(result_sink, result_sink_user_data, true, serialized.c_str());
-        if (status == SAO_OK) {
-            runtime->last_error = {};
-        } else {
-            remember_action_error(*runtime, status, "action result sink rejected result");
-        }
-        return status;
+        return submit_emma_action_value(*runtime, value, true, result_sink,
+                                        result_sink_user_data);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -1227,15 +1268,17 @@ int32_t register_menu_provider(emma_plugin_runtime& runtime, emma_menu_bridge& m
         root.icon_utf8 = menu.icon.c_str();
         root.priority = menu.priority;
 
-        sao::plugins::loader::context_entity_provider_descriptor provider{};
+        sao::plugins::loader::context_entity_provider_descriptor_v3 provider{};
         provider.struct_size = sizeof(provider);
         provider.provider_id_utf8 = menu.provider_id.c_str();
-        provider.snapshot = native_menu_snapshot;
-        provider.action_handler = native_menu_action;
+        provider.snapshot = native_menu_snapshot_v2;
+        provider.action_handler = nullptr;
         provider.user_data = &menu;
         provider.root_contribution = &root;
-        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider(runtime.context,
-                                                                              &provider);
+        provider.action_handler_v2 = native_menu_action_v2;
+        provider.action_user_data = &menu;
+        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3(
+            runtime.context, &provider);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }

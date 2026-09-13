@@ -10,8 +10,10 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -801,11 +803,14 @@ int build_menu_snapshot_body(lua_State* state) {
     return 0;
 }
 
-int32_t SAO_PLUGINS_CALL native_menu_snapshot(sao::plugins::loader::entity_menu_row* rows,
-                                              std::uint32_t capacity, std::uint32_t* out_count,
-                                              std::uint64_t* out_revision, void* user_data) {
-    if (out_count == nullptr || out_revision == nullptr || user_data == nullptr ||
-        (capacity > 0 && rows == nullptr)) {
+int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
+    void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes,
+    std::uint32_t* out_count, std::uint64_t* out_revision,
+    sao::plugins::loader::entity_snapshot_content_token_t* out_content_token,
+    std::uint32_t* out_row_stride_bytes, void* user_data) {
+    if (out_count == nullptr || out_revision == nullptr || out_content_token == nullptr ||
+        out_row_stride_bytes == nullptr || user_data == nullptr ||
+        (capacity > 0 && rows == nullptr) || (rows == nullptr && row_stride_bytes != 0)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     auto* bridge = static_cast<menu_bridge*>(user_data);
@@ -836,13 +841,30 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot(sao::plugins::loader::entity_menu_
         }
         *out_count = static_cast<std::uint32_t>(bridge->rows.size());
         *out_revision = bridge->revision;
+        *out_content_token =
+            bridge->revision == sao::plugins::loader::kInvalidEntitySnapshotContentToken
+                ? 1
+                : bridge->revision;
+        *out_row_stride_bytes =
+            bridge->rows.empty()
+                ? 0
+                : static_cast<std::uint32_t>(
+                      sizeof(sao::plugins::loader::entity_menu_row_v2));
         if (capacity < bridge->rows.size()) {
             return SAO_ERR_BUFFER_TOO_SMALL;
         }
+        if (!bridge->rows.empty() &&
+            row_stride_bytes < sizeof(sao::plugins::loader::entity_menu_row_v2)) {
+            return sao::plugins::loader::SAO_PLUGINS_ERR_ABI_MISMATCH;
+        }
+        if (!bridge->rows.empty() &&
+            row_stride_bytes % alignof(sao::plugins::loader::entity_menu_row_v2) != 0) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
         for (std::size_t index = 0; index < bridge->rows.size(); ++index) {
             const auto& source = bridge->rows[index];
-            rows[index] = {
-                sizeof(sao::plugins::loader::entity_menu_row),
+            const sao::plugins::loader::entity_menu_row_v2 row{
+                sizeof(sao::plugins::loader::entity_menu_row_v2),
                 bridge->contribution_id.c_str(),
                 bridge->name.c_str(),
                 bridge->icon.c_str(),
@@ -856,6 +878,8 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot(sao::plugins::loader::entity_menu_
                 static_cast<std::uint8_t>(source.close_menu_before),
                 {},
             };
+            std::memcpy(static_cast<std::byte*>(rows) + index * row_stride_bytes, &row,
+                        sizeof(row));
         }
         return SAO_OK;
     } catch (...) {
@@ -863,9 +887,43 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot(sao::plugins::loader::entity_menu_
     }
 }
 
-int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const char*,
-                                            void* user_data) {
-    if (action_id_utf8 == nullptr || user_data == nullptr) {
+int32_t submit_action_result(
+    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+    void* result_sink_user_data, bool handled, const char* result_json_utf8) noexcept {
+    if (result_sink == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    const sao::plugins::loader::entity_action_result_v2 result{
+        sizeof(sao::plugins::loader::entity_action_result_v2),
+        sao::plugins::loader::kEntityActionAbiVersion2,
+        static_cast<std::uint8_t>(handled),
+        {},
+        result_json_utf8,
+    };
+    return result_sink(&result, result_sink_user_data);
+}
+
+int32_t submit_lua_action_result(
+    lua_State* state, int index, bool nil_is_decline,
+    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+    void* result_sink_user_data, std::string& conversion_error) {
+    if (lua_isnil(state, index))
+        return submit_action_result(result_sink, result_sink_user_data, !nil_is_decline, nullptr);
+
+    detail::json result_value;
+    if (!detail::stack_to_json(state, index, result_value, conversion_error))
+        return SAO_ERR_INVALID_ARGUMENT;
+    std::string serialized;
+    if (!detail::serialize_json(result_value, serialized, conversion_error))
+        return SAO_ERR_INVALID_ARGUMENT;
+    return submit_action_result(result_sink, result_sink_user_data, true, serialized.c_str());
+}
+
+int32_t SAO_PLUGINS_CALL native_menu_action_v2(
+    const char* action_id_utf8, const char* payload_json_utf8,
+    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+    void* result_sink_user_data, void* user_data) {
+    if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
+        user_data == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     auto* bridge = static_cast<menu_bridge*>(user_data);
@@ -874,24 +932,32 @@ int32_t SAO_PLUGINS_CALL native_menu_action(const char* action_id_utf8, const ch
         const int32_t status = detail::acquire_state_operation(bridge->state, operation);
         if (status != SAO_OK)
             return status;
-        if (bridge->closing) {
+        lua_State* state = operation.state();
+        if (bridge->closing)
             return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-        }
         const auto found = bridge->actions.find(action_id_utf8);
         if (found == bridge->actions.end())
-            return SAO_ERR_HANDLE_INVALID;
-        lua_rawgeti(bridge->state, LUA_REGISTRYINDEX, found->second);
-        if (!lua_isfunction(bridge->state, -1)) {
-            lua_pop(bridge->state, 1);
+            return submit_action_result(result_sink, result_sink_user_data, false, nullptr);
+
+        const int base = lua_gettop(state);
+        lua_rawgeti(state, LUA_REGISTRYINDEX, found->second);
+        if (!lua_isfunction(state, -1)) {
+            lua_settop(state, base);
             return SAO_ERR_HANDLE_INVALID;
         }
-        detail::clear_state_error_locked(bridge->state);
-        if (lua_pcall(bridge->state, 0, 0, 0) != LUA_OK) {
-            detail::capture_state_error_locked(bridge->state, -1);
-            lua_pop(bridge->state, 1);
+        detail::clear_state_error_locked(state);
+        if (lua_pcall(state, 0, 1, 0) != LUA_OK) {
+            detail::capture_state_error_locked(state, -1);
+            lua_settop(state, base);
             return SAO_ERR_OS_CALL_FAILED;
         }
-        return SAO_OK;
+        std::string conversion_error;
+        const int32_t result_status = submit_lua_action_result(
+            state, -1, false, result_sink, result_sink_user_data, conversion_error);
+        if (!conversion_error.empty())
+            detail::set_state_error_locked(state, std::move(conversion_error));
+        lua_settop(state, base);
+        return result_status;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -940,31 +1006,11 @@ int32_t SAO_PLUGINS_CALL native_action_handler_v2(
             return SAO_ERR_OS_CALL_FAILED;
         }
 
-        sao::plugins::loader::entity_action_result_v2 result{};
-        result.struct_size = sizeof(result);
-        result.abi_version = sao::plugins::loader::kEntityActionAbiVersion2;
-        if (lua_isnil(state, -1)) {
-            result.handled = 0;
-            const int32_t sink_status = result_sink(&result, result_sink_user_data);
-            lua_settop(state, base);
-            return sink_status;
-        }
-
-        detail::json result_value;
-        if (!detail::stack_to_json(state, -1, result_value, conversion_error)) {
+        const int32_t sink_status = submit_lua_action_result(
+            state, -1, true, result_sink, result_sink_user_data, conversion_error);
+        if (!conversion_error.empty()) {
             detail::set_state_error_locked(state, std::move(conversion_error));
-            lua_settop(state, base);
-            return SAO_ERR_INVALID_ARGUMENT;
         }
-        std::string serialized;
-        if (!detail::serialize_json(result_value, serialized, conversion_error)) {
-            detail::set_state_error_locked(state, std::move(conversion_error));
-            lua_settop(state, base);
-            return SAO_ERR_INVALID_ARGUMENT;
-        }
-        result.handled = 1;
-        result.result_json_utf8 = serialized.c_str();
-        const int32_t sink_status = result_sink(&result, result_sink_user_data);
         lua_settop(state, base);
         return sink_status;
     } catch (...) {
@@ -1001,15 +1047,17 @@ int32_t register_menu_provider(bridge_state& bridge, menu_bridge& menu) noexcept
         root.icon_utf8 = menu.icon.c_str();
         root.priority = menu.priority;
 
-        sao::plugins::loader::context_entity_provider_descriptor provider{};
+        sao::plugins::loader::context_entity_provider_descriptor_v3 provider{};
         provider.struct_size = sizeof(provider);
         provider.provider_id_utf8 = menu.provider_id.c_str();
-        provider.snapshot = native_menu_snapshot;
-        provider.action_handler = native_menu_action;
+        provider.snapshot = native_menu_snapshot_v2;
+        provider.action_handler = nullptr;
         provider.user_data = &menu;
         provider.root_contribution = &root;
-        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider(bridge.context,
-                                                                              &provider);
+        provider.action_handler_v2 = native_menu_action_v2;
+        provider.action_user_data = &menu;
+        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3(
+            bridge.context, &provider);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
