@@ -169,7 +169,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_z_order_check_leak_patterns(
 //   no game        → walk up to 16 siblings; stale the moment a
 //                    non-TOPMOST window sits above the host (the host fell
 //                    out of the topmost band).
-// Non-Windows / null handles return false (no signal, never a forced churn).
+// A missing predecessor mid-walk (host top of chain or spliced out of it
+// entirely — the state unlink produces) reports stale so enforce() keeps
+// asserting instead of quiet-quitting.  Non-Windows / null handles return
+// false (no signal, never a forced churn).
 SAO_UI_API bool SAO_UI_CALL sao_ui_z_order_stale(
     sao_ui_z_order_manager_handle_t handle,
     void* game_hwnd,
@@ -180,8 +183,39 @@ SAO_UI_API bool SAO_UI_CALL sao_ui_z_order_stale(
 // sibling chain so external EnumWindows / z-order walks no longer observe
 // it; the DWM composition tree is untouched.  Requires a V3 dc_mutation
 // provider; without one this fails closed NOT_INITIALIZED.
+//
+// The returned status flattens benign no-op outcomes to OK; read the
+// finer disposition via sao_ui_z_order_last_unlink_state().
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_z_order_unlink_chain(
     sao_ui_z_order_manager_handle_t handle);
+
+// Disposition of the most recent unlink submit attempt.  The flattened
+// SAO_STATUS_OK from sao_ui_z_order_unlink_chain / sao_ui_z_order_enforce
+// intentionally hides the difference between "splice accepted",
+// "already spliced", and "no provider"; this enum restores it for
+// diagnostics and acceptance evidence.
+enum sao_ui_z_order_unlink_state_e : int32_t {
+    // No unlink submit has run since manager create.
+    SAO_UI_Z_ORDER_UNLINK_NONE        = 0,
+    // No dc_mutation coordinator / provider registered (submit skipped
+    // or returned NOT_INITIALIZED) — fails closed by design.
+    SAO_UI_Z_ORDER_UNLINK_NO_PROVIDER = 1,
+    // Coordinator returned CANCELLED: the expected-old compare failed,
+    // i.e. the chain is already spliced — the goal state.
+    SAO_UI_Z_ORDER_UNLINK_CANCELLED   = 2,
+    // The unlink submit was accepted (SAO_STATUS_OK).
+    SAO_UI_Z_ORDER_UNLINK_SPLICED     = 3,
+    // The submit returned a real error status.
+    SAO_UI_Z_ORDER_UNLINK_FAILED      = 4,
+};
+
+// Out-param getter for the most recent unlink disposition.  `handle`
+// and `out_state` must both be non-null.  Returns the
+// sao_ui_z_order_unlink_state_e value recorded by the last
+// submit_z_order_unlink call (under the manager lock).
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_z_order_last_unlink_state(
+    sao_ui_z_order_manager_handle_t handle,
+    int32_t* out_state);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -5,6 +5,7 @@
 #include "sao/engine/ui_spec.h"
 #include "sao/ui/sound.h"
 #include "sao/ui/theme.h"
+#include "sao/ui/widget_chart.h"
 #include "sao/ui/widget_input.h"
 #include "sao/ui/widget_kit.h"
 
@@ -587,6 +588,27 @@ sao_status_t apply_owned_widget_props(OwnedWidget* widget) {
         const int32_t selected = widget->props.value("selected_id", widget->dropdown_selected_id);
         return sao_ui_dropdown_button_select(widget->handle, selected);
     }
+    if (widget->type == "sparkline") {
+        const auto values = widget->props.find("values");
+        if (values == widget->props.end() || !values->is_array() || values->size() > 120U)
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        std::vector<double> samples;
+        samples.reserve(values->size());
+        for (const auto& value : *values) {
+            if (!value.is_number())
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            const double sample = value.get<double>();
+            if (!std::isfinite(sample))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            samples.push_back(sample);
+        }
+        if (!samples.empty()) {
+            const auto [minimum, maximum] = std::minmax_element(samples.begin(), samples.end());
+            if (!std::isfinite(*maximum - *minimum))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        return sao_ui_sparkline_set_values(widget->handle, samples.data(), samples.size());
+    }
     const std::string props = widget->props.dump();
     return sao_ui_widget_apply_props(widget->handle, reinterpret_cast<const uint8_t*>(props.data()),
                                      props.size());
@@ -1092,7 +1114,7 @@ bool is_leaf_type(std::string_view type) noexcept {
     return type == "text" || type == "kv" || type == "bar" || type == "badge" ||
            type == "divider" || type == "spacer" || type == "button" || type == "input" ||
            type == "checkbox" || type == "radio" || type == "slider" || type == "dropdown" ||
-           type == "table" || type == "canvas" || type == "rgba_frame";
+           type == "table" || type == "canvas" || type == "rgba_frame" || type == "sparkline";
 }
 
 bool validate_spec_node(const json& node, int32_t depth, size_t* node_count,
@@ -1102,7 +1124,8 @@ bool validate_spec_node(const json& node, int32_t depth, size_t* node_count,
         return false;
     ++*node_count;
     const std::string type = normalized_type(node);
-    if (!is_container_type(type) && !is_leaf_type(type))
+    if ((!is_container_type(type) && !is_leaf_type(type)) ||
+        (type == "sparkline" && !require_normalized_children))
         return false;
     const auto children = node.find("children");
     const bool has_children = children != node.end();
@@ -1350,6 +1373,8 @@ int32_t widget_kind(const std::string& type) {
         return SAO_UI_WIDGET_SLIDER;
     if (type == "table")
         return SAO_UI_WIDGET_TABLE;
+    if (type == "sparkline")
+        return SAO_UI_WIDGET_SPARKLINE;
     return SAO_UI_WIDGET_TEXT;
 }
 
@@ -1638,6 +1663,11 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
             if (status == SAO_STATUS_OK)
                 status = sao_ui_dropdown_button_set_pick_handler(
                     owned->handle, &panel_dropdown_picked, owned.get());
+        } else if (type == "sparkline") {
+            SaoUiSparklineSpec sparkline{};
+            sparkline.max_points = 120U;
+            sparkline.line_width_px = 2.0F;
+            status = sao_ui_sparkline_create(nullptr, &sparkline, &owned->handle);
         } else {
             status = sao_ui_widget_create(owned->kind, nullptr, &owned->handle);
         }
@@ -1646,9 +1676,11 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
         status = apply_owned_widget_props(owned.get());
         if (status != SAO_STATUS_OK)
             return status;
-        status = sao_ui_widget_set_enabled(owned->handle, owned->enabled);
-        if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_NOT_IMPLEMENTED)
-            return status;
+        if (type != "sparkline") {
+            status = sao_ui_widget_set_enabled(owned->handle, owned->enabled);
+            if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_NOT_IMPLEMENTED)
+                return status;
+        }
         SaoUiLayoutSpec spec{};
         sao_ui_layout_spec_defaults(&spec);
         if (!apply_container_layout_metadata(node, &spec))
@@ -1860,6 +1892,8 @@ sao_status_t migrate_responsive_content_state(sao_ui_panel_s* panel,
         sao_status_t status = apply_owned_widget_props(replacement_entry.get());
         if (status != SAO_STATUS_OK)
             return status;
+        if (replacement_entry->type == "sparkline")
+            continue;
         status = sao_ui_widget_set_enabled(replacement_entry->handle, replacement_entry->enabled);
         if (status != SAO_STATUS_OK)
             return status;
@@ -2828,7 +2862,8 @@ sao_status_t widget_at(sao_ui_panel_s* panel, int32_t x, int32_t y,
     if (hit.widget == nullptr)
         return SAO_STATUS_OK;
     const auto found = content->by_handle.find(hit.widget);
-    if (found != content->by_handle.end() && !found->second->enabled)
+    if (found != content->by_handle.end() &&
+        (!found->second->enabled || found->second->type == "sparkline"))
         return SAO_STATUS_OK;
     *out_widget = hit.widget;
     return SAO_STATUS_OK;
@@ -4565,6 +4600,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
                                : json::parse(props_json_utf8, props_json_utf8 + props_len);
         if (!patch.is_object())
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (const auto disabled = patch.find("disabled");
+            disabled != patch.end() && !disabled->is_boolean())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         std::shared_ptr<PanelContent> content;
         std::string previous_spec;
         std::string candidate_spec;
@@ -4623,7 +4661,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
                 widget->props["enabled"] = widget->enabled;
             }
             sao_status_t status = apply_owned_widget_props(widget);
-            if (status == SAO_STATUS_OK)
+            if (status == SAO_STATUS_OK && widget->type != "sparkline")
                 status = sao_ui_widget_set_enabled(widget->handle, widget->enabled);
             if (status != SAO_STATUS_OK) {
                 widget->props = std::move(previous_props);
@@ -4646,7 +4684,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
             widget->action_args = std::move(previous_args);
             widget->enabled = previous_enabled;
             (void)apply_owned_widget_props(widget);
-            (void)sao_ui_widget_set_enabled(widget->handle, widget->enabled);
+            if (widget->type != "sparkline")
+                (void)sao_ui_widget_set_enabled(widget->handle, widget->enabled);
         }
         return status;
     } catch (...) {

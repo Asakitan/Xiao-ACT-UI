@@ -1,5 +1,6 @@
 #include "sao/ui/overlay_host.h"
 #include "sao/ui/dc_mutation.h"
+#include "overlay_host_internal.h"
 
 #if !defined(SAO_UI_OVERLAY_HOST_TESTING) &&                                                       \
     __has_include("sao_security/anti_screencap/capture_mode.h") &&                                 \
@@ -1696,13 +1697,18 @@ sao_ui_overlay_host_input_passthrough(sao_ui_overlay_host_handle_t handle) {
     }
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
-    sao_ui_overlay_host_handle_t handle, const SaoOverlayHostInputRect* rects, size_t rect_count) {
+namespace sao::ui::overlay_host_detail {
+
+sao_status_t set_input_region_ex(sao_ui_overlay_host_handle_t handle,
+                                 const SaoOverlayHostInputRect* rects, size_t rect_count,
+                                 uint32_t flags) noexcept {
     try {
     HostLease lease(handle);
     if (!lease || handle->hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     if (rect_count != 0 && rects == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if ((flags & ~kInputRegionSkipPrevUnion) != 0u)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (handle->owner_thread_id != ::GetCurrentThreadId()) {
         return SAO_STATUS_ERR_ACCESS_DENIED;
@@ -1727,9 +1733,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
         if (!append_rect(region.get(), rect))
             return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
-    for (const auto& rect : previous) {
-        if (!append_rect(region.get(), rect))
-            return SAO_STATUS_ERR_OS_CALL_FAILED;
+    // Single temporal-union owner: compositor sync_host_rgn already folds
+    // the previous frame's spans into `rects` (and the union-disabled path
+    // is a pixel-exact debugging switch), so skip the host's own stored-
+    // previous union when the caller opts out via the flag.
+    const bool skip_prev_union = (flags & kInputRegionSkipPrevUnion) != 0u;
+    if (!skip_prev_union) {
+        for (const auto& rect : previous) {
+            if (!append_rect(region.get(), rect))
+                return SAO_STATUS_ERR_OS_CALL_FAILED;
+        }
     }
     OwnedRegion rollback_region(::CreateRectRgn(0, 0, 0, 0));
     if (rollback_region.get() == nullptr)
@@ -1743,7 +1756,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
     }
     region.release();
 
-    const bool passthrough = current.empty() && previous.empty();
+    const bool passthrough =
+        current.empty() && (skip_prev_union || previous.empty());
     const sao_status_t passthrough_status = apply_passthrough_unlocked(handle, passthrough);
     if (passthrough_status != SAO_STATUS_OK) {
         if (!api.set_window_rgn(handle->hwnd, rollback_region.get(), TRUE)) {
@@ -1770,6 +1784,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
         }
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+}
+
+} // namespace sao::ui::overlay_host_detail
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_input_region(
+    sao_ui_overlay_host_handle_t handle, const SaoOverlayHostInputRect* rects, size_t rect_count) {
+    return sao::ui::overlay_host_detail::set_input_region_ex(handle, rects, rect_count, 0u);
 }
 
 extern "C" uint32_t SAO_UI_CALL

@@ -36,6 +36,7 @@
 
 #include "dialog_input_internal.h"
 #include "input_router_internal.h"
+#include "overlay_host_internal.h"
 
 #include <algorithm>
 #include <array>
@@ -449,8 +450,21 @@ uint64_t layer_input_writer_revision(const LayerInputState* state) noexcept {
 
 sao_status_t apply_host_input_regions(sao_ui_overlay_host_handle_t host,
                                       const SaoOverlayHostInputRect* rects,
-                                      size_t rect_count) noexcept {
+                                      size_t rect_count, uint32_t flags) noexcept {
+#if defined(_WIN32)
+    // Route the skip-prev-union flag to the host's extended entry point so
+    // the compositor stays the single temporal-union owner; flag-less
+    // callers (legacy_tk rebuild, reset) keep the documented
+    // current-U-previous transaction.
+    return sao::ui::overlay_host_detail::set_input_region_ex(
+        host, rects, rect_count,
+        (flags & kApplyRegionSkipPrevUnion) != 0u
+            ? sao::ui::overlay_host_detail::kInputRegionSkipPrevUnion
+            : 0u);
+#else
+    (void)flags;
     return sao_ui_overlay_host_set_input_region(host, rects, rect_count);
+#endif
 }
 
 sao_status_t apply_host_input_passthrough(sao_ui_overlay_host_handle_t host,

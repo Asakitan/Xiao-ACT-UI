@@ -26,6 +26,10 @@ struct sao_ui_z_order_manager_s {
     uint32_t active_ms = 500;
     sao_ui_dc_mutation_coordinator_handle_t dc_mutation = nullptr;
     SaoZOrderStatus status{};
+    // SaoUiZOrderUnlinkState; written under mu by every
+    // submit_z_order_unlink call so the API surface can distinguish
+    // "never tried" from "cancelled (goal state)" from "real failure".
+    int32_t last_unlink_state = SAO_UI_Z_ORDER_UNLINK_NONE;
 };
 
 namespace {
@@ -84,16 +88,30 @@ sao_status_t submit_physical_rect_scrub(sao_ui_z_order_manager_s* manager, void*
 }
 
 // Physical z-order sibling-chain unlink.  Mirrors the Python authority's
-// final `submit_dc(comp_hwnd, 'host-z-order', 'hide_z_order')` after every
-// enforce.  Two outcomes are benign no-ops by design: NOT_INITIALIZED (no
-// physical provider registered) and CANCELLED (the expected-old compare
-// failed because the chain is already spliced — the goal state).
+// The raw disposition is recorded in manager->last_unlink_state so the
+// flattened OK doesn't erase the distinction callers need for evidence.
+// Callers hold manager->mu.
 sao_status_t submit_z_order_unlink(sao_ui_z_order_manager_s* manager, void* hwnd) {
-    if (manager->dc_mutation == nullptr)
+    if (manager->dc_mutation == nullptr) {
+        manager->last_unlink_state = SAO_UI_Z_ORDER_UNLINK_NO_PROVIDER;
         return SAO_STATUS_OK;
+    }
     const sao_status_t status =
         sao_ui_dc_mutation_coordinator_submit_unlink_z_order(manager->dc_mutation, hwnd,
                                                              kPhysicalRectScrubTimeoutMs);
+    if (status == SAO_STATUS_OK) {
+        manager->last_unlink_state = SAO_UI_Z_ORDER_UNLINK_SPLICED;
+        return SAO_STATUS_OK;
+    }
+    if (status == SAO_STATUS_ERR_NOT_INITIALIZED) {
+        manager->last_unlink_state = SAO_UI_Z_ORDER_UNLINK_NO_PROVIDER;
+        return SAO_STATUS_OK;
+    }
+    if (status == SAO_STATUS_ERR_CANCELLED) {
+        manager->last_unlink_state = SAO_UI_Z_ORDER_UNLINK_CANCELLED;
+        return SAO_STATUS_OK;
+    }
+    manager->last_unlink_state = SAO_UI_Z_ORDER_UNLINK_FAILED;
     return status == SAO_STATUS_ERR_NOT_INITIALIZED || status == SAO_STATUS_ERR_CANCELLED
                ? SAO_STATUS_OK
                : status;
@@ -295,20 +313,23 @@ extern "C" bool SAO_UI_CALL sao_ui_z_order_stale(sao_ui_z_order_manager_handle_t
         for (int slot = 0; slot < 8; ++slot) {
             above = ::GetWindow(above, GW_HWNDPREV);
             if (above == nullptr)
-                return false;
+                return true;
             if (above == game)
                 return false;
         }
         return true;
     }
     // No-game branch: the host is healthy while it stays inside the topmost
-    // band; the first non-TOPMOST window above it means it fell out.
+    // band; the first non-TOPMOST window above it means it fell out.  A
+    // missing predecessor means the host fell off the sibling chain
+    // entirely (post-unlink it is physically spliced out), which is stale —
+    // not healthy — so enforce() re-asserts and resubmits.
     HWND current = ::GetWindow(comp, GW_HWNDPREV);
     if (current == nullptr)
-        return false;
+        return true;
     for (int slot = 0; slot < 16; ++slot) {
         if (current == nullptr)
-            return false;
+            return true;
         const LONG_PTR exstyle = ::GetWindowLongPtrW(current, GWL_EXSTYLE);
         if ((exstyle & WS_EX_TOPMOST) == 0)
             return true;
@@ -332,4 +353,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_unlink_chain(
     if (host_value == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     return submit_z_order_unlink(handle, host_value);
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_last_unlink_state(
+    sao_ui_z_order_manager_handle_t handle, int32_t* out_state) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_state == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(handle->mu);
+    *out_state = handle->last_unlink_state;
+    return SAO_STATUS_OK;
 }

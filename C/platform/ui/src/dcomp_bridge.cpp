@@ -327,6 +327,49 @@ bool valid_external_visual_config(
            std::isfinite(config.opacity) && config.opacity >= 0.0F && config.opacity <= 1.0F;
 }
 
+// Derive the wrapper clip for an external visual in wrapper-local
+// coordinates: the visual rect intersected with the owning bridge's
+// swap-chain extent.  The wrapper sits at offset (config.x, config.y)
+// inside the (bridge->width, bridge->height) extent, so a visual whose
+// rect partially leaves the swap chain keeps only the in-extent part.
+// The clip must be re-derived whenever the bridge extent changes —
+// see sao_ui_dcomp_bridge_resize which calls this for every external
+// visual after ResizeBuffers.
+HRESULT apply_external_visual_clip_bounds(
+    sao::ui::detail::DcompExternalVisual* visual,
+    const sao::ui::detail::DcompExternalVisualConfig& config) noexcept {
+    if (visual == nullptr || visual->wrapper == nullptr || visual->clip == nullptr ||
+        visual->owner == nullptr)
+        return E_INVALIDARG;
+    const float extent_w = static_cast<float>(visual->owner->width);
+    const float extent_h = static_cast<float>(visual->owner->height);
+    const float x = static_cast<float>(config.x);
+    const float y = static_cast<float>(config.y);
+    const float w = static_cast<float>(config.width);
+    const float h = static_cast<float>(config.height);
+    // Wrapper-local clip = visual rect ∩ bridge extent, expressed relative
+    // to the wrapper's own origin.
+    const float left = std::max(0.0F, -x);
+    const float top = std::max(0.0F, -y);
+    float right = std::min(w, extent_w - x);
+    float bottom = std::min(h, extent_h - y);
+    // Degenerate (fully out-of-extent) visual: collapse to an empty rect.
+    if (right < left)
+        right = left;
+    if (bottom < top)
+        bottom = top;
+    HRESULT hr = visual->clip->SetLeft(left);
+    if (SUCCEEDED(hr))
+        hr = visual->clip->SetTop(top);
+    if (SUCCEEDED(hr))
+        hr = visual->clip->SetRight(right);
+    if (SUCCEEDED(hr))
+        hr = visual->clip->SetBottom(bottom);
+    if (SUCCEEDED(hr))
+        hr = visual->wrapper->SetClip(visual->clip);
+    return hr;
+}
+
 HRESULT apply_external_visual_config(
     sao::ui::detail::DcompExternalVisual* visual,
     const sao::ui::detail::DcompExternalVisualConfig& config) noexcept {
@@ -338,15 +381,7 @@ HRESULT apply_external_visual_config(
     if (SUCCEEDED(hr))
         hr = visual->opacity_effect->SetOpacity(config.visible ? config.opacity : 0.0F);
     if (SUCCEEDED(hr))
-        hr = visual->clip->SetLeft(0.0F);
-    if (SUCCEEDED(hr))
-        hr = visual->clip->SetTop(0.0F);
-    if (SUCCEEDED(hr))
-        hr = visual->clip->SetRight(static_cast<float>(config.width));
-    if (SUCCEEDED(hr))
-        hr = visual->clip->SetBottom(static_cast<float>(config.height));
-    if (SUCCEEDED(hr))
-        hr = visual->wrapper->SetClip(visual->clip);
+        hr = apply_external_visual_clip_bounds(visual, config);
     if (SUCCEEDED(hr))
         hr = visual->wrapper->SetEffect(visual->opacity_effect);
     return hr;
@@ -699,6 +734,22 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_dcomp_bridge_resize(
     if (FAILED(hr)) return status_from_hresult(bridge, hr);
     bridge->width = width;
     bridge->height = height;
+    // The extent every external-visual clip was derived from just changed:
+    // re-derive each wrapper clip against the new swap-chain size and batch
+    // them under one Commit.  Keep the first failure for the return status
+    // but keep walking so no visual is left half-applied.
+    HRESULT clip_hr = S_OK;
+    for (auto* visual : bridge->external_visuals) {
+        const HRESULT one =
+            apply_external_visual_clip_bounds(visual, visual->config);
+        if (FAILED(one) && SUCCEEDED(clip_hr))
+            clip_hr = one;
+    }
+    const HRESULT commit_hr = bridge->dc_dev->Commit();
+    if (FAILED(clip_hr))
+        return status_from_hresult(bridge, clip_hr);
+    if (FAILED(commit_hr))
+        return status_from_hresult(bridge, commit_hr);
     return SAO_STATUS_OK;
 #else
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;

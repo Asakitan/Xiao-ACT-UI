@@ -1,5 +1,21 @@
 # Classic SAO implementation and acceptance
 
+## Process monitoring and Preview shutdown continuation
+
+The version-1 panel specification accepts a noninteractive `sparkline` leaf with
+at most 120 finite `values` and a finite numeric span. Creation, responsive rebuild,
+updates and rollback use typed chart operations; pointer interaction bypasses the
+generic widget state APIs, and the painter resolves the current theme. Legacy
+unversioned chart nodes are rejected rather than silently normalized away.
+The process page publishes CPU/memory curves from up to 60 real samples, plus CPU,
+working set, threads, architecture and system summary values, with twelve rows per
+page. Missing/first samples and interrupted intervals are not replaced by zeros.
+Preview exits outside message dispatch, cancels queued refresh once, suppresses
+late input and preserves quit codes. Debug/RelWithDebInfo compile; the six-case
+Debug window probe passed, including populated charts, resize, synchronous close
+and nonzero quit. The reported original hang was not reproduced. The packaging
+statements below are the pre-continuation ship snapshot; no ship was refreshed.
+
 Current packaging authority (September 13): RelWithDebInfo and Hardened fresh
 acceptance each contains 22 directly loadable PEs and 76 exact manifest files plus
 the authenticated runtime bundle. The refreshed Debug ship has the same 22-PE/
@@ -15,7 +31,8 @@ The current Debug, RelWithDebInfo, and Hardened build-tree DLLs export UI ABI 1.
 (`65552`) and AI Editor ABI 1.2 (`65538`); each ship carries those inputs only in
 the authenticated bundle. UI minor 16 append-only adds tracked DC-mutation
 submit/wait/destroy while retaining the minor-15 Link End surface and all prior
-structure sizes. Debug build and ship bootstrap/bundle hashes match.
+structure sizes. Tracked submissions use unique internal sequence keys and bypass
+ordinary coalescing so each wait observes its own executor result.
 
 The developer `sao_ui_preview` target now participates in the default build.
 This prevents a stale preview executable from retaining descriptive pre-rename
@@ -445,3 +462,49 @@ the suppressed owner with the rt_io window-rect controller and a coordinator reg
 hControl, then submits the rcWindow `(0,0,1,1)` decoy and the `OVERLAY_EXSTYLE_MASK` ExStyle
 transaction. Both mutations degrade to `SAO_STATUS_OK` when no physical provider is installed, which
 is the same USER32/DWM-only behaviour the host's own scrub path already had.
+
+## Presentation pacing, region ownership and z-order evidence (session 43)
+
+Refresh pacing. `sao_ui_scheduler` detects the committed display mode via
+`EnumDisplaySettingsW(ENUM_CURRENT_SETTINGS)` over every active display device and takes the
+fastest rate (clamped 60-240 Hz), falling back to the primary-device mode query and then
+`GetDeviceCaps(VREFRESH)`. The tick thread owns no HWND, so `WM_DISPLAYCHANGE` cannot reach it;
+it re-probes every ~5 s and re-phases the deadline when the detected rate changes. The wait loop
+coarse-sleeps until ~1.5 ms before the deadline and then spins with `yield`, so jitter rides the
+spin window instead of a full timer quantum. `sao_ui_scheduler_set_refresh_rate(hz)` pins the
+cadence (clamped 1-240, disables re-probe) or releases to auto (`hz <= 0`);
+`sao_ui_scheduler_refresh_hz` reports the currently applied rate. A non-zero
+`SaoSchedulerConfig::target_hz` counts as a pin and also disables the re-probe.
+
+Single temporal-union owner. `apply_host_input_regions` gained a `kApplyRegionSkipPrevUnion`
+flag routed to `sao::ui::overlay_host_detail::set_input_region_ex` (new internal seam in
+`overlay_host_internal.h`; the public `sao_ui_overlay_host_set_input_region` keeps the documented
+current-U-previous transaction). `sao_ui_compositor_sync_host_rgn` always passes the flag: when
+`enable_temporal_union` is on the emitted spans already fold the previous frame, and when it is
+off the path is meant to be pixel-exact — in both cases the host must not stack its own stored
+`previous_input_rects` union. Legacy router paths (`reset_host_input`, the `legacy_tk` rebuild in
+`input.cpp`) keep flag 0 and therefore the host-side union.
+
+Idle-frame skip. `sao_ui_compositor_s` records `presented_bridge` plus `presented_extent_w/h`
+(gpu_composition_extent_locked output) after every successful present, and every bridge teardown
+clears `presented_bridge` to nullptr under `compositor->mtx` — an allocator-reused address can
+never equal nullptr, so a recycled bridge cannot masquerade as presented (ABA-safe). A present is
+skipped only when the live bridge still equals `presented_bridge`, no layer has `bgra_dirty`, no
+visible non-proxy layer uses `d3d11_render_fn` (those are time-parameterized and must tick), and
+the current extent equals the recorded one. The early return preserves the
+`callback_failed ? UNKNOWN : OK` tail status. CPU, GPU and post-recovery success paths all record
+the bridge/extent; the GPU path only records when a non-empty frame actually reached the bridge.
+
+External-visual clip bounds. `apply_external_visual_clip_bounds` derives each wrapper clip as the
+visual rect intersected with the bridge extent in wrapper-local coordinates (degenerate results
+collapse to an empty rect) and is shared by `apply_external_visual_config` and
+`sao_ui_dcomp_bridge_resize`, which re-derives every external visual's clip after
+`ResizeBuffers` under a single `dc_dev->Commit()`, keeping the first failure for the return
+status.
+
+Z-order probes. `sao_ui_z_order_stale` now reports stale when the predecessor walk ends without
+a predecessor — a host physically spliced out of the sibling chain by hide_z_order, or one
+sitting at the chain top, both mean "target z-state unverifiable" rather than healthy, so
+`enforce` re-asserts instead of quiet-quitting. The flattened OK from the unlink path no longer
+erases evidence: `sao_ui_z_order_last_unlink_state` exposes NONE / NO_PROVIDER / CANCELLED /
+SPLICED / FAILED, recorded under the manager lock by every `submit_z_order_unlink` call.

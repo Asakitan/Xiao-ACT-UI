@@ -3,9 +3,20 @@
 // Python authoritative source: `sao_auto/python/render/overlay_scheduler.py` (395 lines)
 //
 // One `after`-loop-equivalent tick at the monitor's refresh rate
-// (auto-detected on Windows via GetDeviceCaps(VREFRESH); clamps
-// 60-240 Hz).  Uses a high-resolution perf-counter deadline so the
-// cadence does not drift.
+// (auto-detected on Windows via EnumDisplaySettingsW(dmDisplayFrequency)
+// over every active display, fastest rate wins; GetDeviceCaps(VREFRESH)
+// is the fallback; clamps 60-240 Hz).  Uses a high-resolution
+// perf-counter deadline so the cadence does not drift.
+//
+// ── Pacing model ───────────────────────────────────────────
+//   Each tick coarse-sleeps until ~1.5 ms before the deadline, then
+//   spins with yield — sleep granularity follows the engaged timer
+//   resolution, so the spin window absorbs the sub-millisecond tail
+//   instead of paying a full quantum of overshoot per frame.
+//   The tick thread owns no HWND and cannot see WM_DISPLAYCHANGE; it
+//   re-probes the refresh rate every ~5 s and re-phases the deadline
+//   when the committed mode changes.  sao_ui_scheduler_set_refresh_rate
+//   pins a rate (disabling the re-probe) or releases back to auto.
 //
 // ── timeBeginPeriod(1) requirement ──────────────────────────
 //   Without `winmm.timeBeginPeriod(1)`, Windows' scheduler quantum
@@ -52,8 +63,9 @@ extern "C" {
 typedef struct sao_ui_scheduler_s* sao_ui_scheduler_handle_t;
 
 struct SaoSchedulerConfig {
-    // 0 → auto-detect via GetDeviceCaps(VREFRESH), clamped 60-240 Hz.
-    // Non-zero overrides (test-only).
+    // 0 → auto-detect via EnumDisplaySettingsW over the active displays,
+    // clamped 60-240 Hz, with a live re-probe while running.
+    // Non-zero pins the cadence (test-only).
     int32_t     target_hz;
 
     // Cap on idle skip-n even under extreme pressure.  Default 4
@@ -136,6 +148,20 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_scheduler_get_stats(
 // Detect refresh rate directly (helper without owning a scheduler).
 // Returns Hz clamped to 60-240; 60 on failure.
 SAO_UI_API int32_t SAO_UI_CALL sao_ui_scheduler_detect_refresh_hz(void);
+// Pin or release the pacing rate.  hz > 0 pins the cadence (clamped
+// 1-240 Hz) and disables the periodic re-probe; hz <= 0 releases back
+// to auto-detect, re-probing immediately.  Callable before or after
+// start; the tick thread picks the new frame interval up at the next
+// deadline.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_scheduler_set_refresh_rate(
+    sao_ui_scheduler_handle_t handle,
+    int32_t hz);
+
+// The currently applied pacing rate in Hz (detected or pinned value,
+// whichever is live).  Returns the 60 Hz default for a null handle.
+SAO_UI_API int32_t SAO_UI_CALL sao_ui_scheduler_refresh_hz(
+    sao_ui_scheduler_handle_t handle);
+
 
 #ifdef __cplusplus
 }  // extern "C"

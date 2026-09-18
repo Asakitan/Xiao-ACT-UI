@@ -64,9 +64,18 @@ sao_status_t invalidate_layer_input(LayerInputState* state, void* layer,
 void reset_layer_input(LayerInputState* state) noexcept;
 uint64_t layer_input_writer_revision(const LayerInputState* state) noexcept;
 
+// Flags forwarded to the host's region apply.
+//   kApplyRegionSkipPrevUnion — the caller's rect list already carries
+//      temporal-union coverage (the compositor's sync_host_rgn folds the
+//      previous frame's spans in when enable_temporal_union is on, and
+//      union-off callers want pixel-exact regions), so the host must not
+//      stack its own stored-previous union on top.  Default 0 preserves
+//      the host's documented current-U-previous transaction.
+inline constexpr uint32_t kApplyRegionSkipPrevUnion = 1u << 0u;
+
 sao_status_t apply_host_input_regions(sao_ui_overlay_host_handle_t host,
                                       const SaoOverlayHostInputRect* rects,
-                                      size_t rect_count) noexcept;
+                                      size_t rect_count, uint32_t flags = 0u) noexcept;
 sao_status_t apply_host_input_passthrough(sao_ui_overlay_host_handle_t host,
                                           bool passthrough) noexcept;
 sao_status_t reset_host_input(sao_ui_overlay_host_handle_t host) noexcept;

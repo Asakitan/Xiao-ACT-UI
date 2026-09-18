@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -84,6 +85,49 @@ sao_status_t publish(sao_ui_file_picker_s& state) {
 	return sao_ui_panel_set_spec(state.panel, reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
 }
 
+// Parses "Label|*.ext|Label2|*.ext2" into lowercase extensions; "*" or "*.*"
+// masks accept everything. Directories always pass so navigation is never
+// blocked by a filter.
+bool entry_passes_filter(const sao_ui_file_picker_s& state,
+                         const fs::directory_entry& entry) {
+	if (state.filter.empty() || state.mode == SAO_UI_FILE_PICKER_FOLDER) return true;
+	std::error_code ec;
+	if (entry.is_directory(ec)) return true;
+	std::vector<std::string> extensions;
+	bool match_all = false;
+	size_t pos = 0;
+	while (pos <= state.filter.size() && !match_all) {
+		const size_t bar = state.filter.find('|', pos);
+		const std::string token =
+			state.filter.substr(pos, bar == std::string::npos ? std::string::npos : bar - pos);
+		size_t mask_pos = token.find('*');
+		while (mask_pos != std::string::npos && !match_all) {
+			// One token may carry several masks: "*.log;*.txt".
+			size_t mask_end = token.find_first_of(";|", mask_pos);
+			const std::string mask = token.substr(
+				mask_pos, mask_end == std::string::npos ? std::string::npos : mask_end - mask_pos);
+			if (mask == "*" || mask == "*.*") { match_all = true; break; }
+			const size_t dot = mask.find_last_of('.');
+			if (dot != std::string::npos && dot + 1 < mask.size())
+				extensions.push_back(mask.substr(dot));
+			mask_pos = token.find('*', mask_pos + mask.size());
+		}
+		if (bar == std::string::npos) break;
+		pos = bar + 1;
+	}
+	if (match_all || extensions.empty()) return true;
+	std::string name = utf8(entry.path().filename());
+	std::transform(name.begin(), name.end(), name.begin(),
+		[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	for (auto& ext : extensions) {
+		std::transform(ext.begin(), ext.end(), ext.begin(),
+			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		if (name.size() >= ext.size() && name.compare(name.size() - ext.size(), ext.size(), ext) == 0)
+			return true;
+	}
+	return false;
+}
+
 bool scan(sao_ui_file_picker_s& state, const fs::path& directory) {
 	std::error_code ec;
 	if (!fs::is_directory(directory, ec) || ec) { state.error = "目录不存在或暂时不可访问。"; return false; }
@@ -91,7 +135,9 @@ bool scan(sao_ui_file_picker_s& state, const fs::path& directory) {
 	fs::directory_iterator it(directory, fs::directory_options::skip_permission_denied, ec), end;
 	if (ec) { state.error = "读取目录失败。"; return false; }
 	while (it != end && entries.size() < 4096) {
-		entries.push_back(*it); it.increment(ec);
+		if (entry_passes_filter(state, *it))
+			entries.push_back(*it);
+		it.increment(ec);
 		if (ec) break;
 	}
 	std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {

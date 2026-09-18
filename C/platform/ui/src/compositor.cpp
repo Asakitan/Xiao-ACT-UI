@@ -326,6 +326,16 @@ struct sao_ui_compositor_s {
     bool presented_visible_content{false};
     uint32_t last_present_width{0};
     uint32_t last_present_height{0};
+    // Idle-frame skip bookkeeping (compositor_present_impl).  presented_
+    // bridge identifies which bridge received the last presented frame —
+    // every teardown that nulls dcomp_bridge also clears this under mtx,
+    // so a bridge reallocated at a recycled address can never masquerade
+    // as an already-presented chain (ABA).  presented_extent_* records
+    // the gpu_composition_extent_locked output at that present; a host
+    // resize or content-bounds change forces the next frame through.
+    sao_ui_dcomp_bridge_handle_t presented_bridge{nullptr};
+    uint32_t presented_extent_w{0};
+    uint32_t presented_extent_h{0};
     sao::ui::input_router_detail::LayerInputState* input_state{nullptr};
     size_t input_dispatch_depth{0};
     bool host_callbacks_bound{false};
@@ -2040,6 +2050,7 @@ void invalidate_presentation_bridge_after_device_loss(
     sao_ui_dcomp_bridge_handle_t failed_bridge = nullptr;
     try {
         {
+            compositor->presented_bridge = nullptr;
             std::lock_guard lock(compositor->mtx);
             release_all_composition_visuals_locked(compositor);
 #if defined(_WIN32)
@@ -2110,6 +2121,7 @@ sao_status_t mutate_composition_slot(sao_ui_composition_slot_handle_t slot,
                 if (visual_status == SAO_STATUS_ERR_DEVICE_LOST) {
                     release_all_composition_visuals_locked(compositor);
                     failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
+                    compositor->presented_bridge = nullptr;
                 } else if (visual_status != SAO_STATUS_OK) {
                     return visual_status;
                 }
@@ -2644,6 +2656,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_composition_slot_create(
         if (bind_status != SAO_STATUS_OK) {
             if (bind_status == SAO_STATUS_ERR_DEVICE_LOST) {
                 release_all_composition_visuals_locked(compositor);
+                compositor->presented_bridge = nullptr;
                 auto* failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
                 sao_ui_dcomp_bridge_destroy(failed_bridge);
             }
@@ -2846,6 +2859,7 @@ sao_ui_composition_slot_try_destroy(sao_ui_composition_slot_handle_t slot) {
                     if (detach_status == SAO_STATUS_ERR_DEVICE_LOST) {
                         release_all_composition_visuals_locked(compositor);
                         failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
+                        compositor->presented_bridge = nullptr;
                     }
                 }
             }
@@ -2928,6 +2942,7 @@ sao_ui_composition_slot_commit(sao_ui_composition_slot_handle_t slot) {
             status = sao::ui::detail::commit_dcomp_external_visual(slot->visual);
             if (status == SAO_STATUS_ERR_DEVICE_LOST) {
                 release_all_composition_visuals_locked(compositor);
+                compositor->presented_bridge = nullptr;
                 failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
             }
         }
@@ -3903,6 +3918,7 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
                     release_layer_gpu_surface(layer.get());
                 }
                 release_master_gpu_resources(compositor);
+                compositor->presented_bridge = nullptr;
             }
             auto* failed_bridge = std::exchange(compositor->dcomp_bridge, nullptr);
             sao_ui_dcomp_bridge_destroy(failed_bridge);
@@ -3956,10 +3972,34 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
 
 #if defined(_WIN32)
     bool use_native_gpu = false;
+    bool idle_frame_skip = false;
     {
         std::lock_guard<std::mutex> lock(compositor->mtx);
         use_native_gpu = has_visible_native_layer_locked(compositor);
+        // Skip the compose+upload+present entirely when nothing can have
+        // changed: the same bridge still holds the last presented frame
+        // (teardowns clear presented_bridge under mtx), every layer is
+        // clean, no time-parameterized d3d11_render_fn layer is visible,
+        // and the presentation extent (host rect, or content bounds
+        // without a host) matches what the bridge already shows.
+        if (compositor->dcomp_bridge == compositor->presented_bridge &&
+            !std::ranges::any_of(compositor->layers, [](const auto& layer) {
+                return layer->bgra_dirty;
+            }) &&
+            !std::ranges::any_of(compositor->layers, [](const auto& layer) {
+                return !layer->composition_input_proxy && layer->visible &&
+                       layer->alpha > 0.0F && layer->d3d11_render_fn != nullptr;
+            })) {
+            uint32_t extent_w = 0;
+            uint32_t extent_h = 0;
+            idle_frame_skip =
+                gpu_composition_extent_locked(compositor, &extent_w, &extent_h) &&
+                extent_w == compositor->presented_extent_w &&
+                extent_h == compositor->presented_extent_h;
+        }
     }
+    if (idle_frame_skip)
+        return callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_OK;
     if (use_native_gpu) {
         const float seconds =
             std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch())
@@ -4014,6 +4054,7 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
                     release_shared_texture_objects(layer.get());
                     release_layer_gpu_surface(layer.get());
                 }
+                compositor->presented_bridge = nullptr;
                 release_master_gpu_resources(compositor);
             }
             sao_ui_dcomp_bridge_destroy(compositor->dcomp_bridge);
@@ -4022,6 +4063,18 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
             gpu_status = sao_ui_d3d11_device_recreate(compositor->d3d11_device, &removed_reason);
             if (gpu_status == SAO_STATUS_OK) {
                 SaoDcompBridgeConfig bridge_config{};
+                // A frame actually reached this bridge — record the
+                // chain + extent that frame represents so an identical
+                // next tick can skip the whole pipeline.
+                compositor->last_present_width = gpu_width;
+                compositor->last_present_height = gpu_height;
+                compositor->presented_bridge = compositor->dcomp_bridge;
+                uint32_t extent_w = 0;
+                uint32_t extent_h = 0;
+                if (gpu_composition_extent_locked(compositor, &extent_w, &extent_h)) {
+                    compositor->presented_extent_w = extent_w;
+                    compositor->presented_extent_h = extent_h;
+                }
                 bridge_config.hwnd = sao_ui_overlay_host_hwnd(compositor->host);
                 bridge_config.d3d11_device = sao_ui_d3d11_device_ptr(compositor->d3d11_device);
                 bridge_config.alpha_mode = 1;
@@ -4114,6 +4167,17 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
                 compositor->last_present_width = width;
                 compositor->last_present_height = height;
             }
+            compositor->presented_bridge = compositor->dcomp_bridge;
+#if defined(_WIN32)
+            {
+                uint32_t extent_w = 0;
+                uint32_t extent_h = 0;
+                if (gpu_composition_extent_locked(compositor, &extent_w, &extent_h)) {
+                    compositor->presented_extent_w = extent_w;
+                    compositor->presented_extent_h = extent_h;
+                }
+            }
+#endif
             for (const auto& presented : presented_revisions) {
                 const auto it = find_layer_it(compositor, presented.layer);
                 if (it != compositor->layers.end() &&
@@ -4139,6 +4203,7 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
         }
         release_master_gpu_resources(compositor);
 #endif
+        compositor->presented_bridge = nullptr;
     }
     sao_ui_dcomp_bridge_destroy(compositor->dcomp_bridge);
     compositor->dcomp_bridge = nullptr;
@@ -4184,6 +4249,17 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
             compositor->last_present_width = width;
             compositor->last_present_height = height;
         }
+        compositor->presented_bridge = compositor->dcomp_bridge;
+#if defined(_WIN32)
+        {
+            uint32_t extent_w = 0;
+            uint32_t extent_h = 0;
+            if (gpu_composition_extent_locked(compositor, &extent_w, &extent_h)) {
+                compositor->presented_extent_w = extent_w;
+                compositor->presented_extent_h = extent_h;
+            }
+        }
+#endif
         for (const auto& presented : presented_revisions) {
             const auto it = find_layer_it(compositor, presented.layer);
             if (it != compositor->layers.end() && (*it)->visual_revision == presented.revision) {
@@ -4812,8 +4888,14 @@ sao_ui_compositor_sync_host_rgn(sao_ui_compositor_handle_t compositor) {
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    // The compositor is the single temporal-union owner: when
+    // enable_temporal_union is set the spans in `rects` already fold the
+    // previous frame's emits, and when it is clear the path is meant to be
+    // pixel-exact — in both cases the host must not stack its own
+    // stored-previous union on top.
     return sao::ui::input_router_detail::apply_host_input_regions(
-        compositor->host, rects.empty() ? nullptr : rects.data(), rects.size());
+        compositor->host, rects.empty() ? nullptr : rects.data(), rects.size(),
+        sao::ui::input_router_detail::kApplyRegionSkipPrevUnion);
 }
 
 extern "C" sao_status_t SAO_UI_CALL

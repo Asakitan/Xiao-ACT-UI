@@ -84,18 +84,54 @@ double perf_now_sec() {
 #endif
 }
 
+// Refresh detection via EnumDisplaySettingsW's dmDisplayFrequency — it
+// reports the mode actually committed to the display, where
+// GetDeviceCaps(VREFRESH) can lag on dynamic-refresh panels or right
+// after boot.  Every active display device is sampled and the fastest
+// rate wins so a mixed-refresh multi-monitor rig paces at the panel
+// most likely to clamp the overlay.  dmDisplayFrequency values 0/1 are
+// the hardware-default sentinels, not real rates.  The scheduler thread
+// re-probes this every ~5 s (see scheduler_thread_main) so a monitor or
+// mode change retargets pacing without a recreate.
 int32_t detect_refresh_hz_impl() {
 #if defined(_WIN32)
-    HDC hdc = ::GetDC(nullptr);
-    if (hdc == nullptr) {
-        return kDefaultHz;
+    int32_t best = 0;
+    for (DWORD index = 0;; ++index) {
+        DISPLAY_DEVICEW device{};
+        device.cb = sizeof(device);
+        if (!::EnumDisplayDevicesW(nullptr, index, &device, 0))
+            break;
+        if ((device.StateFlags & DISPLAY_DEVICE_ACTIVE) == 0)
+            continue;
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (::EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS, &mode) &&
+            mode.dmDisplayFrequency > 1) {
+            best = std::max<int32_t>(best, static_cast<int32_t>(mode.dmDisplayFrequency));
+        }
     }
-    const int rate = ::GetDeviceCaps(hdc, VREFRESH);
-    ::ReleaseDC(nullptr, hdc);
-    if (rate <= 1) {
-        return kDefaultHz;
+    if (best == 0) {
+        // Fallback: primary display device via the NULL-device query.
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (::EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) &&
+            mode.dmDisplayFrequency > 1) {
+            best = static_cast<int32_t>(mode.dmDisplayFrequency);
+        }
     }
-    return std::max<int32_t>(kMinHz, std::min<int32_t>(kMaxHz, rate));
+    if (best == 0) {
+        HDC hdc = ::GetDC(nullptr);
+        if (hdc != nullptr) {
+            const int rate = ::GetDeviceCaps(hdc, VREFRESH);
+            ::ReleaseDC(nullptr, hdc);
+            if (rate > 1) {
+                best = rate;
+            }
+        }
+    }
+    if (best == 0)
+        return kDefaultHz;
+    return std::max<int32_t>(kMinHz, std::min<int32_t>(kMaxHz, best));
 #else
     return kDefaultHz;
 #endif
@@ -104,9 +140,15 @@ int32_t detect_refresh_hz_impl() {
 }  // namespace
 
 struct sao_ui_scheduler_s {
-    // Config-derived cadence.
-    int32_t target_hz = kDefaultHz;
-    double  frame_sec = 1.0 / kDefaultHz;
+    // Config-derived cadence.  Atomics: the tick thread reads them every
+    // frame while set_refresh_rate() / the periodic re-probe can rewrite
+    // them from another thread or mid-run.
+    std::atomic<int32_t> target_hz{kDefaultHz};
+    std::atomic<double>  frame_sec{1.0 / kDefaultHz};
+    // >0 → pacing is pinned at this rate (config target_hz or
+    // set_refresh_rate); 0 → auto-detected cadence with the periodic
+    // re-probe live.
+    std::atomic<int32_t> refresh_override_hz{0};
     int32_t max_idle_skip_n = kDefaultMaxIdleSkipN;
     bool    engage_time_period = true;
     bool    enable_pressure_floor = true;
@@ -190,7 +232,20 @@ void scheduler_thread_main(sao_ui_scheduler_s* self) {
     }
 #endif
 
-    double next_deadline = perf_now_sec() + self->frame_sec;
+    // Cadence model: coarse-sleep until ~1.5 ms before the deadline, then
+    // spin with yield.  sleep_for only guarantees "at least" the asked
+    // duration — its overshoot matches the engaged timer resolution — so
+    // parking the CPU until just before the deadline and spinning the
+    // remainder keeps tick jitter near the spin window instead of the
+    // timer quantum.
+    constexpr double kSpinWindowSec = 0.0015;
+    constexpr double kMinSleepSec = 0.0005;
+    // The background thread owns no HWND, so WM_DISPLAYCHANGE cannot reach
+    // it; this interval re-probes EnumDisplaySettingsW instead.
+    constexpr double kRefreshProbeIntervalSec = 5.0;
+
+    double next_deadline = perf_now_sec() + self->frame_sec.load();
+    double next_refresh_probe = perf_now_sec() + kRefreshProbeIntervalSec;
     double avg_ms_ewma = 0.0;
 
     while (!self->stop_requested.load()) {
@@ -198,13 +253,13 @@ void scheduler_thread_main(sao_ui_scheduler_s* self) {
         double now = perf_now_sec();
         while (now < next_deadline && !self->stop_requested.load()) {
             const double remaining = next_deadline - now;
-            if (remaining > 0.003) {
-                // Coarse sleep with 1 ms resolution (timeBeginPeriod engaged).
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            } else if (remaining > 0.0005) {
-                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            if (remaining > kSpinWindowSec) {
+                const double sleep_sec =
+                    std::max(kMinSleepSec, remaining - kSpinWindowSec);
+                std::this_thread::sleep_for(std::chrono::duration<double>(sleep_sec));
             } else {
-                // Spin the final <0.5 ms with a yield hint.
+                // Inside the spin window: yield keeps the core responsive
+                // while staying within ~one reschedule of the deadline.
                 std::this_thread::yield();
             }
             now = perf_now_sec();
@@ -213,12 +268,13 @@ void scheduler_thread_main(sao_ui_scheduler_s* self) {
         if (self->stop_requested.load()) break;
 
         const double frame_start = now;
+        const double frame_sec_now = self->frame_sec.load();
 
         // Roll deadline forward to catch up if we ran late.
-        next_deadline += self->frame_sec;
-        if (frame_start > next_deadline + self->frame_sec * 4.0) {
+        next_deadline += frame_sec_now;
+        if (frame_start > next_deadline + frame_sec_now * 4.0) {
             // Fell more than 4 frames behind; realign to now.
-            next_deadline = frame_start + self->frame_sec;
+            next_deadline = frame_start + frame_sec_now;
         }
 
         // Snapshot jobs lock-free.
@@ -260,6 +316,23 @@ void scheduler_thread_main(sao_ui_scheduler_s* self) {
             else if (ms > 12.0) floor = 1;
             self->wall_pressure_floor.store(floor);
         }
+
+        // Periodic refresh re-probe (skipped while a pinned rate is set
+        // via SaoSchedulerConfig::target_hz or set_refresh_rate).
+        if (frame_end >= next_refresh_probe) {
+            next_refresh_probe = frame_end + kRefreshProbeIntervalSec;
+            if (self->refresh_override_hz.load() <= 0) {
+                const int32_t detected = detect_refresh_hz_impl();
+                if (detected > 0 && detected != self->target_hz.load()) {
+                    self->target_hz.store(detected);
+                    const double new_frame_sec = 1.0 / static_cast<double>(detected);
+                    self->frame_sec.store(new_frame_sec);
+                    // Re-phase: apply the new cadence from this frame,
+                    // not from the stale accumulated deadline.
+                    next_deadline = frame_end + new_frame_sec;
+                }
+            }
+        }
     }
 
 #if defined(_WIN32)
@@ -288,6 +361,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_scheduler_create(
     if (config != nullptr) {
         if (config->target_hz > 0) {
             hz = std::max<int32_t>(kMinHz, std::min<int32_t>(kMaxHz, config->target_hz));
+            // A config-pinned cadence is an explicit override: the periodic
+            // re-probe must not drift it.
+            s->refresh_override_hz.store(hz);
         } else {
             hz = detect_refresh_hz_impl();
         }
@@ -300,8 +376,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_scheduler_create(
         hz = detect_refresh_hz_impl();
     }
 
-    s->target_hz = hz;
-    s->frame_sec = 1.0 / static_cast<double>(hz);
+    s->target_hz.store(hz);
+    s->frame_sec.store(1.0 / static_cast<double>(hz));
     s->max_idle_skip_n = max_idle_skip_n;
     s->engage_time_period = engage_period;
     s->enable_pressure_floor = enable_floor;
@@ -417,7 +493,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_scheduler_get_stats(
     if (out_stats == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     std::memset(out_stats, 0, sizeof(*out_stats));
     if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    out_stats->target_hz = handle->target_hz;
+    out_stats->target_hz = handle->target_hz.load();
     out_stats->current_idle_skip_n = handle->current_idle_skip_n.load();
     out_stats->wall_pressure_floor = handle->wall_pressure_floor.load();
     {
@@ -432,4 +508,31 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_scheduler_get_stats(
 
 extern "C" int32_t SAO_UI_CALL sao_ui_scheduler_detect_refresh_hz(void) {
     return detect_refresh_hz_impl();
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_scheduler_set_refresh_rate(
+    sao_ui_scheduler_handle_t handle, int32_t hz) {
+    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (hz <= 0) {
+        // Release the pin: re-detect now and let the tick thread's
+        // periodic re-probe track later mode/monitor changes.
+        handle->refresh_override_hz.store(0);
+        const int32_t detected = detect_refresh_hz_impl();
+        if (detected > 0) {
+            handle->target_hz.store(detected);
+            handle->frame_sec.store(1.0 / static_cast<double>(detected));
+        }
+        return SAO_STATUS_OK;
+    }
+    const int32_t clamped = std::max<int32_t>(1, std::min<int32_t>(kMaxHz, hz));
+    handle->refresh_override_hz.store(clamped);
+    handle->target_hz.store(clamped);
+    handle->frame_sec.store(1.0 / static_cast<double>(clamped));
+    return SAO_STATUS_OK;
+}
+
+extern "C" int32_t SAO_UI_CALL sao_ui_scheduler_refresh_hz(
+    sao_ui_scheduler_handle_t handle) {
+    if (handle == nullptr) return kDefaultHz;
+    return handle->target_hz.load();
 }

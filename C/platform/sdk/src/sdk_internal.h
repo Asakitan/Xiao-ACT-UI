@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -33,6 +34,7 @@
 #include "sao/engine/render_hook.h"
 #include "sao/sdk/sao_sdk.h"
 #include "sao/sdk/sao_sdk_platform_internal.h"
+#include "sao/sdk/sao_sdk_platform_panels.h"
 #include "sao/ui/compositor.h"
 #include "sao/ui/input_router.h"
 #include "sao/ui/panel_layout.h"
@@ -295,6 +297,8 @@ struct SharedRuntime {
     sao_ui_input_router_deep_handle_t input_router = nullptr;
     std::mutex mu;
     SaoSdkStreamingModeApplyFn streaming_apply = nullptr;
+    SaoSdkPanelOpenFn panel_open = nullptr;
+    void* panel_open_user = nullptr;
 
     static SharedRuntime& instance();
     // Idempotent; safe under concurrent context_create calls.
@@ -306,6 +310,8 @@ struct SharedRuntime {
     sao_sdk_status_t get_bound_compositor(sao_ui_compositor_handle_t* out_compositor);
     sao_sdk_status_t bind_streaming_apply(SaoSdkStreamingModeApplyFn callback);
     sao_sdk_status_t apply_streaming_mode(int32_t enabled, bool* out_applied);
+    sao_sdk_status_t bind_panel_open(SaoSdkPanelOpenFn callback, void* user_data);
+    sao_sdk_status_t open_panel(std::string_view panel_name);
 };
 
 // Per-context private state — `ctx_impl` in SaoSdkContext points here.

@@ -322,10 +322,20 @@ SharedRuntime::apply_streaming_mode(int32_t enabled, bool* out_applied) {
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     *out_applied = false;
     try {
-        std::lock_guard<std::mutex> guard(mu);
-        if (streaming_apply == nullptr)
+        // The callback can re-enter sao_sdk_platform_* APIs (the launcher
+        // hook reads g_streaming_apply_ctx, which unbind nulls).  mu is
+        // non-recursive, so invoking it under the lock deadlocks the
+        // re-entrant path.  Snapshot the pointer under mu, then call it
+        // unlocked: an unbind racing between the two still leaves a
+        // callable function pointer whose ctx read resolves to null.
+        SaoSdkStreamingModeApplyFn callback = nullptr;
+        {
+            std::lock_guard<std::mutex> guard(mu);
+            callback = streaming_apply;
+        }
+        if (callback == nullptr)
             return SAO_SDK_ERR_NOT_INITIALIZED;
-        const int32_t status = streaming_apply(enabled);
+        const int32_t status = callback(enabled);
         if (status != SAO_STATUS_OK)
             return map_runtime_status(static_cast<sao_status_t>(status));
         *out_applied = true;
@@ -333,6 +343,36 @@ SharedRuntime::apply_streaming_mode(int32_t enabled, bool* out_applied) {
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
     }
+}
+
+sao_sdk_status_t
+SharedRuntime::bind_panel_open(SaoSdkPanelOpenFn callback, void* user_data) {
+    try {
+        std::lock_guard<std::mutex> guard(mu);
+        panel_open = callback;
+        panel_open_user = callback ? user_data : nullptr;
+        return SAO_SDK_OK;
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+sao_sdk_status_t SharedRuntime::open_panel(std::string_view panel_name) {
+    // Launcher binds a single callback that maps the semantic name to the
+    // matching panel; keep the callback invocation mutex-free so a launcher
+    // that re-enters a sao_sdk_platform_* API inside the callback never
+    // wedges on the non-recursive mu.
+    SaoSdkPanelOpenFn callback = nullptr;
+    void* user_data = nullptr;
+    {
+        std::lock_guard<std::mutex> guard(mu);
+        callback = panel_open;
+        user_data = panel_open_user;
+    }
+    if (callback == nullptr)
+        return SAO_SDK_ERR_NOT_INITIALIZED;
+    const int32_t status = callback(std::string(panel_name).c_str(), user_data);
+    return map_runtime_status(static_cast<sao_status_t>(status));
 }
 
 // ─── Context registry (process-wide) ─────────────────────────────────
@@ -1231,6 +1271,40 @@ sao_sdk_platform_apply_streaming_mode(int32_t enabled, bool* out_applied) {
     try {
         return sao_sdk_internal::SharedRuntime::instance().apply_streaming_mode(enabled,
                                                                                 out_applied);
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
+sao_sdk_platform_bind_panel_open(SaoSdkPanelOpenFn callback, void* user_data) {
+    try {
+        return sao_sdk_internal::SharedRuntime::instance().bind_panel_open(callback, user_data);
+    } catch (...) {
+        return SAO_SDK_ERR_INTERNAL;
+    }
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_platform_open_panel(
+    const char* panel_name) {
+    if (panel_name == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    static constexpr std::string_view kKnownPanels[] = {
+        "settings", "hotkeys", "workshop", "plugins",
+        "process",  "memory",  "license",
+    };
+    const std::string_view name(panel_name);
+    bool known = false;
+    for (const std::string_view candidate : kKnownPanels) {
+        if (candidate == name) {
+            known = true;
+            break;
+        }
+    }
+    if (!known)
+        return SAO_SDK_ERR_NOT_FOUND;
+    try {
+        return sao_sdk_internal::SharedRuntime::instance().open_panel(name);
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
     }
