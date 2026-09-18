@@ -9,10 +9,10 @@
 // PrintWindow with PW_RENDERFULLCONTENT is the only reliable way to
 // snapshot WebView2 content that is composited via DirectComposition
 // (its DWM presentation is not visible to BitBlt on a hidden window).
-// Frame rate ceiling is ~30 fps because PrintWindow blocks on the
-// target thread's message pump; for higher rates use Windows Graphics
-// Capture (WGC) API instead -- deferred to future work if 30 fps is
-// insufficient.
+// The capture timer targets ~60 Hz (16 ms); the practical ceiling stays
+// lower because PrintWindow blocks on the target thread's message pump —
+// for higher sustained rates use Windows Graphics Capture (WGC) API
+// instead -- deferred to future work if the GDI path is insufficient.
 //
 // Ownership: this helper does NOT own the target HWND.  Caller must
 // keep the HWND alive for the lifetime of capture calls.

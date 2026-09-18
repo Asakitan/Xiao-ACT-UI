@@ -218,6 +218,9 @@ target_link_libraries(sao_ai_editor PRIVATE
     nlohmann_json::nlohmann_json
     sao::legacy_core
     sao::security::anti_screencap
+    # direct sao_sdk usage (panel-open binding) — the plugin's sdk link
+    # is PRIVATE so its include path does not propagate to this target
+    sao::sdk
     comctl32
     shell32
     user32

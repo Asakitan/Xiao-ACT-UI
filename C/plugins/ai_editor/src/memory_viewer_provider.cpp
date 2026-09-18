@@ -1,6 +1,7 @@
 #include "memory_viewer_provider.h"
 
 #include "sao/rt_io/status.h"
+#include "sao/sdk/sao_sdk_platform_panels.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -449,6 +450,15 @@ class MemoryViewerProvider::OperationLease final {
 
 MemoryViewerProvider::~MemoryViewerProvider() noexcept {
     (void)close();
+}
+
+int32_t MemoryViewerProvider::open_panel() noexcept {
+    // This provider owns no window chrome — the launcher's memory viewer
+    // panel does — so showing resolves through the process-wide platform
+    // panel binding.  In a process where no binding is installed the SDK
+    // reports SAO_SDK_ERR_NOT_INITIALIZED, which the caller surfaces as a
+    // defined error instead of a silent no-op.
+    return static_cast<int32_t>(sao_sdk_platform_open_panel("memory"));
 }
 
 MemoryViewerOutcome MemoryViewerProvider::bind(sao_rt_io_proxy_handle_t proxy, std::uint32_t pid,

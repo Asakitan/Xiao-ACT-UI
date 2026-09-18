@@ -47,10 +47,36 @@ std::string read_file(const std::filesystem::path& path) {
     return output.str();
 }
 
-std::string builtin_stub_html() {
-    return R"HTML(<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Kernel Map Bridge</title></head>
-<body><h1>Kernel Map Bridge</h1><p>bridge: probing</p></body></html>)HTML";
+std::string html_escape(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (const char c : text) {
+        switch (c) {
+        case '&': out.append("&amp;"); break;
+        case '<': out.append("&lt;"); break;
+        case '>': out.append("&gt;"); break;
+        case '"': out.append("&quot;"); break;
+        default: out.push_back(c); break;
+        }
+    }
+    return out;
+}
+
+// Error-state page served when the bundled panel bundle cannot be found.
+// Small + self-contained: the expected index.html path is embedded in the
+// markup so the operator sees exactly which file the loader looked for.
+std::string missing_assets_html(const std::string& index_path) {
+    const std::string shown = index_path.empty()
+                                  ? std::string{"(panel assets root not configured)"}
+                                  : html_escape(index_path);
+    return std::string{R"HTML(<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Kernel Map Bridge</title>
+<style>body{font-family:system-ui,sans-serif;margin:16px;color:#ddd;background:#1e1e1e}h1{font-size:15px;margin:0 0 8px}.warn{color:#e5534b}code{user-select:all;color:#9cdcfe}</style></head>
+<body><h1>Kernel Map Bridge</h1>
+<p class="warn">panel assets missing at <code>)HTML"} +
+           shown +
+           R"HTML(</code></p>
+<p>Restore assets/ai_editor/kernel_map_panel or rebuild the plugin.</p></body></html>)HTML";
 }
 
 int32_t read_driver_file_bounded(std::string_view path,
@@ -205,10 +231,32 @@ bool KernelMapPanelProvider::is_registered() const noexcept {
 
 std::string KernelMapPanelProvider::load_bundled_html(
     const std::string& assets_root) const {
-    if (assets_root.empty()) return builtin_stub_html();
+    const std::filesystem::path index_path =
+        assets_root.empty() ? std::filesystem::path{}
+                            : std::filesystem::path(assets_root) / "index.html";
+    const std::string index_utf8 =
+        index_path.empty() ? std::string{} : wide_to_utf8(index_path.wstring());
+    std::string html;
+    if (!assets_root.empty()) {
+        html = read_file(index_path);
+    }
+    const bool missing = html.empty();
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        assets_root_ = assets_root;
+        assets_missing_ = missing;
+        assets_missing_path_ = missing ? index_utf8 : std::string{};
+    }
+    if (missing) {
+        const std::wstring diagnostic = utf8_to_wide(
+            "[sao.ai_editor] kernel-map panel assets missing at " +
+            (index_utf8.empty() ? std::string{"<root unset>"} : index_utf8) + "\n");
+        if (!diagnostic.empty()) {
+            OutputDebugStringW(diagnostic.c_str());
+        }
+        return missing_assets_html(index_utf8);
+    }
     const std::filesystem::path root(assets_root);
-    std::string html = read_file(root / "index.html");
-    if (html.empty()) return builtin_stub_html();
     const std::string css = read_file(root / "panel.css");
     const std::string js = read_file(root / "panel.js");
     if (!css.empty()) {
@@ -322,7 +370,7 @@ int32_t KernelMapPanelProvider::handle_message(const Json& message,
             else out_reply = handle_deactivate(bridge);
         }
         else if (cmd == "unmap") out_reply = handle_unmap(bridge, args);
-        else if (cmd == "refresh") out_reply = handle_refresh();
+        else if (cmd == "refresh") out_reply = handle_refresh(bridge);
         else if (cmd == "load_driver") {
             if (!args.contains("confirmed") || !args["confirmed"].is_boolean() ||
                 !args["confirmed"].get<bool>())
@@ -469,8 +517,45 @@ Json KernelMapPanelProvider::handle_load_driver(
                        with_path, Json());
 }
 
-Json KernelMapPanelProvider::handle_refresh() {
-    return build_reply("refresh", "ok", Json::object(), Json());
+Json KernelMapPanelProvider::handle_refresh(
+    const std::shared_ptr<IKernelMapBridge>& bridge) {
+    // Re-enumerate live state and merge the status + enumerate payloads
+    // into one snapshot: {active, mapped_count, bridge:{...}, bases:[...]}.
+    // handle_message() pushes the reply through the post channel so the
+    // page repaints from a single refresh round-trip.
+    const Json status_reply = handle_status(bridge);
+    const Json enumerate_reply = handle_enumerate(bridge);
+    Json payload = Json::object();
+    if (const auto found = status_reply.find("payload");
+        found != status_reply.end() && found->is_object()) {
+        payload.update(*found);
+    }
+    if (const auto found = enumerate_reply.find("payload");
+        found != enumerate_reply.end() && found->is_object()) {
+        payload.update(*found);
+    }
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        payload["assets"] = Json{{"available", !assets_missing_},
+                                 {"root", assets_root_},
+                                 {"expected", assets_missing_path_}};
+    }
+    const bool ok = status_reply.value("status", std::string{}) == "ok" &&
+                    enumerate_reply.value("status", std::string{}) == "ok";
+    Json reply = build_reply("refresh", ok ? "ok" : "error", payload, Json());
+    if (!ok) {
+        std::string reason;
+        for (const Json* source : {&status_reply, &enumerate_reply}) {
+            const auto found = source->find("reason");
+            if (found != source->end() && found->is_string() &&
+                !found->get_ref<const std::string&>().empty()) {
+                reason = found->get<std::string>();
+                break;
+            }
+        }
+        reply["reason"] = reason.empty() ? std::string{"refresh failed"} : reason;
+    }
+    return reply;
 }
 
 }  // namespace sao::ai_editor::native

@@ -11,7 +11,7 @@ mapping is maintained in `driver_asset_metadata.cmake` and
 `driver_asset.cpp`.  The output blobs are what ship with the project.
 On first launch, the helper's `driver_local_install_ensure` decodes each
 SAO2 bundle and re-encrypts it with per-machine SAO3 under the canonical
-runtime name (e.g. `%LOCALAPPDATA%\\...\\R1.sys.sao3`).
+runtime name (e.g. `%LOCALAPPDATA%\\...\\XiaoACTloader.sys.sao3`).
 
 Usage:
     python pack_drivers_sao2.py                       # dry-run
@@ -109,19 +109,18 @@ def decrypt_sao2_fixed(envelope: bytes) -> bytes:
 # VT entries, which are resolved against the VT-Splitview build output.
 _DEFAULT_SHIP_MAP: tuple[tuple[str, str, str], ...] = (
     # (kind, source .sys name, shipped alias)
-    ("store", "R1.sys", "locale.dat"),
-    ("store", "R3.sys", "theme.dat"),
-    ("store", "R5.sys", "display.dat"),
+    ("store", "XiaoACTloader.sys", "locale.dat"),
+    ("store", "XiaoACTcreater.sys", "theme.dat"),
+    ("store", "XiaoACTprocessReading.sys", "display.dat"),
     ("vt-release", "VT-Splitview.sys", "fontmetrics.dat"),
     ("vt-debug", "VT-Splitview.sys", "iconcache.dat"),
 )
 
-# Legacy compatibility for `--drivers` overrides.
-_LEGACY_STORE_NAMES: dict[str, str] = {
-    "R1.sys": "locale.dat",
-    "R2.sys": "R2.sys.sao2",
-    "R3.sys": "theme.dat",
-    "R5.sys": "display.dat",
+# Canonical store-name overrides accepted by `--drivers`.
+_STORE_NAMES: dict[str, str] = {
+    "XiaoACTloader.sys": "locale.dat",
+    "XiaoACTcreater.sys": "theme.dat",
+    "XiaoACTprocessReading.sys": "display.dat",
 }
 
 
@@ -194,7 +193,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true",
                     help="actually write; without it does a dry-run")
     ap.add_argument("--drivers", nargs="+", default=None,
-                    help="legacy: store driver .sys names to pack "
+                    help="canonical store driver .sys names to pack "
                          "(uses the alias map for output names)")
     args = ap.parse_args()
 
@@ -214,9 +213,9 @@ def main() -> int:
     if args.drivers:
         ship: list[tuple[str, str, str]] = []
         for name in args.drivers:
-            alias = _LEGACY_STORE_NAMES.get(name)
+            alias = _STORE_NAMES.get(name)
             if alias is None:
-                print(f"[FATAL] unknown legacy driver name: {name}")
+                print(f"[FATAL] unknown canonical driver name: {name}")
                 return 1
             ship.append(("store", name, alias))
     else:

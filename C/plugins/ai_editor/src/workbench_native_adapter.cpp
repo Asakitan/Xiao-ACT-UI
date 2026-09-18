@@ -1,6 +1,7 @@
 #include "workbench_native_adapter.h"
 
 #include "memory_viewer_provider.h"
+#include "native_runtime_internal.h"
 #include "native_utils.h"
 #include "sao/ai_editor/ai_editor_status.h"
 #include "sao/ai_editor/mcp_server.h"
@@ -3752,6 +3753,88 @@ NativeAdapterCompletion handle_runtime_alias_method(NativeAdapter& adapter, cons
                   {"viewColumn", reply.result.value("viewColumn", 1)},
                   {"retainContextWhenHidden", options.value("retainContextWhenHidden", false)}});
     }
+    if (job.method == "open_native_panel") {
+        // Opens a launcher-owned native tool panel.  Names are restricted to
+        // the documented launcher surface.  The in-process SDK binding
+        // (sao_sdk_platform_open_panel) is tried first — it covers the
+        // launcher table (settings/hotkeys/workshop/plugins/process/memory/
+        // license).  When no callback is bound (NOT_INITIALIZED), the name is
+        // outside that table (NOT_FOUND, e.g. "gpu-hunt"), or the SDK channel
+        // reports a failure, the request falls back to the host IPC channel
+        // carrying the {"type":"open-tool","name":...} frame.
+        if (!count(1, 1) || !job.args[0].is_string())
+            return failed_completion(job, "SAO_INVALID_ARGUMENT", "Panel name is required.");
+        const std::string panel_name = job.args[0].get<std::string>();
+        static const std::unordered_set<std::string> kLauncherPanels = {
+            "settings", "hotkeys", "workshop", "plugins",
+            "process", "memory", "license", "gpu-hunt"};
+        if (kLauncherPanels.count(panel_name) == 0)
+            return successful_completion(job, {{"ok", false},
+                                               {"name", panel_name},
+                                               {"error", "Unknown launcher panel."}});
+        int32_t sdk_status = SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+#if SAO_WORKBENCH_HAS_PLATFORM_PANELS
+        sdk_status = sao_sdk_platform_open_panel(panel_name.c_str());
+        if (sdk_status == SAO_SDK_OK)
+            return successful_completion(
+                job, {{"ok", true}, {"name", panel_name}, {"via", "sdk"}});
+#endif
+        RpcReply reply = call_backend(adapter, "open-tool",
+                                      {{"type", "open-tool"}, {"name", panel_name}});
+        if (reply.ok) {
+            json result = reply.result.is_object() ? std::move(reply.result) : json::object();
+            result["ok"] = result.value("ok", true);
+            result["name"] = panel_name;
+            if (!result.contains("via"))
+                result["via"] = "ipc";
+            return successful_completion(job, std::move(result));
+        }
+        json failure{{"ok", false},
+                     {"name", panel_name},
+                     {"via", "ipc"},
+                     {"error", reply.error_message.empty() ? "Native panel request failed."
+                                                           : reply.error_message},
+                     {"code", reply.error_code}};
+        failure["sdk_status"] = sdk_status;
+        return successful_completion(job, std::move(failure));
+    }
+    if (job.method == "webview_panel_reveal") {
+        // Reveals a registered webview panel in the backend registry and lets
+        // the emitted vscode.window.webviewPanel.revealed event drive the
+        // page-side mount (translate_event_locked maps it onto
+        // "reveal_webview_panel").  args: [panelId, viewColumn?, preserveFocus?]
+        if (!count(1, 3) || !job.args[0].is_string() ||
+            job.args[0].get_ref<const std::string&>().empty() ||
+            job.args[0].get_ref<const std::string&>().size() > 256)
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "WebView panel id is required.");
+        json params{{"panelId", job.args[0]}, {"viewColumn", 1}, {"preserveFocus", false}};
+        if (job.args.size() > 1 && job.args[1].is_number_integer())
+            params["viewColumn"] = job.args[1];
+        if (job.args.size() > 2 && job.args[2].is_boolean())
+            params["preserveFocus"] = job.args[2];
+        return rpc_completion(job, call_backend(adapter, "vscode.window.revealWebviewPanel",
+                                                std::move(params)));
+    }
+    if (job.method == "extapi_drain_events") {
+        // Drains the process-local extapi queue via
+        // ai_editor_extapi_drain_events().  Events published inside the
+        // SaoAiEditor child arrive separately through the sao.event stream
+        // (vscode.extapi.* names) so this entry point only covers the local
+        // door; the child has no JSON-RPC route to sao.extapi.drain.
+        if (!count(0, 0))
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "extapi_drain_events takes no arguments.");
+        json events = json::array();
+        const int32_t status = sao::ai_editor::native::ai_editor_extapi_drain_events(events);
+        if (status != SAO_AI_EDITOR_OK)
+            return failed_completion(job, "SAO_EXTAPI_DRAIN_FAILED",
+                                     "Extension API event drain failed with status " +
+                                         std::to_string(status) + ".");
+        if (!events.is_array())
+            events = json::array();
+        return successful_completion(job, {{"ok", true}, {"events", std::move(events)}});
+    }
     if (job.method == "set_extension_host_diagnostics") {
         if (!count(1, 1) || !job.args[0].is_boolean())
             return failed_completion(job, "SAO_INVALID_ARGUMENT", "Diagnostics flag is invalid.");
@@ -4841,6 +4924,31 @@ void translate_event_locked(NativeAdapter& adapter, const json& notification,
     } else if (native_name == "host.log" &&
                string_member_or(payload, "kind") == "extension_tree_changed") {
         emit("extension_tree_changed", payload);
+    } else if (native_name == "vscode.window.webviewPanel.revealed") {
+        // Runtime-side registry reveal (native main panel openers, the
+        // kernel-map navigator, vscode.window.revealWebviewPanel RPCs).
+        // Normalise onto the page's provider-webview reveal event so the
+        // right-panel host mounts it through the existing pipeline.
+        json mapped{{"view_id", string_member_or(payload, "panelId")},
+                    {"view_type", string_member_or(payload, "viewType")},
+                    {"title", string_member_or(payload, "title")}};
+        if (payload.contains("viewColumn"))
+            mapped["viewColumn"] = payload["viewColumn"];
+        if (payload.contains("active"))
+            mapped["active"] = payload["active"];
+        if (payload.contains("visible"))
+            mapped["visible"] = payload["visible"];
+        if (payload.contains("preserveFocus"))
+            mapped["preserveFocus"] = payload["preserveFocus"];
+        const std::string provider =
+            string_member_or(payload, "provider_id", string_member_or(payload, "providerId"));
+        if (!provider.empty())
+            mapped["provider_id"] = provider;
+        emit("reveal_webview_panel", std::move(mapped));
+    } else if (native_name == "vscode.window.webviewPanel.disposed") {
+        emit("dispose_webview_panel",
+             json{{"view_id", string_member_or(payload, "panelId")},
+                  {"provider_id", string_member_or(payload, "providerId")}});
     } else if (native_name != "run.started") {
         emit(native_name, payload);
     }

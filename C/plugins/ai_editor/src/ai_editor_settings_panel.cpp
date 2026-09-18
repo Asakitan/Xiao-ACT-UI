@@ -421,6 +421,8 @@ std::string backend_key_alias(std::string_view key) {
         {"mcp.name_collisions", "mcp.collision_behavior"},
         {"mcp.discovery", "mcp.discovery_enabled"},
         {"mcp.sampling", "mcp.server_sampling"},
+        {"provider.claude_cli_path", "claude_code.cli_path"},
+        {"provider.codex_cli_path", "codex.cli_path"},
         {"terminal.shell", "terminal.shell_path"},
         {"terminal.args", "terminal.shell_args"},
         {"workspace.additional_roots", "workspace.roots"},
@@ -1344,6 +1346,11 @@ void merge_described_fields(AiEditorSettingsPanelState& state, const json& descr
     expanded.reserve(described.size() * 2U);
     std::unordered_set<std::string> described_keys;
     for (auto& item : described) {
+        // Canonicalize schema-level alias keys (e.g.
+        // provider.claude_cli_path -> claude_code.cli_path) so the field
+        // row resolves the persisted value and dedupes against the
+        // canonical field entry instead of rendering a dead twin.
+        item.key = backend_key_alias(item.key);
         if (!described_keys.insert(item.key).second)
             continue;
         const FieldMeta* hint = nullptr;

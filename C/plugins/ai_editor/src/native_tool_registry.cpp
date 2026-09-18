@@ -3,15 +3,26 @@
 #include "gpu_hunt_bridge.h"
 #include "sdk_dumper/sdk_dumper_base.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cwctype>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -191,7 +202,7 @@ bool parse_schema_size_limit(const Json& schema, std::string_view key, const std
         }
         output = static_cast<uint64_t>(signed_value);
     }
-    if (output > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    if (output > static_cast<uint64_t>((std::numeric_limits<size_t>::max)())) {
         append_error(errors, path,
                      "schema " + std::string(key) + " exceeds the platform size limit");
         return false;
@@ -421,6 +432,19 @@ Json builtin_schema_for(std::string_view name) {
                       {"confirmed", {{"type", "boolean"}}}}},
                     {"required", Json::array({"path", "content"})}};
     }
+    if (name == "runTerminal") {
+        return Json{{"type", "object"},
+                    {"properties",
+                     {{"command", {{"type", "string"}, {"minLength", 1}}},
+                      {"timeout_ms",
+                       {{"type", "integer"}, {"minimum", 1}, {"maximum", 120000}}},
+                      {"output_limit_bytes",
+                       {{"type", "integer"}, {"minimum", 1}, {"maximum", 4194304}}},
+                      {"cwd", {{"type", "string"}}},
+                      {"mode", {{"type", "string"}}},
+                      {"confirmed", {{"type", "boolean"}}}}},
+                    {"required", Json::array({"command"})}};
+    }
     if (name == "sdkDumper.unreal" || name == "sdkDumper.source") {
         const std::uint32_t maximum_classes = name == "sdkDumper.source" ? 2000u : 10000u;
         return Json{
@@ -468,6 +492,124 @@ std::string relative_utf8(const std::filesystem::path& path, const std::filesyst
     const auto relative = std::filesystem::relative(path, root, error);
     return wide_to_utf8((error ? path : relative).generic_wstring());
 }
+
+// ---- runTerminal helpers ---------------------------------------------------
+
+// Decode console bytes: strict UTF-8 first (the child is usually our own
+// cmd/pwsh emitting UTF-8 under chcp 65001 or a Unicode-aware tool), then
+// the system ANSI codepage so legacy tools stay readable.
+std::string decode_console_output(const std::vector<char>& bytes) {
+    if (bytes.empty()) {
+        return {};
+    }
+    const int size = static_cast<int>(
+        std::min<size_t>(bytes.size(), static_cast<size_t>((std::numeric_limits<int>::max)())));
+    const int wide_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes.data(), size,
+                                             nullptr, 0);
+    if (wide_len <= 0) {
+        // Not UTF-8 — reinterpret via the ANSI codepage.
+        const int ansi_len =
+            MultiByteToWideChar(CP_ACP, 0, bytes.data(), size, nullptr, 0);
+        if (ansi_len <= 0) {
+            return std::string(bytes.begin(), bytes.end());
+        }
+        std::wstring wide(static_cast<size_t>(ansi_len), L'\0');
+        MultiByteToWideChar(CP_ACP, 0, bytes.data(), size, wide.data(), ansi_len);
+        return wide_to_utf8(wide);
+    }
+    std::wstring wide(static_cast<size_t>(wide_len), L'\0');
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes.data(), size, wide.data(), wide_len);
+    return wide_to_utf8(wide);
+}
+
+struct PipeCapture final {
+    std::vector<char> data;
+    bool truncated = false;
+};
+
+// Drain the pipe to EOF while capping retained bytes at `cap`.  The thread
+// keeps reading even after the cap so the child never blocks on a full pipe.
+void drain_terminal_pipe(HANDLE handle, PipeCapture& out, size_t cap) {
+    char buffer[8192];
+    for (;;) {
+        DWORD read = 0;
+        if (!ReadFile(handle, buffer, static_cast<DWORD>(sizeof(buffer)), &read, nullptr) ||
+            read == 0) {
+            break;
+        }
+        const size_t room = cap > out.data.size() ? cap - out.data.size() : 0;
+        const size_t take = std::min<size_t>(room, static_cast<size_t>(read));
+        // A bad_alloc inside a detached reader would terminate the host —
+        // treat it as "output capped" and keep draining.
+        try {
+            out.data.insert(out.data.end(), buffer, buffer + take);
+        } catch (...) {
+            out.truncated = true;
+        }
+        if (take < static_cast<size_t>(read)) {
+            out.truncated = true;
+        }
+    }
+}
+
+// Decide which shell the runTerminal call should use.  The new
+// `terminal.shell` key wins when the user changed it away from the schema
+// default; `terminal.shell_path` is the panel-visible legacy alias; the
+// final fallback is cmd.exe.
+std::string resolve_terminal_shell(const Json& terminal) {
+    const std::string shell = terminal.value("shell", std::string{});
+    if (!shell.empty() && shell != "cmd.exe") {
+        return shell;
+    }
+    const std::string shell_path = terminal.value("shell_path", std::string{});
+    if (!shell_path.empty()) {
+        return shell_path;
+    }
+    if (!shell.empty()) {
+        return shell;
+    }
+    return "cmd.exe";
+}
+
+// Build the child command line.  cmd.exe takes `/d /s /c` (verbatim tail);
+// PowerShell-family shells take the -Command form so the same terminal
+// payload works for both hosts.
+std::wstring build_terminal_command_line(const std::string& shell,
+                                         const std::wstring& command_wide) {
+    std::wstring shell_wide = utf8_to_wide(shell);
+    std::wstring base = std::filesystem::path(shell_wide).filename().wstring();
+    std::transform(base.begin(), base.end(), base.begin(),
+                   [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+    const bool powershell = base.rfind(L"powershell", 0) == 0 || base.rfind(L"pwsh", 0) == 0;
+    if (powershell) {
+        return L"\"" + shell_wide + L"\" -NoLogo -NoProfile -Command " + command_wide;
+    }
+    return L"\"" + shell_wide + L"\" /d /s /c " + command_wide;
+}
+
+// RAII handle wrapper for the spawn path.
+struct WinHandle final {
+    HANDLE value = nullptr;
+    ~WinHandle() {
+        if (value != nullptr && value != INVALID_HANDLE_VALUE) {
+            CloseHandle(value);
+        }
+    }
+    WinHandle() = default;
+    WinHandle(const WinHandle&) = delete;
+    WinHandle& operator=(const WinHandle&) = delete;
+    void reset(HANDLE next = nullptr) {
+        if (value != nullptr && value != INVALID_HANDLE_VALUE) {
+            CloseHandle(value);
+        }
+        value = next;
+    }
+    HANDLE release() {
+        HANDLE out = value;
+        value = nullptr;
+        return out;
+    }
+};
 
 } // namespace
 
@@ -520,6 +662,16 @@ Json NativeToolRegistry::describe(std::string_view mode) const {
                          {"endLine", {{"type", "integer"}}},
                          {"confirmed", {{"type", "boolean"}}}},
                         {"path", "content"}),
+        tool_descriptor(
+            "runTerminal", "Run a shell command in the workspace terminal", false,
+            {{"command", {{"type", "string"}, {"minLength", 1}}},
+             {"timeout_ms", {{"type", "integer"}, {"minimum", 1}, {"maximum", 120000}}},
+             {"output_limit_bytes",
+              {{"type", "integer"}, {"minimum", 1}, {"maximum", 4194304}}},
+             {"cwd", {{"type", "string"}}},
+             {"mode", {{"type", "string"}}},
+             {"confirmed", {{"type", "boolean"}}}},
+            {"command"}),
         tool_descriptor(
             "sdkDumper.unreal",
             "Export a bounded read-only Unreal class inventory into the workspace", false,
@@ -582,6 +734,7 @@ Json NativeToolRegistry::describe(std::string_view mode) const {
             if (is_builtin_name(target_name)) {
                 descriptor["description"] = "Alias of " + target_name;
                 descriptor["readOnly"] = target_name != "editFile" &&
+                                         target_name != "runTerminal" &&
                                          target_name != "sdkDumper.unreal" &&
                                          target_name != "sdkDumper.source";
                 descriptor["parameters"] = builtin_schema_for(target_name);
@@ -720,6 +873,18 @@ int32_t NativeToolRegistry::execute(std::string_view mode, std::string_view name
             return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
         }
         dispatch_status = edit_file(arguments, result);
+    } else if (name == "runTerminal") {
+        // Mutating-class gate identical to editFile: ask mode denies
+        // outright, plan mode requires an explicit confirmed:true, agent
+        // mode runs the spawn.
+        if (mode == "ask") {
+            return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
+        }
+        if (mode == "plan" && !arguments.value("confirmed", false)) {
+            result = Json{{"confirmationRequired", true}, {"tool", "runTerminal"}};
+            return SAO_AI_EDITOR_ERR_CONFIRMATION_REQUIRED;
+        }
+        dispatch_status = run_terminal(arguments, result);
     } else if (name == "sdkDumper.unreal" || name == "sdkDumper.source") {
         if (mode == "ask") {
             return SAO_AI_EDITOR_ERR_PERMISSION_DENIED;
@@ -820,7 +985,8 @@ void NativeToolRegistry::set_filter_registry(const ToolResultFilterRegistry* reg
 
 bool NativeToolRegistry::is_builtin_name(std::string_view name) noexcept {
     return name == "readFile" || name == "listFiles" || name == "searchFiles" ||
-           name == "editFile" || name == "sdkDumper.unreal" || name == "sdkDumper.source";
+           name == "editFile" || name == "runTerminal" || name == "sdkDumper.unreal" ||
+           name == "sdkDumper.source";
 }
 
 int32_t NativeToolRegistry::register_custom(std::string_view name, std::string_view description,
@@ -1327,6 +1493,256 @@ int32_t NativeToolRegistry::edit_file(const Json& arguments, Json& result) const
                       {"bytesWritten", content.size()}};
     }
     return status;
+}
+
+int32_t NativeToolRegistry::run_terminal(const Json& arguments, Json& result) const {
+    const std::string command = arguments.value("command", std::string{});
+    if (command.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    // The workbench front end drives a job-shaped protocol (mode: "start" |
+    // "status" | "write" | "stop" | "resize").  This backend is synchronous:
+    // a missing/start mode spawns and waits for exit, so job verbs on a
+    // non-existent jobId get an explicit error body instead of a silent
+    // no-op.
+    const std::string mode = arguments.value("mode", std::string{});
+    if (!mode.empty() && mode != "start" && mode != "run") {
+        result = Json{{"exitCode", nullptr},
+                      {"stdout", std::string{}},
+                      {"stderr", std::string{}},
+                      {"truncated", false},
+                      {"timedOut", false},
+                      {"state", "error"},
+                      {"running", false},
+                      {"error", "terminal jobs are not supported by the synchronous backend"}};
+        return SAO_AI_EDITOR_OK;
+    }
+
+    // Merged scope config supplies the terminal.* overrides; the schema in
+    // ai_editor_settings.cpp keeps `terminal.shell` (default "cmd.exe"),
+    // `terminal.timeout_ms` (default 30000, max 120000) and
+    // `terminal.output_limit_bytes` (default 1 MiB, max 4 MiB) in the
+    // persisted document so users can tune the tool without a code change.
+    Json merged;
+    if (scopes_.load_merged_config(merged) != SAO_AI_EDITOR_OK || !merged.is_object()) {
+        merged = Json::object();
+    }
+    const Json& settings =
+        merged.contains("ai_editor") && merged["ai_editor"].is_object() ? merged["ai_editor"]
+                                                                        : merged;
+    const Json terminal_cfg =
+        settings.contains("terminal") && settings["terminal"].is_object()
+            ? settings["terminal"]
+            : Json::object();
+
+    const auto bounded_integer = [](const Json* value, int64_t fallback) -> int64_t {
+        if (value != nullptr && value->is_number_integer()) {
+            return value->get<int64_t>();
+        }
+        if (value != nullptr && value->is_number()) {
+            return static_cast<int64_t>(value->get<double>());
+        }
+        return fallback;
+    };
+    const Json* timeout_arg =
+        arguments.contains("timeout_ms") ? &arguments["timeout_ms"] : nullptr;
+    const Json* timeout_cfg =
+        terminal_cfg.contains("timeout_ms") ? &terminal_cfg["timeout_ms"] : nullptr;
+    const Json* timeout_legacy =
+        terminal_cfg.contains("timeout") ? &terminal_cfg["timeout"] : nullptr;
+    int64_t timeout_ms = bounded_integer(timeout_arg, -1);
+    if (timeout_ms < 0) {
+        timeout_ms = bounded_integer(timeout_cfg, -1);
+        if (timeout_ms < 0) {
+            // The pre-contract `terminal.timeout` field is measured in
+            // seconds; keep honouring it when the ms key is absent.
+            timeout_ms = bounded_integer(timeout_legacy, 30) * 1000;
+        }
+    }
+    const uint32_t timeout_clamped =
+        static_cast<uint32_t>(std::clamp<int64_t>(timeout_ms, 1, 120000));
+
+    const Json* limit_arg =
+        arguments.contains("output_limit_bytes") ? &arguments["output_limit_bytes"] : nullptr;
+    const Json* limit_cfg = terminal_cfg.contains("output_limit_bytes")
+                                ? &terminal_cfg["output_limit_bytes"]
+                                : nullptr;
+    const Json* limit_legacy =
+        terminal_cfg.contains("output_limit") ? &terminal_cfg["output_limit"] : nullptr;
+    int64_t output_limit = bounded_integer(limit_arg, -1);
+    if (output_limit < 0) {
+        output_limit = bounded_integer(limit_cfg, bounded_integer(limit_legacy, 1048576));
+    }
+    const size_t cap =
+        static_cast<size_t>(std::clamp<int64_t>(output_limit, 1, 4194304));
+
+    const std::string shell = resolve_terminal_shell(terminal_cfg);
+
+    // `terminal.use_pty` is schema-admitted and persisted by the settings
+    // document but documented-ignored here: this spawn path captures output
+    // through anonymous pipes and there is no ConPTY/PTY plumbing in this
+    // synchronous backend.  The flag is still read so the result reports
+    // what the caller asked for (ptyRequested) and what actually ran
+    // (pty == false).
+    const Json* pty_cfg =
+        terminal_cfg.contains("use_pty") ? &terminal_cfg["use_pty"] : nullptr;
+    const bool pty_requested =
+        (pty_cfg != nullptr && pty_cfg->is_boolean()) ? pty_cfg->get<bool>()
+                                                      : false;
+
+    // Workspace-bounded cwd — the tool never escapes the workspace scope
+    // root even when the caller supplies a relative or absolute `cwd`.
+    std::filesystem::path cwd = scopes_.workspace_root();
+    if (const auto cwd_arg = arguments.find("cwd");
+        cwd_arg != arguments.end() && cwd_arg->is_string() &&
+        !cwd_arg->get_ref<const std::string&>().empty()) {
+        if (!resolve_bounded_path(scopes_.workspace_root(),
+                                  cwd_arg->get_ref<const std::string&>(), false, cwd)) {
+            return SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION;
+        }
+        std::error_code dir_error;
+        if (!std::filesystem::is_directory(cwd, dir_error)) {
+            result = Json{{"exitCode", nullptr},
+                          {"state", "error"},
+                          {"error", "cwd is not a directory inside the workspace"},
+                          {"cwd", wide_to_utf8(cwd.native())}};
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        }
+    }
+
+    const std::wstring command_wide = utf8_to_wide(command);
+    if (command_wide.empty()) {
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    const std::wstring command_line = build_terminal_command_line(shell, command_wide);
+
+    SECURITY_ATTRIBUTES security{};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+
+    WinHandle stdout_read;
+    WinHandle stdout_write;
+    WinHandle stderr_read;
+    WinHandle stderr_write;
+    if (CreatePipe(&stdout_read.value, &stdout_write.value, &security, 0) == FALSE ||
+        SetHandleInformation(stdout_read.value, HANDLE_FLAG_INHERIT, 0) == FALSE ||
+        CreatePipe(&stderr_read.value, &stderr_write.value, &security, 0) == FALSE ||
+        SetHandleInformation(stderr_read.value, HANDLE_FLAG_INHERIT, 0) == FALSE) {
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    // Give the child an inheritable NUL handle for stdin so interactive
+    // tools see an immediate EOF instead of inheriting a GUI-app handle.
+    WinHandle stdin_read;
+    stdin_read.reset(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (stdin_read.value == INVALID_HANDLE_VALUE) {
+        stdin_read.reset();
+    }
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = stdin_read.value;
+    startup.hStdOutput = stdout_write.value;
+    startup.hStdError = stderr_write.value;
+
+    PROCESS_INFORMATION process{};
+    std::vector<wchar_t> line(command_line.size() + 1, L'\0');
+    std::copy(command_line.begin(), command_line.end(), line.begin());
+    const std::wstring cwd_wide = cwd.wstring();
+    const auto spawned_at = std::chrono::steady_clock::now();
+    if (CreateProcessW(nullptr, line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                       nullptr, cwd_wide.empty() ? nullptr : cwd_wide.c_str(), &startup,
+                       &process) == FALSE) {
+        result = Json{{"exitCode", nullptr},
+                      {"stdout", std::string{}},
+                      {"stderr", std::string{}},
+                      {"truncated", false},
+                      {"timedOut", false},
+                      {"state", "error"},
+                      {"running", false},
+                      {"error", "CreateProcessW failed: " +
+                                    std::to_string(GetLastError())},
+                      {"shell", shell},
+                      {"cwd", wide_to_utf8(cwd.native())}};
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    CloseHandle(process.hThread);
+    // Parent must release its copies of the child ends — otherwise the
+    // reader threads never see EOF after the child exits.
+    stdin_read.reset();
+    stdout_write.reset();
+    stderr_write.reset();
+
+    PipeCapture stdout_capture;
+    PipeCapture stderr_capture;
+    std::thread stdout_thread;
+    std::thread stderr_thread;
+    try {
+        stdout_thread = std::thread(drain_terminal_pipe, stdout_read.value,
+                                    std::ref(stdout_capture), cap);
+        stderr_thread = std::thread(drain_terminal_pipe, stderr_read.value,
+                                    std::ref(stderr_capture), cap);
+    } catch (...) {
+        (void)TerminateProcess(process.hProcess, 1u);
+        (void)WaitForSingleObject(process.hProcess, 5000u);
+        if (stdout_thread.joinable()) {
+            stdout_thread.join();
+        }
+        if (stderr_thread.joinable()) {
+            stderr_thread.join();
+        }
+        CloseHandle(process.hProcess);
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+
+    bool timed_out = false;
+    Json exit_code;
+    const DWORD wait_status = WaitForSingleObject(process.hProcess, timeout_clamped);
+    if (wait_status == WAIT_TIMEOUT) {
+        timed_out = true;
+        (void)TerminateProcess(process.hProcess, 1u);
+        (void)WaitForSingleObject(process.hProcess, 5000u);
+        exit_code = nullptr;
+    } else {
+        DWORD code = 0;
+        if (wait_status == WAIT_OBJECT_0 &&
+            GetExitCodeProcess(process.hProcess, &code) != FALSE) {
+            exit_code = static_cast<int64_t>(code);
+        } else {
+            exit_code = nullptr;
+        }
+    }
+    if (stdout_thread.joinable()) {
+        stdout_thread.join();
+    }
+    if (stderr_thread.joinable()) {
+        stderr_thread.join();
+    }
+    CloseHandle(process.hProcess);
+    const int64_t duration_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - spawned_at)
+            .count();
+
+    result = Json{{"exitCode", exit_code},
+                  {"stdout", decode_console_output(stdout_capture.data)},
+                  {"stderr", decode_console_output(stderr_capture.data)},
+                  {"truncated", stdout_capture.truncated || stderr_capture.truncated},
+                  {"stdoutTruncated", stdout_capture.truncated},
+                  {"stderrTruncated", stderr_capture.truncated},
+                  {"timedOut", timed_out},
+                  {"state",
+                   timed_out ? "timeout" : (exit_code.is_null() ? "error" : "done")},
+                  {"running", false},
+                  {"cwd", wide_to_utf8(cwd.native())},
+                  {"durationMs", duration_ms},
+                  {"shell", shell},
+                  // terminal.use_pty is documented-ignored in this backend:
+                  // the flag is echoed so callers see it was parsed, and
+                  // `pty` reports the transport that actually ran.
+                  {"pty", false},
+                  {"ptyRequested", pty_requested}};
+    return SAO_AI_EDITOR_OK;
 }
 
 int32_t NativeToolRegistry::dump_sdk(const Json& arguments, Json& result, bool unreal) const {

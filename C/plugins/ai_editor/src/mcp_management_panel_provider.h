@@ -46,6 +46,13 @@ private:
     SnapshotProvider snapshot_provider_;
     KernelMapNavigator kernel_map_navigator_;
     bool registered_ = false;
+    // Asset diagnostics — populated by load_bundled_html() when the
+    // bundled index.html is absent; reported to the page inside reply
+    // payloads and to the debugger via OutputDebugString.  Mutable because
+    // the loader runs from the const load_bundled_html() helper.
+    mutable bool assets_missing_ = false;
+    mutable std::string assets_root_;
+    mutable std::string assets_missing_path_;
 };
 
 }

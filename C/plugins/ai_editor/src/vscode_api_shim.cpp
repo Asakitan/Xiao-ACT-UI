@@ -26,6 +26,7 @@
 #endif
 
 #include "native_utils.h"
+#include "native_runtime_internal.h"
 
 namespace sao::ai_editor::vscode_shim {
 
@@ -222,9 +223,15 @@ extern "C" int sao_ai_editor_vscode_shim_set_workspace_root(
             return -1;
         }
         std::lock_guard<std::mutex> guard(g_workspace_mu);
-        return initialize_workspace_root_locked(std::filesystem::path(wide))
-            ? 0
-            : -1;
+        const bool ok = initialize_workspace_root_locked(std::filesystem::path(wide));
+        if (ok) {
+            // Bind the shared extapi surface to the same workspace so the
+            // standalone dispatch door resolves identical state.  The system
+            // root defaults to %USERPROFILE%\.sao until a real runtime
+            // attaches and re-configures it.
+            sao::ai_editor::native::extapi::configure(root_utf8, "", "");
+        }
+        return ok ? 0 : -1;
     } catch (...) {
         return -1;
     }
@@ -391,7 +398,53 @@ extern "C" int sao_ai_editor_vscode_shim_dispatch(
                         }
                     }
                 } else if (method == "vscode.lm.selectChatModels") {
-                    response["result"] = json::array();
+                    // Real catalog comes from extapi (empty on the
+                    // standalone door until providers are configured — the
+                    // registry persists under the configured roots).
+                    sao::ai_editor::native::Json out;
+                    const int32_t status =
+                        sao::ai_editor::native::extapi::dispatch(nullptr, method,
+                                                               params, out);
+                    if (status == SAO_AI_EDITOR_OK) {
+                        response["result"] = out;
+                    } else {
+                        response["error"] = json{
+                            {"code", -32000},
+                            {"message", "selectChatModels failed"},
+                            {"data", json{{"status", status}}}};
+                    }
+                } else if (method.rfind("vscode.", 0) == 0 ||
+                           method.rfind("sao.extapi.", 0) == 0) {
+                    // Shared extension-API surface — identical dispatch as
+                    // NativeRuntime::dispatch_extension_call's fallback.
+                    sao::ai_editor::native::Json out;
+                    const int32_t status =
+                        sao::ai_editor::native::extapi::dispatch(nullptr, method,
+                                                               params, out);
+                    if (status == SAO_AI_EDITOR_OK) {
+                        response["result"] = out;
+                    } else {
+                        int code = -32000;
+                        if (status ==
+                            SAO_AI_EDITOR_ERR_INVALID_ARGUMENT) {
+                            code = -32602;
+                        } else if (status ==
+                                   SAO_AI_EDITOR_ERR_NOT_FOUND) {
+                            code = -32601;
+                        } else if (status ==
+                                   SAO_AI_EDITOR_ERR_NOT_INITIALIZED) {
+                            code = -32002;
+                        }
+                        const std::string message =
+                            out.is_object()
+                                ? out.value("message",
+                                            std::string{"method not implemented"})
+                                : std::string{"method not implemented"};
+                        response["error"] = json{
+                            {"code", code},
+                            {"message", message},
+                            {"data", json{{"status", status}}}};
+                    }
                 } else {
                     response["error"] = json{{"code", -32601},
                                                {"message", "method not implemented"}};

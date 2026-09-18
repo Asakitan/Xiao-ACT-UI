@@ -1729,6 +1729,14 @@ int32_t ExtensionHost::ensure_runtime(std::shared_ptr<NodeRuntime>& runtime) {
         stale_runtime = std::move(node_runtime_);
         options = boot_options_;
     }
+    // Merge extension-declared environmentVariableCollection mutations into
+    // the spawned Node process environment.  The extras vector wins over the
+    // ambient parent block in build_environment_block, so extension ops are
+    // applied as real overrides at process creation time.
+    // Failures are surfaced as a no-merge boot (ambient env only) — the host
+    // process must still start even if the envvars registry is unreadable.
+    (void)sao::ai_editor::native::extapi::apply_environment_overrides(
+        options.environment);
     if (stale_runtime) {
         runtime_retiring_ = true;
         runtime_guard.unlock();

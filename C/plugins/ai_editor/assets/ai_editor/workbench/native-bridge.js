@@ -133,10 +133,34 @@
     });
   }
 
+  // Structured native surface (`window.native.*`) layered over the same
+  // request() transport as the pywebview facade.  Members are grouped by
+  // domain so page-side callers get a discoverable namespace instead of the
+  // flat snake_case method list.
+  //
+  //   native.tools.openNativePanel(name)  -> "open_native_panel" [name]
+  //       Opens a launcher-owned tool panel.  name must be one of
+  //       settings|hotkeys|workshop|plugins|process|memory|license|gpu-hunt.
+  //       Resolves {ok:true,via:"sdk"|"ipc"} or {ok:false,error,code,...}.
+  //   native.extapi.drainEvents()         -> "extapi_drain_events" []
+  //       Drains the process-local extapi event queue; resolves
+  //       {ok:true,events:[{type:"extapi.event",kind,ts,payload}, ...]}.
+  function installNativeNamespace() {
+    const existing = window.native && typeof window.native === "object" ? window.native : {};
+    const tools = existing.tools && typeof existing.tools === "object" ? existing.tools : {};
+    tools.openNativePanel = function (name) { return request("open_native_panel", [name]); };
+    const extapi = existing.extapi && typeof existing.extapi === "object" ? existing.extapi : {};
+    extapi.drainEvents = function () { return request("extapi_drain_events", []); };
+    existing.tools = tools;
+    existing.extapi = extapi;
+    window.native = existing;
+  }
+
   function installFacade() {
     if (state.facadeInstalled) return;
     window.pywebview = window.pywebview || {};
     window.pywebview.api = createFacade();
+    installNativeNamespace();
     state.facadeInstalled = true;
   }
 

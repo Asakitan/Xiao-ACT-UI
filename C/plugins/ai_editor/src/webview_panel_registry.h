@@ -64,6 +64,17 @@ struct WebviewPanelState final {
     Json initial_state = Json::object();
 };
 
+// Lightweight projection used by the workbench adapter to enumerate
+// native-runtime-owned panels without copying full WebviewPanelState
+// blobs (which carry the inline HTML payload).
+struct WebviewPanelDescriptor final {
+    std::string panel_id;
+    std::string title;
+    std::string view_type;
+    WebviewPanelOwner owner = WebviewPanelOwner::extension_host;
+    bool visible = false;
+};
+
 class WebviewPanelRegistry final {
   public:
     WebviewPanelRegistry() = default;
@@ -73,9 +84,13 @@ class WebviewPanelRegistry final {
 
     // Create a fresh panel record and return its snapshot.  When
     // `panel_id` is empty the registry mints one (`wvp-<counter>-<pid>`).
-    // A disposed supplied id is revived without incrementing total_created
-    // when its owner and view type match.  Returns INVALID_ARGUMENT if
-    // `view_type` is empty or a live/mismatched supplied id already exists.
+    // A supplied id that already exists is adopted when its view type
+    // matches — the stored owner, created timestamp, and HTML survive so a
+    // disposed built-in panel (owner = native_runtime) can be revived by a
+    // later vscode.window.createWebviewPanel call from the extension-host
+    // domain.  Adoption never increments total_created.  Returns
+    // INVALID_ARGUMENT if `view_type` is empty, mismatches the existing
+    // record, or the existing panel is live with a different owner.
     int32_t create(const std::string& panel_id_hint, const std::string& view_type,
                    const std::string& title, const WebviewPanelOptions& options,
                    WebviewPanelState& out_state);
@@ -117,6 +132,13 @@ class WebviewPanelRegistry final {
 
     // List only non-disposed panels owned by one lifecycle domain.
     std::vector<WebviewPanelState> list_alive(WebviewPanelOwner owner) const;
+
+    // Compact descriptor list of the live native-runtime-owned panels —
+    // the workbench adapter uses this to enumerate built-in dashboards
+    // (kernel-map / mcp-management) for the sidebar without pulling the
+    // full HTML payloads out of the registry.
+    std::vector<WebviewPanelDescriptor> native_panel_descriptors() const;
+
     std::optional<WebviewPanelState> active_panel() const;
 
     // Total create-count (including disposed) for diagnostics.

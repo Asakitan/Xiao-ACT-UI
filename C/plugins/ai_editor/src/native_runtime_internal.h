@@ -249,6 +249,41 @@ class NativeRuntime final {
     void set_webview_post_message_handler(WebviewPostMessageHandler handler);
     std::optional<WebviewPanelState> active_webview_panel() const;
 
+    // extapi bridges — expose the private guts the shared vscode.* extension
+    // surface needs so the standalone sao_ai_editor_vscode_shim_dispatch door
+    // and this runtime's extension-call door resolve identical state.  They
+    // stay nullptr/uninitialised until initialize() has run.
+    ExtensionHost* extension_host() noexcept { return extension_host_.get(); }
+    SecretStore* secrets_store() noexcept { return secrets_.get(); }
+    const ScopeStore& scope_store() const noexcept { return scopes_; }
+    const RuntimeOptions& runtime_options() const noexcept { return options_; }
+    // Registry of vscode.window webview panel metadata — the workbench
+    // adapter enumerates native-runtime-owned panels through this door so
+    // built-in dashboards stay addressable after the runtime registers
+    // them during initialize().
+    WebviewPanelRegistry& webview_panels() noexcept { return webview_panels_; }
+    const WebviewPanelRegistry& webview_panels() const noexcept {
+        return webview_panels_;
+    }
+    // Forward an extapi event into the public event queue (sao.event).
+    void emit_extapi_event(std::string_view event_name, const Json& payload) {
+        emit_workflow_event(event_name, payload);
+    }
+    // Route `command` through the live extension host's commands.execute
+    // tunnel.  Returns NOT_INITIALIZED when no host is up, or the inner
+    // execute_command status (including BUSY when a callback is in flight).
+    int32_t invoke_extension_command(std::string_view command, const Json& arguments,
+                                     uint32_t timeout_ms, Json& result);
+    // Synchronous single-shot chat used by vscode.lm.sendRequest — wraps the
+    // private run_chat_sync so extapi does not reach into the provider layer.
+    int32_t run_extension_chat(const Json& params, uint32_t timeout_ms,
+                               std::string& out_content);
+    // Real provider catalog for vscode.lm.selectChatModels — merges the
+    // persisted `providers` registry with manifest-declared chat providers.
+    Json chat_model_catalog();
+    // Raw extension-host snapshot for vscode.extensions.get / .list.
+    Json extension_host_snapshot() const;
+
     mutable std::mutex store_mutex_;
     mutable std::mutex state_mutex_;
     std::unordered_map<std::string, std::shared_ptr<RunState>> runs_;
@@ -322,5 +357,55 @@ class RuntimeLease final {
     SaoAiEditorRuntime* handle_ = nullptr;
     NativeRuntime* runtime_ = nullptr;
 };
+
+// ---------- extapi: process-global vscode.* extension surface ----------
+// Shared backend for the Node extension-host path (via the
+// NativeRuntime::dispatch_extension_call fallback) and the standalone
+// sao_ai_editor_vscode_shim_dispatch C ABI door.  Runtime-bound operations
+// (chat provider calls, extension round-trips) require an attached
+// NativeRuntime; everything else works door-agnostic on the same
+// process-global registries.
+namespace extapi {
+
+// (Re)bind the workspace/system roots used for containment, secrets,
+// configuration and registries.  Called by NativeRuntime::initialize and by
+// sao_ai_editor_vscode_shim_set_workspace_root for the standalone door.
+void configure(std::string_view workspace_root, std::string_view system_root,
+               std::string_view plugin_roots_json);
+
+// Bind/unbind the live runtime.  detach_runtime is idempotent and also
+// stops the filesystem watcher pump.
+void attach_runtime(NativeRuntime* runtime) noexcept;
+void detach_runtime(NativeRuntime* runtime) noexcept;
+
+// Dispatch a `vscode.*` / `sao.extapi.*` method against the shared state.
+// `runtime` may be nullptr (standalone door); runtime-bound operations then
+// return SAO_AI_EDITOR_ERR_NOT_INITIALIZED.
+int32_t dispatch(NativeRuntime* runtime, std::string_view method, const Json& params,
+                 Json& result);
+
+// Push one event onto the shared queue ({type:"extapi.event",kind,ts,
+// payload}), mirror it into the bound runtime's sao.event stream as
+// "vscode.extapi.<kind>", and — best effort — notify the live Node shim
+// through the internal commands tunnel.  Drop-oldest once the queue passes
+// kExtapiEventQueueCapacity; the overflow is surfaced by
+// ai_editor_extapi_drain_events as a synthetic first queue.overflow event.
+void publish(std::string_view kind, const Json& payload);
+
+// Merge every persisted environmentVariableCollection entry into `pairs`
+// (BootOptions.environment shape).  Extension-declared ops are applied in
+// deterministic extension-id order on top of the ambient process block.
+// Returns OK even with no store; non-OK only on genuine store failures.
+int32_t apply_environment_overrides(
+    std::vector<std::pair<std::string, std::string>>& environment);
+
+} // namespace extapi
+
+// Drains the shared extapi queue into `out` as a JSON array of
+// {type:"extapi.event",kind,ts,payload} entries.  When events were dropped
+// since the previous drain the array starts with a queue.overflow marker
+// event carrying {"dropped":N}.  Always returns an array; empty when the
+// queue is empty.
+int32_t ai_editor_extapi_drain_events(Json& out);
 
 } // namespace sao::ai_editor::native

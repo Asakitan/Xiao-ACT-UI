@@ -179,7 +179,9 @@ private:
                       const Json& args);
     Json handle_load_driver(const std::shared_ptr<IKernelMapBridge>& bridge,
                             const FilePicker& picker);
-    Json handle_refresh();
+    // Re-enumerate the bridge and merge status + enumerate into a single
+    // snapshot payload so the panel repaints from one refresh reply.
+    Json handle_refresh(const std::shared_ptr<IKernelMapBridge>& bridge);
     Json build_error(std::string_view cmd,
                      std::string_view reason,
                      const Json& request_id) const;
@@ -198,6 +200,13 @@ private:
     PostToPage post_to_page_;
     FilePicker file_picker_;
     bool registered_ = false;
+    // Asset diagnostics — set when register_with_runtime() could not find
+    // the bundled index.html; surfaced to the panel through replies and
+    // to the debugger via OutputDebugString.  Mutable because the loader
+    // runs from the const load_bundled_html() helper.
+    mutable bool assets_missing_ = false;
+    mutable std::string assets_root_;
+    mutable std::string assets_missing_path_;
 };
 
 }  // namespace sao::ai_editor::native

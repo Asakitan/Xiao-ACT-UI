@@ -44,8 +44,16 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
     } else {
         const auto existing = panels_.find(panel_id);
         if (existing != panels_.end()) {
-            if (!existing->second.disposed || existing->second.owner != owner ||
-                existing->second.view_type != view_type) {
+            // Adopt-on-view-type-match: a live record additionally requires
+            // an owner match so a different lifecycle domain cannot hijack
+            // an active panel id.  Disposed records adopt regardless of the
+            // requesting owner — the stored owner wins, so a disposed
+            // native_runtime builtin is revived while keeping its native
+            // attribution (and its HTML, which dispose() preserves).
+            if (existing->second.view_type != view_type) {
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            if (!existing->second.disposed && existing->second.owner != owner) {
                 return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             }
             existing->second.title = title;
@@ -56,9 +64,16 @@ int32_t WebviewPanelRegistry::create(const std::string& panel_id_hint, const std
             }
             existing->second.options.extras["active"] = true;
             existing->second.visible = true;
+            const bool was_disposed = existing->second.disposed;
             existing->second.disposed = false;
             existing->second.last_reveal_ms = now_ms();
-            existing->second.html.clear();
+            // A disposed extension-owned record restarts blank — its host
+            // re-pushes HTML on create.  Live records (same-owner adopt)
+            // and native-owned records keep their HTML so adoption never
+            // blanks a rendered builtin dashboard.
+            if (was_disposed && existing->second.owner != WebviewPanelOwner::native_runtime) {
+                existing->second.html.clear();
+            }
             existing->second.initial_state = Json::object();
             existing->second.last_post_ms = 0;
             out_state = existing->second;
@@ -152,7 +167,14 @@ int32_t WebviewPanelRegistry::dispose(const std::string& panel_id, WebviewPanelS
     it->second.disposed = true;
     it->second.visible = false;
     it->second.options.extras["active"] = false;
-    it->second.html.clear();
+    // Native-runtime-owned panels (the kernel-map / mcp-management
+    // builtins) push their HTML exactly once at register time and never
+    // again, so clearing it here would leave a revived panel blank.  The
+    // extension-host domain always re-pushes on create, so clearing that
+    // HTML matches the documented dispose contract.
+    if (it->second.owner != WebviewPanelOwner::native_runtime) {
+        it->second.html.clear();
+    }
     it->second.initial_state = Json::object();
     it->second.last_post_ms = 0;
     out_state = it->second;
@@ -237,6 +259,21 @@ std::vector<WebviewPanelState> WebviewPanelRegistry::list_alive(WebviewPanelOwne
     for (const auto& entry : panels_) {
         if (!entry.second.disposed && entry.second.owner == owner) {
             out.push_back(entry.second);
+        }
+    }
+    return out;
+}
+
+std::vector<WebviewPanelDescriptor> WebviewPanelRegistry::native_panel_descriptors() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<WebviewPanelDescriptor> out;
+    out.reserve(panels_.size());
+    for (const auto& entry : panels_) {
+        const WebviewPanelState& state = entry.second;
+        if (state.owner == WebviewPanelOwner::native_runtime && !state.disposed) {
+            out.push_back(WebviewPanelDescriptor{state.panel_id, state.title,
+                                                 state.view_type, state.owner,
+                                                 state.visible});
         }
     }
     return out;

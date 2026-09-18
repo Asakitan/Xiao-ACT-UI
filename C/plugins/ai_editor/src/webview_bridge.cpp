@@ -2307,7 +2307,7 @@ int32_t run_webview_bridge(const WebViewConfig& config) {
     // single compositor.
     if (!SetWindowPos(window, nullptr, -32000, -32000, width_px, height_px,
                       SWP_NOACTIVATE | SWP_NOZORDER) ||
-        SetTimer(window, /*kCaptureTimerId=*/0xA01u, 33u, nullptr) == 0 ||
+        SetTimer(window, /*kCaptureTimerId=*/0xA01u, 16u, nullptr) == 0 ||
         SetTimer(window, /*kInputTimerId=*/0xA02u, 5u, nullptr) == 0 ||
         SetTimer(window, kPanelMaterializeTimerId, 50u, nullptr) == 0) {
         const int32_t cleanup_status = destroy_hardened_window();

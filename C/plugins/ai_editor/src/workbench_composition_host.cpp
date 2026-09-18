@@ -1,5 +1,7 @@
 #include "workbench_composition_host.h"
 #include "native_utils.h"
+#include "memory_viewer_provider.h"
+#include "sao/sdk/sao_sdk_platform_panels.h"
 #include "sao/ui/dialog.h"
 #include "sao/ui/file_picker.h"
 #include "workbench_native_adapter.h"
@@ -942,6 +944,182 @@ void SAO_UI_CALL mouse_callback(uint32_t message, uint32_t key_state, float slot
         (void)SetCursor(cursor);
 }
 
+// ---------------------------------------------------------------------------
+// open-tool command receiver (workbench postMessage path).
+//
+// The workbench document may post {"type":"open-tool","name":"<id>"} without
+// the channel/kind envelope — e.g. via the native bridge's imperative API —
+// so it is handled before the channel gate.  Source authentication and the
+// parse budget above already constrained the sender to a verified
+// sao.workbench document, so this branch trusts the same perimeter as every
+// request-kind frame.  The reply posts
+//   {channel:"sao.workbench",kind:"open-tool-result",type:"open-tool-result",
+//    ok:bool,name:"<id>",via:"<path>",error?:string,id?:<echo>}
+// where `id` is echoed verbatim when the sender supplied one.
+// ---------------------------------------------------------------------------
+
+json open_tool_result_reply(const HostState& state, const json& request,
+                            bool ok, const std::string& name,
+                            const std::string& via, const std::string& error) {
+    json reply{{"channel", kChannel},
+               {"kind", "open-tool-result"},
+               {"type", "open-tool-result"},
+               {"ok", ok},
+               {"name", name},
+               {"via", via}};
+    if (!error.empty())
+        reply["error"] = error;
+    if (const auto id_it = request.find("id");
+        id_it != request.end() && id_it->is_string())
+        reply["id"] = id_it->get_ref<const std::string&>();
+    if (!state.handshake_challenge.empty())
+        reply["challenge"] = state.handshake_challenge;
+    return reply;
+}
+
+// Reads a string field into `out` only when it is actually a string — the
+// child reply is trusted-hostile JSON, so every access is type-gated (this
+// whole chain lives under noexcept).
+void open_tool_field(const json& object, const char* key, std::string& out) {
+    if (!object.is_object())
+        return;
+    if (const auto it = object.find(key); it != object.end() && it->is_string())
+        out = it->get_ref<const std::string&>();
+}
+
+// Forwards the open-tool request to the SaoAiEditor child process where the
+// builtin panel providers (kernel-map, mcp-management) live; the child's
+// open-tool receiver performs the registry create+reveal and reports the
+// real outcome.  `result` gets {ok,via,error?}.
+bool forward_open_tool_to_child(HostState& state, const std::string& name,
+                                json& result_out) {
+    if (state.launcher == nullptr) {
+        result_out = {{"ok", false},
+                      {"via", "none"},
+                      {"error", "SaoAiEditor child is not running"}};
+        return false;
+    }
+    const json forward{{"jsonrpc", "2.0"},
+                       {"id", "open-tool-launcher"},
+                       {"method", "open-tool"},
+                       {"params", {{"type", "open-tool"}, {"name", name}}}};
+    const std::string wire = forward.dump();
+    std::array<char, 64u * 1024u> buffer{};
+    uint32_t reply_len = 0;
+    const int32_t status =
+        sao_ai_editor_request(state.launcher, wire.data(),
+                              static_cast<uint32_t>(wire.size()), buffer.data(),
+                              static_cast<uint32_t>(buffer.size()), &reply_len, 0);
+    if (status != SAO_AI_EDITOR_OK || reply_len == 0 ||
+        reply_len >= buffer.size()) {
+        result_out = {{"ok", false},
+                      {"via", "none"},
+                      {"error", "child open-tool request failed with status " +
+                                    std::to_string(status)}};
+        return false;
+    }
+    const json child_reply =
+        json::parse(std::string_view{buffer.data(), reply_len}, nullptr, false);
+    if (child_reply.is_object()) {
+        if (const auto result_it = child_reply.find("result");
+            result_it != child_reply.end() && result_it->is_object()) {
+            bool ok = false;
+            if (const auto ok_it = result_it->find("ok");
+                ok_it != result_it->end() && ok_it->is_boolean())
+                ok = ok_it->get<bool>();
+            std::string via = "webview-panel";
+            open_tool_field(*result_it, "via", via);
+            result_out = {{"ok", ok}, {"via", via}};
+            if (!ok) {
+                std::string error_text;
+                open_tool_field(*result_it, "error", error_text);
+                result_out["error"] =
+                    error_text.empty() ? "child rejected the open-tool request"
+                                       : error_text;
+            }
+            return ok;
+        }
+    }
+    result_out = {{"ok", false},
+                  {"via", "none"},
+                  {"error", "child returned an unparseable open-tool response"}};
+    return false;
+}
+
+sao_status_t handle_open_tool_message(HostState& state, const json& message) noexcept {
+    std::string name;
+    if (const auto name_it = message.find("name");
+        name_it != message.end() && name_it->is_string())
+        name = name_it->get_ref<const std::string&>();
+    if (name.empty() || name.size() > 128u) {
+        return post_json(
+            state, open_tool_result_reply(state, message, false, name, "none",
+                                          "open-tool requires a non-empty \"name\" field"));
+    }
+
+    // Builtin operator panels are owned by the child runtime's
+    // WebviewPanelRegistry — forward so the child does create+reveal and
+    // reports the real result.
+    if (name == "kernel-map" || name == "kernel-map-builtin" ||
+        name == "mcp-management" || name == "mcp-management-builtin") {
+        json child_result;
+        const bool ok = forward_open_tool_to_child(state, name, child_result);
+        std::string via;
+        std::string error;
+        open_tool_field(child_result, "via", via);
+        open_tool_field(child_result, "error", error);
+        if (via.empty())
+            via = "webview-panel";
+        return post_json(state,
+                         open_tool_result_reply(state, message, ok, name, via, error));
+    }
+
+    // GPU Hunt is compositor-owned; the panel-action bridge owns the show
+    // path (handle_open_tool routes "gpu.hunt" to show_gpu_hunt_panel).
+    if (name == "gpu-hunt") {
+        if (state.panel_action == nullptr) {
+            return post_json(state, open_tool_result_reply(state, message, false, name,
+                                                           "none", "panel bridge is not attached"));
+        }
+        static constexpr std::string_view kEmptyPayload{"{}"};
+        state.panel_action("gpu.hunt",
+                           reinterpret_cast<const uint8_t*>(kEmptyPayload.data()),
+                           kEmptyPayload.size(), state.panel_data);
+        return post_json(state,
+                         open_tool_result_reply(state, message, true, name,
+                                                "panel-action", {}));
+    }
+
+    // The memory tool id resolves through the memory_viewer provider's own
+    // show entry; the remaining semantic names go straight to the launcher's
+    // platform panel-open binding.
+    if (name == "memory") {
+        const int32_t status = sao::ai_editor::native::MemoryViewerProvider::open_panel();
+        if (status == SAO_SDK_OK) {
+            return post_json(state, open_tool_result_reply(state, message, true, name,
+                                                           "platform-panel", {}));
+        }
+        return post_json(state, open_tool_result_reply(
+                                    state, message, false, name, "none",
+                                    "platform panel open failed with SDK status " +
+                                        std::to_string(status)));
+    }
+    if (name == "settings" || name == "hotkeys" || name == "workshop" ||
+        name == "plugins" || name == "process" || name == "license") {
+        const sao_sdk_status_t status = sao_sdk_platform_open_panel(name.c_str());
+        if (status == SAO_SDK_OK) {
+            return post_json(state, open_tool_result_reply(state, message, true, name,
+                                                           "platform-panel", {}));
+        }
+        return post_json(state, open_tool_result_reply(
+                                    state, message, false, name, "none",
+                                    "platform panel open failed with SDK status " +
+                                        std::to_string(static_cast<int32_t>(status))));
+    }
+    return post_json(state, open_tool_result_reply(state, message, false, name, "none",
+                                                   "unknown tool name '" + name + "'"));
+}
+
 sao_status_t handle_message(const std::shared_ptr<HostState>& state,
                             ICoreWebView2WebMessageReceivedEventArgs* args) noexcept {
     if (args == nullptr || !state->view)
@@ -987,6 +1165,16 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (!message.is_object())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    // "open-tool" is a native panel-open command posted by the workbench
+    // document itself — {"type":"open-tool","name":"<id>"} — and carries no
+    // channel/kind envelope, so it is resolved here, before the channel and
+    // request-kind gates.  The source authentication above already limits
+    // the sender to a verified sao.workbench document.
+    if (const auto type_it = message.find("type");
+        type_it != message.end() && type_it->is_string() &&
+        type_it->get_ref<const std::string&>() == "open-tool") {
+        return handle_open_tool_message(*state, message);
+    }
     const auto channel_it = message.find("channel");
     const auto kind_it = message.find("kind");
     if (channel_it == message.end() || !channel_it->is_string() ||

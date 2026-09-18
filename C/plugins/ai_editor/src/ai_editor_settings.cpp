@@ -267,8 +267,12 @@ Json defaults_impl() {
           {"shell_args", Json::array()},
           {"timeout", 30},
           {"output_limit", 8000},
+          {"shell", "cmd.exe"},
+          {"timeout_ms", 30000},
+          {"output_limit_bytes", 1048576},
           {"auto_approve", Json::object()},
           {"use_pty", false}}},
+        {"keybindings", Json::object()},
         {"workspace",
          {{"root", ""},
           {"roots", Json::array()},
@@ -569,8 +573,12 @@ Json normalize_settings(const Json& raw) {
     normalize_list(terminal, "shell_args", false);
     normalize_integer(terminal, "timeout", 30, 1, 3600);
     normalize_integer(terminal, "output_limit", 8000, 1000, INT32_MAX);
+    normalize_string(terminal, "shell", "cmd.exe");
+    normalize_integer(terminal, "timeout_ms", 30000, 1, 120000);
+    normalize_integer(terminal, "output_limit_bytes", 1048576, 1, 4194304);
     normalize_object(terminal, "auto_approve");
     normalize_bool(terminal, "use_pty", false);
+    normalize_object(settings, "keybindings");
 
     auto& workspace = settings["workspace"];
     normalize_string(workspace, "root");
@@ -929,7 +937,27 @@ Json fields_schema() {
         "Maximum captured terminal output.", "integer", 8000,
         {{"min", 1000}});
     add("terminal.use_pty", "terminal", "Use ConPTY",
-        "Use a real Windows pseudo-terminal when available.", "boolean", false,
+        "PTP host not yet wired; terminal runs via shell /c", "boolean", false,
+        {{"advanced", true}});
+    add("terminal.shell", "terminal", "Shell",
+        "Shell executable used by the runTerminal tool; defaults to cmd.exe.",
+        "string", defaults["terminal"]["shell"], {{"advanced", true}});
+    add("terminal.timeout_ms", "terminal", "Terminal Timeout (ms)",
+        "Maximum run time for runTerminal commands in milliseconds.",
+        "integer", defaults["terminal"]["timeout_ms"],
+        {{"min", 1}, {"max", 120000}, {"advanced", true}});
+    add("terminal.output_limit_bytes", "terminal", "Terminal Output Limit (bytes)",
+        "Maximum bytes captured per runTerminal call.", "integer",
+        defaults["terminal"]["output_limit_bytes"],
+        {{"min", 1}, {"max", 4194304}, {"advanced", true}});
+    add("keybindings", "keybindings", "Keybindings",
+        "Command-id to key-chord assignments persisted under keybindings.*.",
+        "object", Json::object(), {{"advanced", true}});
+    add("provider.claude_cli_path", "claude_code", "Claude CLI Path",
+        "Claude Code executable path; persists to claude_code.cli_path.",
+        "string", "", {{"advanced", true}});
+    add("provider.codex_cli_path", "codex", "Codex CLI Path",
+        "Codex executable path; persists to codex.cli_path.", "string", "",
         {{"advanced", true}});
 
     add("workspace.root", "workspace", "Workspace Root",
@@ -1711,6 +1739,8 @@ Json section_list() {
          {"description", "MCP discovery, trust, access, and servers."}},
         {{"id", "terminal"}, {"label", "Terminal"},
          {"description", "Integrated terminal profile and limits."}},
+        {{"id", "keybindings"}, {"label", "Keybindings"},
+         {"description", "Key chord bindings by command id."}},
         {{"id", "workspace"}, {"label", "Workspace"},
          {"description", "Workspace discovery and remembered roots."}},
         {{"id", "extensions"}, {"label", "Extensions"},
@@ -1834,6 +1864,15 @@ std::string canonical_settings_path(std::string path) {
     path = trim_ascii(std::move(path));
     if (path == "mcpServers") {
         return "mcp.mcpServers";
+    }
+    // `provider` is a scalar field, so `provider.<cli>` paths alias into
+    // the owning object sections instead of overwriting the scalar with an
+    // object.
+    if (path == "provider.claude_cli_path") {
+        return "claude_code.cli_path";
+    }
+    if (path == "provider.codex_cli_path") {
+        return "codex.cli_path";
     }
     return path;
 }
@@ -2436,7 +2475,7 @@ void validate_settings_patch(const Json& patch, Json& errors) {
     }
     for (const auto section : {"claude_code", "codex", "mcp", "terminal",
                                "workspace", "extensions", "editor", "files",
-                               "customization", "layout"}) {
+                               "customization", "layout", "keybindings"}) {
         validate_object_field(patch, section, section, errors);
     }
     if (patch.contains("mcp") && patch["mcp"].is_object()) {
@@ -2559,17 +2598,33 @@ void validate_settings_patch(const Json& patch, Json& errors) {
                             "editor.renderWhitespace", "editor.renderLineHighlight",
                             "editor.foldingStrategy", "editor.showFoldingControls",
                             "files.autoSave", "terminal.profile",
-                            "terminal.shell_path", "workspace.root",
+                            "terminal.shell", "terminal.shell_path",
+                            "provider.claude_cli_path", "provider.codex_cli_path",
+                            "workspace.root",
                             "workspace.last_root", "layout.panelHeight",
                             "layout.sidebarWidth", "layout.rightSidebarWidth",
                             "layout.activeSidebarPanel", "layout.activeBottomTab"}) {
         check_dotted_string(path);
+    }
+    for (const auto& [key, value] : patch.items()) {
+        // Dotted keybindings.<command-id> assignments persist as strings;
+        // reject non-string payloads early instead of normalizing them away.
+        if (key.starts_with("keybindings.") &&
+            (!value.is_string() ||
+             value.get_ref<const std::string&>().size() >
+                 kMaximumSettingStringBytes)) {
+            errors.push_back(validation_error(
+                key, "TYPE_OR_RANGE", "keybinding value must be bounded text",
+                "string <= 64 KiB", value));
+        }
     }
     check_dotted_integer("editor.tabSize", 1, 16);
     check_dotted_integer("editor.quickSuggestionsDelay", 0, 10000);
     check_dotted_integer("files.autoSaveDelay", 0, INT32_MAX);
     check_dotted_integer("terminal.timeout", 1, 3600);
     check_dotted_integer("terminal.output_limit", 1000, INT32_MAX);
+    check_dotted_integer("terminal.timeout_ms", 1, 120000);
+    check_dotted_integer("terminal.output_limit_bytes", 1, 4194304);
     check_dotted_enum(
         "files.autoSave",
         std::array<std::string_view, 4>{"off", "afterdelay",

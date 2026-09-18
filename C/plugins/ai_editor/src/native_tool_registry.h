@@ -119,6 +119,7 @@ class NativeToolRegistry final {
     int32_t list_files(const Json& arguments, Json& result) const;
     int32_t search_files(const Json& arguments, Json& result) const;
     int32_t edit_file(const Json& arguments, Json& result) const;
+    int32_t run_terminal(const Json& arguments, Json& result) const;
     int32_t dump_sdk(const Json& arguments, Json& result, bool unreal) const;
 
     // Non-locking helpers used by both register_alias() and the constructor

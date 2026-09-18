@@ -6,9 +6,13 @@
 #include "webview_bridge.h"
 #endif
 
+#include "sao/sdk/sao_sdk_platform_panels.h"
+
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -701,6 +705,205 @@ private:
     HWND window_ = nullptr;
 };
 
+// ---------------------------------------------------------------------------
+// open-tool receiver.
+//
+// The workbench adapter (workbench_native_adapter.cpp) issues
+//   {"jsonrpc":"2.0","id":N,"method":"open-tool",
+//    "params":{"type":"open-tool","name":"<id>"}}
+// through this pipe when the launcher's own SDK panel-open binding does not
+// cover a name.  A bare {"type":"open-tool","name":"<id>"} frame is accepted
+// as well.  The runtime invoke() table does not implement "open-tool" (it is
+// a native panel open, not a vscode.* method), so the frame is consumed
+// here — before session->dispatch — and answered with
+//   {"type":"open-tool-result","ok":bool,"name":"<id>","via":"...",
+//    "error"?:string}
+// wrapped in the JSON-RPC envelope (id echoed verbatim) when the request
+// carried one.
+//
+// Builtin operator panels (kernel-map, mcp-management) are owned by this
+// process: their providers are registered in the runtime's
+// WebviewPanelRegistry at startup, so opening them runs the same
+// createWebviewPanel + revealWebviewPanel pair the launcher panel uses
+// (open_builtin_panel in ai_editor_main_panel.cpp).  Semantic names and
+// "gpu-hunt" resolve through the process-wide platform panel binding; the
+// child installs none, so the SDK returns a defined status which surfaces
+// as ok:false with the error text rather than crashing.
+// ---------------------------------------------------------------------------
+
+struct OpenToolPanelSpec {
+    // ids mirror the canonical constants in kernel_map_panel_provider.h
+    // (kKernelMapPanelId / kKernelMapViewType / kKernelMapPanelTitle) and
+    // mcp_management_panel_provider.h (kMcpManagementPanelId /
+    // kMcpManagementViewType / kMcpManagementPanelTitle); the provider
+    // headers pull the rt_io include graph this executable does not link,
+    // so the fixed ids are duplicated here.
+    const char* panel_id;
+    const char* view_type;
+    const char* title;
+};
+
+const OpenToolPanelSpec* builtin_open_tool(std::string_view name) noexcept {
+    static constexpr OpenToolPanelSpec kKernelMap{"kernel-map-builtin",
+                                                  "sao.kernel_map",
+                                                  "Kernel Map Bridge"};
+    static constexpr OpenToolPanelSpec kMcpManagement{"mcp-management-builtin",
+                                                      "sao.mcp_management",
+                                                      "MCP Management"};
+    if (name == "kernel-map" || name == "kernel-map-builtin") {
+        return &kKernelMap;
+    }
+    if (name == "mcp-management" || name == "mcp-management-builtin") {
+        return &kMcpManagement;
+    }
+    return nullptr;
+}
+
+bool semantic_open_tool(std::string_view name) noexcept {
+    return name == "settings" || name == "hotkeys" || name == "workshop" ||
+           name == "plugins" || name == "process" || name == "memory" ||
+           name == "license" || name == "gpu-hunt";
+}
+
+// Sends one JSON-RPC request through the child's own dispatch machinery and
+// reports whether the runtime produced a result (non-error) reply.  Used to
+// drive vscode.window.* builtin-panel opens from the open-tool handler.
+bool dispatch_runtime_rpc(RuntimeSession& session, const char* method,
+                          const nlohmann::json& params, std::string& error) {
+    static std::atomic<uint64_t> request_counter{0};
+    const nlohmann::json request{
+        {"jsonrpc", "2.0"},
+        {"id", "open-tool-" + std::to_string(++request_counter)},
+        {"method", method},
+        {"params", params}};
+    const std::string raw = session.dispatch(request.dump());
+    const nlohmann::json reply = nlohmann::json::parse(raw, nullptr, false);
+    if (!reply.is_object()) {
+        error = "runtime returned an unparseable response";
+        return false;
+    }
+    if (const auto error_it = reply.find("error");
+        error_it != reply.end() && !error_it->is_null()) {
+        error = error_it->is_object()
+                    ? error_it->value("message", std::string{"runtime rejected the request"})
+                    : error_it->dump();
+        return false;
+    }
+    if (!reply.contains("result")) {
+        error = "runtime response carried neither result nor error";
+        return false;
+    }
+    return true;
+}
+
+// Executes the open-tool request for `name` and returns the result object.
+// ok:true only when a concrete open path completed in this process.
+nlohmann::json run_open_tool(RuntimeSession& session, std::string_view name) {
+    nlohmann::json result{{"type", "open-tool-result"},
+                          {"ok", false},
+                          {"name", std::string{name}},
+                          {"via", "ipc"}};
+    if (name.empty()) {
+        result["error"] = "open-tool requires a non-empty \"name\" field";
+        return result;
+    }
+    if (const OpenToolPanelSpec* panel = builtin_open_tool(name);
+        panel != nullptr) {
+        std::string error;
+        if (dispatch_runtime_rpc(session, "vscode.window.createWebviewPanel",
+                                 {{"panelId", panel->panel_id},
+                                  {"viewType", panel->view_type},
+                                  {"title", panel->title},
+                                  {"options",
+                                   {{"enableScripts", true},
+                                    {"retainContextWhenHidden", true},
+                                    {"viewColumn", 1}}}},
+                                 error) &&
+            dispatch_runtime_rpc(session, "vscode.window.revealWebviewPanel",
+                                 {{"panelId", panel->panel_id},
+                                  {"viewColumn", 1},
+                                  {"preserveFocus", false}},
+                                 error)) {
+            result["ok"] = true;
+            result["via"] = "webview-panel";
+        } else {
+            result["error"] = error;
+        }
+        return result;
+    }
+    if (semantic_open_tool(name)) {
+        // The launcher's panel-open binding resolves these names
+        // (init_pipeline.cpp); "memory" additionally has a provider-level
+        // show entry — MemoryViewerProvider::open_panel() — that issues this
+        // same call.  In this child process the binding is absent, so the
+        // returned SDK status becomes the reply's error.
+        const sao_sdk_status_t status =
+            sao_sdk_platform_open_panel(std::string{name}.c_str());
+        if (status == SAO_SDK_OK) {
+            result["ok"] = true;
+            result["via"] = "platform-panel";
+        } else {
+            result["error"] = "platform panel open failed with SDK status " +
+                              std::to_string(static_cast<int32_t>(status));
+        }
+        return result;
+    }
+    result["error"] = "unknown tool name '" + std::string{name} + "'";
+    return result;
+}
+
+// Returns true when `message` is an open-tool frame (JSON-RPC method or
+// bare type form) and fills `response` with the wire-ready reply; false
+// leaves the frame for the normal session->dispatch path.
+bool try_open_tool_frame(RuntimeSession& session, const std::string& message,
+                         std::string& response) {
+    // Cheap pre-filter: skip the JSON parse for every other request shape.
+    if (message.find("open-tool") == std::string::npos)
+        return false;
+    const nlohmann::json request = nlohmann::json::parse(message, nullptr, false);
+    if (!request.is_object())
+        return false;
+    const auto method_it = request.find("method");
+    const bool rpc_form = method_it != request.end() && method_it->is_string() &&
+                          method_it->get_ref<const std::string&>() == "open-tool";
+    bool bare_form = false;
+    if (!rpc_form) {
+        if (const auto type_it = request.find("type");
+            type_it != request.end() && type_it->is_string() &&
+            type_it->get_ref<const std::string&>() == "open-tool") {
+            bare_form = true;
+        }
+    }
+    if (!rpc_form && !bare_form)
+        return false;
+
+    std::string name;
+    if (rpc_form) {
+        if (const auto params_it = request.find("params");
+            params_it != request.end() && params_it->is_object()) {
+            if (const auto name_it = params_it->find("name");
+                name_it != params_it->end() && name_it->is_string()) {
+                name = name_it->get<std::string>();
+            }
+        }
+    } else if (const auto name_it = request.find("name");
+               name_it != request.end() && name_it->is_string()) {
+        name = name_it->get<std::string>();
+    }
+
+    nlohmann::json result = run_open_tool(session, name);
+    if (bare_form) {
+        response = result.dump();
+        return true;
+    }
+    const nlohmann::json reply{{"jsonrpc", "2.0"},
+                               {"id", request.value("id", nlohmann::json(nullptr))},
+                               {"result", std::move(result)},
+                               {"sao", {{"protocolVersion", 1}}}};
+    response = reply.dump();
+    return true;
+}
+
 int run_pipe_requests(const std::shared_ptr<RuntimeSession>& session,
                       HANDLE pipe,
                       const std::shared_ptr<UiBridge>& bridge) {
@@ -721,6 +924,20 @@ int run_pipe_requests(const std::shared_ptr<RuntimeSession>& session,
                 bridge->post(kParentShutdownMessage);
             }
             return 0;
+        }
+
+        std::string open_tool_response;
+        if (try_open_tool_frame(*session, message, open_tool_response)) {
+            if (!send_frame(pipe, session->stop_event(), open_tool_response)) {
+                const int result = session->stopped() ? 0 : 9;
+                session->request_stop();
+                if (bridge) {
+                    bridge->post(kPipeStoppedMessage,
+                                 static_cast<WPARAM>(result));
+                }
+                return result;
+            }
+            continue;
         }
 
         const std::string response = session->dispatch(message);

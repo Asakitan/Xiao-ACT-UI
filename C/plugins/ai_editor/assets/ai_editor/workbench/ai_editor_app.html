@@ -4491,6 +4491,25 @@ pre.code-block { overflow:visible; }
     <div class="sb-view" id="sb-tools" style="display:none">
       <div class="sb-header"><span data-i18n="tools">Engine Tools</span></div>
       <div class="sb-section" id="tools-list"></div>
+      <div class="sb-section" id="launcher-panels">
+        <div class="sb-group" data-i18n="launcher_panels">Launcher Panels (面板)</div>
+        <div id="launcher-panels-status" class="lp-status" data-i18n="launcher_panels_hint">Click a tool to open its native panel.</div>
+        <div class="lp-grid">
+          <button type="button" class="lp-btn" onclick="openNativeToolPanel('settings')"><span data-i18n="panel_settings">Settings</span></button>
+          <button type="button" class="lp-btn" onclick="openNativeToolPanel('hotkeys')"><span data-i18n="panel_hotkeys">Hotkeys</span></button>
+          <button type="button" class="lp-btn" onclick="openNativeToolPanel('workshop')"><span data-i18n="panel_workshop">Workshop</span></button>
+          <button type="button" class="lp-btn" onclick="openNativeToolPanel('plugins')"><span data-i18n="panel_plugins">Plugins</span></button>
+          <button type="button" class="lp-btn" onclick="openNativeToolPanel('process')"><span data-i18n="panel_process">Process</span></button>
+          <button type="button" class="lp-btn" onclick="openNativeToolPanel('memory')"><span data-i18n="panel_memory">Memory</span></button>
+          <button type="button" class="lp-btn" onclick="openNativeToolPanel('license')"><span data-i18n="panel_license">License</span></button>
+          <button type="button" class="lp-btn" onclick="openNativeToolPanel('gpu-hunt')"><span data-i18n="panel_gpu_hunt">GPU Hunt</span></button>
+        </div>
+        <div class="sb-group" data-i18n="builtin_views" style="margin-top:10px">Built-in Views</div>
+        <div class="lp-grid">
+          <button type="button" class="lp-btn" onclick="openBuiltinWebviewPanel('kernel-map-builtin','sao.kernel_map')"><span data-i18n="panel_kernel_map">Kernel Map</span></button>
+          <button type="button" class="lp-btn" onclick="openBuiltinWebviewPanel('mcp-management-builtin','sao.mcp_management')"><span data-i18n="panel_mcp">MCP Management</span></button>
+        </div>
+      </div>
     </div>
     <!-- MemViewer sidebar -->
     <div class="sb-view" id="sb-memviewer" style="display:none">
@@ -7560,6 +7579,91 @@ function callFailedMessage(result,fallback){
   return fallback||'Request failed';
 }
 
+// ── Launcher tool panels + built-in provider-webview views ──
+// openNativeToolPanel(name) drives native.tools.openNativePanel (adapter
+// method open_native_panel — the SDK/IPC fallback lives in the adapter).  The
+// valid set mirrors the adapter whitelist.
+const NATIVE_PANEL_RE=/^(settings|hotkeys|workshop|plugins|process|memory|license|gpu-hunt)$/;
+function setLauncherPanelsStatus(text,kind){
+  const el=$('launcher-panels-status');if(!el)return;
+  el.textContent=text||'';el.dataset.kind=kind||'';
+}
+async function openNativeToolPanel(name){
+  const id=String(name||'').trim();
+  if(!NATIVE_PANEL_RE.test(id))return{ok:false,error:'unknown panel: '+id};
+  let res=null;
+  const ns=window.native;
+  if(ns&&ns.tools&&typeof ns.tools.openNativePanel==='function'){
+    try{res=await ns.tools.openNativePanel(id)}
+    catch(e){res={ok:false,error:String(e&&(e.message||e.code)||'openNativePanel failed')}}
+  }else{
+    res=await call('open_native_panel',id);
+    if(res===null)res={ok:false,error:t('panel_bridge_unavailable')};
+  }
+  if(res&&res.ok){setLauncherPanelsStatus('');return res}
+  const msg=(res&&res.error)||tf('panel_open_failed',id);
+  setLauncherPanelsStatus(msg,'error');
+  if(typeof window.showToast==='function')window.showToast(msg,'error',5200);
+  return res&&typeof res==='object'?res:{ok:false,error:msg};
+}
+window.openNativeToolPanel=openNativeToolPanel;
+
+// Opens a backend-registered provider-webview panel (kernel-map-builtin,
+// mcp-management-builtin) inside the right-panel host.  The reveal RPC marks
+// the backend panel revealed and emits vscode.window.webviewPanel.revealed,
+// which the adapter forwards to the page as reveal_webview_panel; the html is
+// fetched explicitly via get_provider_webview so the mount is correct even if
+// that event raced the subscription.
+async function openBuiltinWebviewPanel(viewId,viewType){
+  const id=String(viewId||'').trim();
+  if(!id)return{ok:false,error:'view id is required'};
+  const reply=await call('webview_panel_reveal',id,1,false);
+  const backendOk=callSucceeded(reply);
+  const wv=await call('get_provider_webview',id);
+  if(!wv||!wv.view_id){
+    if(backendOk){setLauncherPanelsStatus('');return{ok:true,via:'reveal'}}
+    const msg=tf('panel_open_failed',id);setLauncherPanelsStatus(msg,'error');
+    if(typeof window.showToast==='function')window.showToast(msg,'error',5200);
+    return{ok:false,error:msg};
+  }
+  const title=wv.title||id;
+  if(!revealExtensionWebviewPanel({view_id:wv.view_id,view_type:wv.view_type||viewType||'',title:title,preserveFocus:false})){
+    const msg=tf('panel_open_failed',id);setLauncherPanelsStatus(msg,'error');
+    if(typeof window.showToast==='function')window.showToast(msg,'error',5200);
+    return{ok:false,error:msg};
+  }
+  const selector=(window.CSS&&CSS.escape)?CSS.escape(wv.view_id):String(wv.view_id).replace(/["\\]/g,'\\$&');
+  const host=document.querySelector('.right-panel[data-view-id="'+selector+'"]');
+  if(host&&!host.querySelector('iframe')){
+    if(wv.html)_injectWebviewHtml(host,wv.view_id,wv.html,wv.state);
+    else void mountProviderWebviewPanel(host,{id:wv.view_id,name:title,title:title,extension_view:true});
+  }
+  setLauncherPanelsStatus('');
+  return{ok:true,view_id:wv.view_id,backend:backendOk};
+}
+window.openBuiltinWebviewPanel=openBuiltinWebviewPanel;
+
+// Extension-API event queue pump — drains the adapter's process-local extapi
+// queue every 500 ms (≥ the 250 ms floor) and re-dispatches each entry as a
+// DOM CustomEvent.  Child-process extapi events still arrive through the
+// pushed vscode.extapi.* stream, so pump results are dispatched as
+// 'sao:extapi-event' rather than fed back through _onEditorEvent.
+var _extapiEventPumpTimer=0;
+function startExtapiEventPump(){
+  if(_extapiEventPumpTimer)return;
+  _extapiEventPumpTimer=setInterval(async()=>{
+    const ns=window.native;
+    if(!ns||!ns.extapi||typeof ns.extapi.drainEvents!=='function')return;
+    let res=null;
+    try{res=await ns.extapi.drainEvents()}catch(_e){return}
+    if(!res||res.ok===false||!Array.isArray(res.events)||!res.events.length)return;
+    res.events.forEach(ev=>{try{window.dispatchEvent(new CustomEvent('sao:extapi-event',{detail:ev}))}catch(_e){}});
+  },500);
+}
+window.addEventListener('sao:workbench-ready',()=>{
+  if(window.native&&window.native.extapi)startExtapiEventPump();
+});
+
 // ── Event handler (called from Python) ──
 window._onEditorEvent=function(event,data){
   if(event==='stream_delta') onStreamDelta(data);
@@ -8467,6 +8571,11 @@ en:{
   new_folder_action:'New Folder',rename_action:'Rename',delete_action:'Delete',
   confirm_delete_entry:'Delete permanently? This cannot be undone.',deleted_entry:'Deleted',
   go_to_line:'Go to Line...',run_selection:'Run Selection',new_terminal:'New Terminal',system_info:'System Info',about:'About',
+  launcher_panels:'Launcher Panels (面板)',launcher_panels_hint:'Click a tool to open its native panel.',builtin_views:'Built-in Views',
+  panel_settings:'Settings',panel_hotkeys:'Hotkeys',panel_workshop:'Workshop',panel_plugins:'Plugins',
+  panel_process:'Process',panel_memory:'Memory',panel_license:'License',panel_gpu_hunt:'GPU Hunt',
+  panel_kernel_map:'Kernel Map',panel_mcp:'MCP Management',
+  panel_open_failed:'Cannot open panel: $1',panel_bridge_unavailable:'Native bridge is not ready.',
   chat:'Assistant',explorer:'Explorer',tools:'Engine Tools',extensions:'Extensions',history:'History',instructions:'Instructions',agents_wf:'Agents & Workflows',settings:'Settings',
   more_views:'More views',ai_health:'AI health',ai_ready:'AI Ready',ai_busy:'AI Busy',ai_attention:'AI Attention',ai_error:'AI Error',language_services:'Language services',editor_action:'Editor action',editor_surfaces:'Editor surfaces',approval_label:'Approval',context_window:'Context window',usage_label:'Usage',cancel_editor_action:'Cancel editor action',
   send:'Send',stop:'Stop',ask_placeholder:'Ask anything... (/ commands, @ context, # tools)',
@@ -8708,6 +8817,11 @@ zh:{
   new_folder_action:'新建文件夹',rename_action:'重命名',delete_action:'删除',
   confirm_delete_entry:'确定永久删除？此操作无法撤销。',deleted_entry:'已删除',
   go_to_line:'转到行...',run_selection:'运行选中代码',new_terminal:'新建终端',system_info:'系统信息',about:'关于',
+  launcher_panels:'启动器面板',launcher_panels_hint:'点击工具打开对应的原生面板。',builtin_views:'内置视图',
+  panel_settings:'设置',panel_hotkeys:'快捷键',panel_workshop:'创意工坊',panel_plugins:'插件',
+  panel_process:'进程',panel_memory:'内存',panel_license:'许可证',panel_gpu_hunt:'GPU 猎手',
+  panel_kernel_map:'内核映射',panel_mcp:'MCP 管理',
+  panel_open_failed:'无法打开面板：$1',panel_bridge_unavailable:'原生桥接未就绪。',
   chat:'助手',explorer:'资源管理器',tools:'引擎工具',extensions:'扩展',history:'历史记录',instructions:'自定义指令',agents_wf:'代理 & 工作流',settings:'设置',
   more_views:'更多视图',ai_health:'AI 健康详情',ai_ready:'AI 就绪',ai_busy:'AI 忙碌',ai_attention:'AI 需要注意',ai_error:'AI 错误',language_services:'语言服务',editor_action:'编辑器操作',editor_surfaces:'编辑器界面',approval_label:'审批',context_window:'上下文窗口',usage_label:'用量',cancel_editor_action:'取消编辑器操作',
   send:'发送',stop:'停止',ask_placeholder:'输入问题... (/ 命令, @ 上下文, # 工具)',

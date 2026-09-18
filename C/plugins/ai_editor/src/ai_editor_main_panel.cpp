@@ -4,12 +4,14 @@
 #include "sao/ai_editor/ai_editor_launcher.h"
 #include "sao/ai_editor/ai_editor_settings_panel.h"
 #include "sao/ai_editor/gpu_hunt_central_panel.h"
+#include "sao/sdk/sao_sdk_platform_panels.h"
 #include "sao/ui/dialog.h"
 #include "sao/ui/overlay_host.h"
 #include "sao/ui/panel_sdk.h"
 #include "sao/ui/theme.h"
 
 #include "workbench_composition_host.h"
+#include "memory_viewer_provider.h"
 #include <cstdio>
 
 #include <nlohmann/json.hpp>
@@ -185,6 +187,12 @@ struct RpcTask {
     uint64_t generation{};
     std::string method;
     json params{json::object()};
+    // Optional second RPC executed after `method` inside the same task -
+    // the builtin webview open path uses it for createWebviewPanel (revive
+    // a disposed registry record) followed by revealWebviewPanel, while the
+    // completion log only surfaces the last step.
+    std::string chained_method;
+    json chained_params{json::object()};
     std::string conversation_id;
     std::string title;
     std::string scope;
@@ -1008,6 +1016,10 @@ RpcCompletion execute_task(AiEditorMainPanelState& state, RpcTask task) {
         break;
     case RpcTaskKind::Generic:
         (void)append(completion.task.method, completion.task.params);
+        if (!completion.task.chained_method.empty()) {
+            (void)append(completion.task.chained_method,
+                         completion.task.chained_params);
+        }
         break;
     case RpcTaskKind::NewConversation:
         if (task_cancelled(state, completion.task)) {
@@ -4483,6 +4495,87 @@ void queue_generic_action(AiEditorMainPanelState& state, std::string method, jso
     (void)enqueue_or_report(state, std::move(task), method);
 }
 
+// Builtin operator panels (kernel-map / mcp-management) are registered in
+// the backend's WebviewPanelRegistry under the native_runtime owner.  Open
+// runs create+reveal: create revives a disposed record (the registry
+// adopts on view-type match and keeps the stored owner + HTML) and reveal
+// marks it visible.  The registry create is a no-op adopt when the panel
+// is already live with a matching view type.
+void open_builtin_panel(AiEditorMainPanelState& state, std::string_view panel_id,
+                        std::string_view view_type, std::string_view title) {
+    RpcTask task;
+    task.kind = RpcTaskKind::Generic;
+    task.method = "vscode.window.createWebviewPanel";
+    task.params = {{"panelId", std::string(panel_id)},
+                   {"viewType", std::string(view_type)},
+                   {"title", std::string(title)},
+                   {"options",
+                    {{"enableScripts", true},
+                     {"retainContextWhenHidden", true},
+                     {"viewColumn", 1}}}};
+    task.chained_method = "vscode.window.revealWebviewPanel";
+    task.chained_params = {{"panelId", std::string(panel_id)},
+                           {"viewColumn", 1},
+                           {"preserveFocus", false}};
+    // Read the label before the move — argument evaluation order is
+    // unspecified and `task.method` must outlive the std::move call.
+    const std::string method_label = task.method;
+    (void)enqueue_or_report(state, std::move(task), method_label);
+}
+
+// `open-tool` IPC command: {type:"open-tool", name:string}.  Semantic
+// "memory" goes through the memory_viewer provider's own show entry
+// (MemoryViewerProvider::open_panel); "gpu-hunt" takes the native GPU Hunt
+// show path; "kernel-map"/"mcp-management" (and their builtin panel ids)
+// run the builtin create+reveal flow against the child runtime;
+// everything else is an explicit error — never silently swallowed.
+void handle_open_tool(AiEditorMainPanelState& state, const json& payload) {
+    const std::string name = payload_string(payload, "name");
+    if (name.empty()) {
+        append_output_line(state,
+                           "[error] open-tool requires a non-empty \"name\" field");
+        return;
+    }
+    if (name == "gpu-hunt") {
+        show_gpu_hunt_panel(state);
+        return;
+    }
+    if (name == "kernel-map" || name == "kernel-map-builtin") {
+        open_builtin_panel(state, "kernel-map-builtin", "sao.kernel_map",
+                           "Kernel Map Bridge");
+        return;
+    }
+    if (name == "mcp-management" || name == "mcp-management-builtin") {
+        open_builtin_panel(state, "mcp-management-builtin", "sao.mcp_management",
+                           "MCP Management");
+        return;
+    }
+    if (name == "memory") {
+        const int32_t status = sao::ai_editor::native::MemoryViewerProvider::open_panel();
+        if (status == SAO_SDK_OK) {
+            append_output_line(state, "[open-tool] opened panel \"memory\"");
+        } else {
+            append_output_line(state,
+                               "[error] open-tool \"memory\" failed with SDK status " +
+                                   std::to_string(status));
+        }
+        return;
+    }
+    if (name == "settings" || name == "hotkeys" || name == "workshop" ||
+        name == "plugins" || name == "process" || name == "license") {
+        const sao_sdk_status_t status = sao_sdk_platform_open_panel(name.c_str());
+        if (status == SAO_SDK_OK) {
+            append_output_line(state, "[open-tool] opened panel \"" + name + "\"");
+        } else {
+            append_output_line(state, "[error] open-tool \"" + name +
+                                          "\" failed with SDK status " +
+                                          std::to_string(static_cast<int32_t>(status)));
+        }
+        return;
+    }
+    append_output_line(state, "[error] open-tool unknown panel name: " + name);
+}
+
 void queue_control_request(AiEditorMainPanelState& state, std::string method, std::string label,
                            std::string group, json params, bool read_only, bool destructive,
                            bool advanced) {
@@ -5646,19 +5739,13 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
     } else if (action == "gpu.hunt") {
         show_gpu_hunt_panel(*state);
     } else if (action == "platform.mcp_management.open") {
-        RpcTask task;
-        task.kind = RpcTaskKind::Generic;
-        task.method = "vscode.window.revealWebviewPanel";
-        task.params = {
-            {"panelId", "mcp-management-builtin"}, {"viewColumn", 1}, {"preserveFocus", false}};
-        (void)enqueue_or_report(*state, std::move(task), "vscode.window.revealWebviewPanel");
+        open_builtin_panel(*state, "mcp-management-builtin", "sao.mcp_management",
+                           "MCP Management");
     } else if (action == "platform.kernel_map.open") {
-        RpcTask task;
-        task.kind = RpcTaskKind::Generic;
-        task.method = "vscode.window.revealWebviewPanel";
-        task.params = {
-            {"panelId", "kernel-map-builtin"}, {"viewColumn", 1}, {"preserveFocus", false}};
-        (void)enqueue_or_report(*state, std::move(task), "vscode.window.revealWebviewPanel");
+        open_builtin_panel(*state, "kernel-map-builtin", "sao.kernel_map",
+                           "Kernel Map Bridge");
+    } else if (action == "open-tool") {
+        handle_open_tool(*state, payload);
     } else if (action == "diagnostics.refresh") {
         RpcTask task;
         task.kind = RpcTaskKind::Bootstrap;
@@ -5694,6 +5781,12 @@ void SAO_UI_CALL panel_action_callback(const char* action_id_utf8, const uint8_t
         }
     } else if (action.starts_with("select.")) {
         select_value(*state, action, payload_string(payload, "value"));
+    } else if (const auto type_field = payload.find("type");
+               type_field != payload.end() && type_field->is_string() &&
+               type_field->get_ref<const std::string&>() == "open-tool") {
+        // Contract B: the {type:"open-tool", name} shape may also arrive
+        // carrying a different action id — consume it identically.
+        handle_open_tool(*state, payload);
     } else {
         append_output_line(*state, "[warn] unknown action id: " + std::string(action));
     }

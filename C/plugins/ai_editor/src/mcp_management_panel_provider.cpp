@@ -2,6 +2,14 @@
 
 #include "kernel_map_panel_provider.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -23,8 +31,36 @@ std::string read_asset(const std::filesystem::path& path) {
     return output.str();
 }
 
-std::string fallback_html() {
-    return R"HTML(<!DOCTYPE html><html><head><meta charset="utf-8"><title>MCP Management</title></head><body><h1>MCP Management</h1><p>MCP panel assets are unavailable.</p></body></html>)HTML";
+std::string html_escape_mcp(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (const char c : text) {
+        switch (c) {
+        case '&': out.append("&amp;"); break;
+        case '<': out.append("&lt;"); break;
+        case '>': out.append("&gt;"); break;
+        case '"': out.append("&quot;"); break;
+        default: out.push_back(c); break;
+        }
+    }
+    return out;
+}
+
+// Error-state page served when the bundled panel bundle cannot be found.
+// Small + self-contained: the expected index.html path is embedded so the
+// operator sees exactly which file the loader looked for.
+std::string missing_assets_html(const std::string& index_path) {
+    const std::string shown = index_path.empty()
+                                  ? std::string{"(panel assets root not configured)"}
+                                  : html_escape_mcp(index_path);
+    return std::string{R"HTML(<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>MCP Management</title>
+<style>body{font-family:system-ui,sans-serif;margin:16px;color:#ddd;background:#1e1e1e}h1{font-size:15px;margin:0 0 8px}.warn{color:#e5534b}code{user-select:all;color:#9cdcfe}</style></head>
+<body><h1>MCP Management</h1>
+<p class="warn">panel assets missing at <code>)HTML"} +
+           shown +
+           R"HTML(</code></p>
+<p>Restore assets/ai_editor/mcp_management_panel or rebuild the plugin.</p></body></html>)HTML";
 }
 
 std::string trim_copy(std::string value) {
@@ -61,14 +97,32 @@ bool McpManagementPanelProvider::is_registered() const noexcept {
 
 std::string McpManagementPanelProvider::load_bundled_html(
     const std::string& assets_root) const {
-    if (assets_root.empty()) {
-        return fallback_html();
+    const std::filesystem::path index_path =
+        assets_root.empty() ? std::filesystem::path{}
+                            : std::filesystem::path(assets_root) / "index.html";
+    const std::string index_utf8 =
+        index_path.empty() ? std::string{} : wide_to_utf8(index_path.wstring());
+    std::string html;
+    if (!assets_root.empty()) {
+        html = read_asset(index_path);
+    }
+    const bool missing = html.empty();
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        assets_root_ = assets_root;
+        assets_missing_ = missing;
+        assets_missing_path_ = missing ? index_utf8 : std::string{};
+    }
+    if (missing) {
+        const std::wstring diagnostic = utf8_to_wide(
+            "[sao.ai_editor] mcp-management panel assets missing at " +
+            (index_utf8.empty() ? std::string{"<root unset>"} : index_utf8) + "\n");
+        if (!diagnostic.empty()) {
+            OutputDebugStringW(diagnostic.c_str());
+        }
+        return missing_assets_html(index_utf8);
     }
     const std::filesystem::path root(assets_root);
-    std::string html = read_asset(root / "index.html");
-    if (html.empty()) {
-        return fallback_html();
-    }
     const std::string css = read_asset(root / "panel.css");
     const std::string script = read_asset(root / "panel.js");
     if (!css.empty()) {
@@ -182,6 +236,12 @@ int32_t McpManagementPanelProvider::handle_message(const Json& message,
         }
         out_reply["status"] = "ok";
         out_reply["payload"] = snapshot();
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            out_reply["assets"] = Json{{"available", !assets_missing_},
+                                       {"root", assets_root_},
+                                       {"expected", assets_missing_path_}};
+        }
         return SAO_AI_EDITOR_OK;
     }
     if (command == "open_kernel_map") {

@@ -105,6 +105,17 @@ class MemoryViewerProvider final {
     MemoryViewerProvider(MemoryViewerProvider&&) = delete;
     MemoryViewerProvider& operator=(MemoryViewerProvider&&) = delete;
 
+    // Panel-open entry for the `memory` tool id (open-tool IPC command).
+    // The provider owns no window chrome of its own — the launcher's memory
+    // viewer panel does — so showing resolves through the process-wide
+    // platform panel binding registered by the launcher
+    // (init_pipeline.cpp binds "memory" to ctx->memory_viewer_panel->open()).
+    // In a process where the binding is absent (the SaoAiEditor child does
+    // not install one) the call reports SAO_SDK_ERR_NOT_INITIALIZED so the
+    // caller can surface a defined error instead of a silent no-op.
+    // Returns an sao_sdk_status_t value.
+    [[nodiscard]] static int32_t open_panel() noexcept;
+
     // The caller keeps proxy alive and serializes attachment changes with lifecycle drain.
     [[nodiscard]] MemoryViewerOutcome bind(sao_rt_io_proxy_handle_t proxy, std::uint32_t pid,
                                            std::uint64_t start_time_100ns,
