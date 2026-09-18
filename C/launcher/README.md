@@ -35,6 +35,15 @@ payload launch so the update transaction can replace it.
 
 ## Developer Preview
 
+The process page now samples ordinary OS CPU, working-set, thread and architecture
+metadata on its worker every three seconds, alongside system memory, process count
+and uptime. CPU/memory charts retain up to 60 samples; unavailable readings remain
+explicit, and each page contains twelve process rows. Preview shutdown leaves the
+outer message loop before cancelling refresh and draining owners; late input is
+suppressed and quit codes are preserved. Debug and RelWithDebInfo builds include
+this change; the six-case Debug close probe and populated desktop charts passed.
+Ship trees and Hardened were not refreshed for this slice.
+
 `sao_ui_preview` is a developer-only production-compositor shell. It participates
 in the default build so first-party output-name or dependency changes relink it,
 but it has no install rule and is absent from every ship tree. The current Debug
@@ -187,26 +196,24 @@ meta-target and the corresponding pipeline step is compiled out.
 `sao_runtime_pack`, `sao_runtime_bundle`, `sao_runtime_bundle_audit`, and
 `sao_release_acceptance`.
 
-The complete Debug build passes. RelWithDebInfo and Hardened fresh acceptance each
-report 22 direct shipped PEs, 76 exact manifest files, diagnostics absent, and 17
-authenticated unique bundle PE inputs. Debug ship was refreshed to the same
-22-PE/76-file direct surface. All three current trees contain zero plaintext
-first-party DLLs and no manifest extras.
-Debug, RelWithDebInfo, and Hardened `SaoAuto.exe --version` probes pass verify,
-decrypt, normal Windows payload launch, exit-code propagation, and cleanup; each
-leaves zero generation directories, transient first-party helper DLLs, and lock
-files. VERSIONINFO reports `SAO Auto - native C++ launcher`, product `SAO Auto`,
-original filename `SaoAuto.exe`, and version `0.2.0.0` without mojibake.
+The complete Debug build passes and its ship was refreshed to the 22-PE/76-file
+direct surface. RelWithDebInfo and Hardened retain their earlier v4.17 acceptance
+snapshots; their RTIO driver bundle predates the direct R5 asset.
+The release gate runs `sao_runtime_pack --verify-inputs` to match the current
+17 plaintext PEs against all 21 authenticated leaf/destination/payload/size/hash
+records. Bootstrap keeps exact extracted-file guards, rechecks every published
+file against the authenticated manifest, and owns helper cleanup before lock release.
+The v4.17 `SaoAuto.exe --version` probes established verify, decrypt, normal
+Windows payload launch, exit-code propagation, and cleanup. The session-34 Debug
+bundle has not yet rerun key-layout or `--version` after its asset refresh.
 
 | Configuration | Bootstrap | Runtime bundle |
 | --- | --- | --- |
-| Debug | 2,445,312 bytes; SHA-256 `414cae5cdeaee548d902a1f117a10ef2887e6988e6a1130a34a870dc8a9534d4` | 74,069,584 bytes; SHA-256 `e01cf9efc7cce3354bb02aa99c8125fb06c88552bbe215a08fba6c30be88dd08` |
-| RelWithDebInfo | 319,488 bytes; SHA-256 `1a2123d1bc36a1e4d4b61422e98941666df4cce2c4c311bf1995584ed6732540` | 26,507,856 bytes; SHA-256 `89e1181954367d5b399addb7db0e000369e6f03ebfd6be3997c025834fcd8dac` |
-| Hardened | 322,048 bytes; SHA-256 `d93190d92f9075826f676cba967cdd8203998c1017e54f6916b2b7a0d5f571f4` | 26,741,328 bytes; SHA-256 `ac7654d89a4712a24c0879c85ea9b163f86a5d1c818cbcd2081d693c28a5aea9` |
+| Debug | 2,445,312 bytes; SHA-256 `c3cc5bfb4f2d13658833aeb3066e784caa9963ab4b8dc3299b402d0e4b5fe455` | 74,635,856 bytes; SHA-256 `4046f800eff3c3650f5bdc090c9a36980428b6e8b9557f5f922318bbea410eb1` |
+| RelWithDebInfo | 323,072 bytes; SHA-256 `165aad5f2fdb44f2c016bbe1461f13cb5baaeba355467a62f37e5efdd4e6b48a` | 26,625,616 bytes; SHA-256 `6ffa6a8493850d10a7d4e933a9fe5c7d7eaaf37d0634c9c6608dacec421df4d3` |
+| Hardened | 326,656 bytes; SHA-256 `24984ded8ed990ef6aca619c9a7a95880187059402481696ba848518491af376` | 26,861,648 bytes; SHA-256 `32d3cb510387bbf51764723826680734431215850fcc979a6dcafa3a5306b82c` |
 
-All three current build directories contain the complete 17/17 opaque PE map,
-and read-only bundle verification plus bootstrap key-layout audit succeeds for
-each configuration. Their exported versions are UI ABI 1.16 (`65552`) and AI
-Editor ABI 1.2 (`65538`); current build helper sidecars are RTIO protocol 3 / ABI
-`65538`. The refreshed `windows-debug/ship` directory matches its current build
-bootstrap and bundle hashes and has the same 22-PE/76-file opaque package surface.
+The refreshed `windows-debug/ship` directory matches its current build bootstrap
+and bundle hashes, has the 22-PE/76-file surface, and passed the five-driver bundle
+audit. Release and Hardened require fresh acceptance before they can carry the
+direct-R5 artifact claim.

@@ -1,10 +1,12 @@
 // SAO Auto — launcher boot-residency UX.
 //
-// Boot residency state machine (W6.9): after the helper promotes the R1/R3/R5
-// services from demand-start to boot-start, one real restart is required for
-// DriverEntry to re-run under SCM.  The helper stores a self-expiring
-// restart-required latch (registry value pair under each service key) that
-// survives exactly until the running boot id differs from the promotion boot
+// Boot residency state machine (W6.9): production R1/R3/R5 residency
+// requests demand-start for explicit transactions. This UX does not audit
+// all registry paths; snapshot rollback can still restore a prior Start=0.
+// When a resident driver image cannot
+// be retired inside the running boot the helper stores a self-expiring
+// restart-required latch (registry value pair under the service key) that
+// survives exactly until the running boot id differs from the armed boot
 // id — a fast-startup shutdown keeps the boot id and keeps the latch armed,
 // so the prompt correctly insists on "Restart" rather than "Shut down".
 //
@@ -20,8 +22,8 @@ namespace sao::launcher {
 
 // Static environment gates that shape the restart prompt.  All are
 // informational except `safe_mode`, which suppresses the prompt entirely
-// (boot-start drivers do not load in safe mode, so a restart there is
-// pointless).
+// (our drivers are never loaded in safe mode, so a restart prompt there
+// is pointless).
 struct BootEnvironmentGates {
     uint32_t struct_size = 0u;
     uint32_t safe_mode = 0u;             // GetSystemMetrics(SM_CLEANBOOT) != 0

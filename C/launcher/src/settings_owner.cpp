@@ -587,58 +587,65 @@ sao_status_t SettingsOwner::create(std::wstring path,
 }
 
 sao_status_t SettingsOwner::load(LoadInfo& out_info) noexcept {
+    sao_status_t status = SAO_STATUS_OK;
+    bool document_replaced = false;
     try {
-        std::lock_guard lock(mutex_);
-        LoadInfo info{};
-        std::string raw;
-        bool found = false;
-        const auto read_status = read_file(path_, raw, found);
-        info.found = found;
-        if (read_status == SAO_STATUS_ERR_NOT_FOUND && !found) {
-            Json empty = Json::object();
-            document_.swap(empty);
-            dirty_ = true;
-            out_info = info;
-            return SAO_STATUS_OK;
-        }
-        if (read_status != SAO_STATUS_OK) {
-            info.source_status = read_status;
-            out_info = info;
-            return read_status;
-        }
-
-        settings_codec::DecodeResult decoded;
-        const auto decode_status = settings_codec::decode(raw, decoded);
-        if (decode_status != SAO_STATUS_OK) {
-            info.source_status = decode_status;
-            info.backup_status = backup_corrupt_bytes(path_, raw);
-            if (info.backup_status != SAO_STATUS_OK) {
+        {
+            std::lock_guard lock(mutex_);
+            LoadInfo info{};
+            std::string raw;
+            bool found = false;
+            const auto read_status = read_file(path_, raw, found);
+            info.found = found;
+            if (read_status == SAO_STATUS_ERR_NOT_FOUND && !found) {
+                Json empty = Json::object();
+                document_.swap(empty);
+                dirty_ = true;
+                document_replaced = true;
                 out_info = info;
-                return info.backup_status;
+            } else if (read_status != SAO_STATUS_OK) {
+                info.source_status = read_status;
+                out_info = info;
+                status = read_status;
+            } else {
+                settings_codec::DecodeResult decoded;
+                const auto decode_status = settings_codec::decode(raw, decoded);
+                if (decode_status != SAO_STATUS_OK) {
+                    info.source_status = decode_status;
+                    info.backup_status = backup_corrupt_bytes(path_, raw);
+                    if (info.backup_status != SAO_STATUS_OK) {
+                        out_info = info;
+                        status = info.backup_status;
+                    } else {
+                        Json empty = Json::object();
+                        document_.swap(empty);
+                        dirty_ = true;
+                        info.recovered_corrupt = true;
+                        document_replaced = true;
+                        out_info = info;
+                    }
+                } else {
+                    document_.swap(decoded.document);
+                    dirty_ = decoded.legacy_plaintext;
+                    document_replaced = true;
+                    if (decoded.legacy_plaintext) {
+                        info.migration_status = save_locked();
+                        if (info.migration_status == SAO_STATUS_OK) {
+                            info.legacy_migrated = true;
+                        }
+                    }
+                    out_info = info;
+                }
             }
-            Json empty = Json::object();
-            document_.swap(empty);
-            dirty_ = true;
-            info.recovered_corrupt = true;
-            out_info = info;
-            return SAO_STATUS_OK;
         }
-
-        document_.swap(decoded.document);
-        dirty_ = decoded.legacy_plaintext;
-        if (decoded.legacy_plaintext) {
-            info.migration_status = save_locked();
-            if (info.migration_status == SAO_STATUS_OK) {
-                info.legacy_migrated = true;
-            }
-        }
-        out_info = info;
-        return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    if (status == SAO_STATUS_OK && document_replaced)
+        notify_change();
+    return status;
 }
 
 sao_status_t SettingsOwner::save_locked() noexcept {
@@ -665,12 +672,23 @@ sao_status_t SettingsOwner::save_locked() noexcept {
 }
 
 sao_status_t SettingsOwner::save() noexcept {
+    sao_status_t status = SAO_STATUS_OK;
+    bool cleared = false;
     try {
-        std::lock_guard lock(mutex_);
-        return save_locked();
+        {
+            std::lock_guard lock(mutex_);
+            const bool was_dirty = dirty_;
+            status = save_locked();
+            cleared = status == SAO_STATUS_OK && was_dirty && !dirty_;
+        }
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    if (cleared) {
+        // Committed content just hit disk; listeners refresh their dirty badge.
+        notify_change();
+    }
+    return status;
 }
 
 sao_status_t SettingsOwner::snapshot(Json& out) const noexcept {
@@ -741,7 +759,11 @@ sao_status_t SettingsOwner::get_truthy(std::string_view top_level_key, bool defa
     }
 }
 
-sao_status_t SettingsOwner::set_value_locked(std::string_view top_level_key, Json value) noexcept {
+sao_status_t SettingsOwner::set_value_locked(std::string_view top_level_key, Json value,
+                                               bool* out_changed) noexcept {
+    if (out_changed != nullptr) {
+        *out_changed = false;
+    }
     try {
         std::string key(top_level_key);
         Json updated = document_;
@@ -757,6 +779,9 @@ sao_status_t SettingsOwner::set_value_locked(std::string_view top_level_key, Jso
         }
         document_.swap(updated);
         dirty_ = true;
+        if (out_changed != nullptr) {
+            *out_changed = true;
+        }
         return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -772,12 +797,20 @@ sao_status_t SettingsOwner::set_value(std::string_view top_level_key, Json value
     if (key_status != SAO_STATUS_OK) {
         return key_status;
     }
+    sao_status_t status = SAO_STATUS_ERR_UNKNOWN;
+    bool changed = false;
     try {
-        std::lock_guard lock(mutex_);
-        return set_value_locked(top_level_key, std::move(value));
+        {
+            std::lock_guard lock(mutex_);
+            status = set_value_locked(top_level_key, std::move(value), &changed);
+        }
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    if (status == SAO_STATUS_OK && changed) {
+        notify_change();
+    }
+    return status;
 }
 
 sao_status_t SettingsOwner::set_value_and_save(std::string_view top_level_key,
@@ -786,22 +819,31 @@ sao_status_t SettingsOwner::set_value_and_save(std::string_view top_level_key,
     if (key_status != SAO_STATUS_OK) {
         return key_status;
     }
+    sao_status_t status = SAO_STATUS_ERR_UNKNOWN;
+    bool changed = false;
     try {
-        std::lock_guard lock(mutex_);
-        Json previous_document = document_;
-        const bool previous_dirty = dirty_;
-        sao_status_t status = set_value_locked(top_level_key, std::move(value));
-        if (status == SAO_STATUS_OK) {
-            status = save_locked();
+        {
+            std::lock_guard lock(mutex_);
+            Json previous_document = document_;
+            const bool previous_dirty = dirty_;
+            status = set_value_locked(top_level_key, std::move(value), &changed);
+            if (status == SAO_STATUS_OK) {
+                status = save_locked();
+            }
+            if (status != SAO_STATUS_OK) {
+                document_.swap(previous_document);
+                dirty_ = previous_dirty;
+            }
         }
-        if (status != SAO_STATUS_OK) {
-            document_.swap(previous_document);
-            dirty_ = previous_dirty;
-        }
-        return status;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    if (changed) {
+        // The setter swapped the document even when save rolled it back;
+        // subscribers re-read the settled state either way.
+        notify_change();
+    }
+    return status;
 }
 
 sao_status_t SettingsOwner::restore_snapshot(Json document, bool dirty) noexcept {
@@ -810,7 +852,13 @@ sao_status_t SettingsOwner::restore_snapshot(Json document, bool dirty) noexcept
         std::string serialized;
         const auto status = settings_json::serialize_python_compatible(document, settings_codec::kMaxPlaintextBytes, serialized);
         if (status != SAO_STATUS_OK) return status;
-        std::lock_guard lock(mutex_); document_.swap(document); dirty_ = dirty; return SAO_STATUS_OK;
+        {
+            std::lock_guard lock(mutex_);
+            document_.swap(document);
+            dirty_ = dirty;
+        }
+        notify_change();
+        return SAO_STATUS_OK;
     } catch (const std::bad_alloc&) { return SAO_STATUS_ERR_UNKNOWN; }
     catch (const nlohmann::json::exception&) { return SAO_STATUS_ERR_INVALID_ARGUMENT; }
     catch (...) { return SAO_STATUS_ERR_UNKNOWN; }
@@ -852,4 +900,114 @@ sao_status_t SettingsOwner::path(std::wstring& out) const noexcept {
     }
 }
 
+sao_status_t SettingsOwner::subscribe_change(change_callback_fn callback,
+                                             void* user_data) noexcept {
+    if (callback == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        std::lock_guard lock(subscribers_mutex_);
+        const auto existing = std::find_if(
+            subscribers_.begin(), subscribers_.end(),
+            [&](const SubscriberEntry& entry) {
+                return entry.callback == callback && entry.user_data == user_data;
+            });
+        if (existing != subscribers_.end()) {
+            return SAO_STATUS_OK;
+        }
+        subscribers_.push_back(SubscriberEntry{callback, user_data});
+        return SAO_STATUS_OK;
+    } catch (const std::bad_alloc&) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+sao_status_t SettingsOwner::unsubscribe_change(change_callback_fn callback,
+                                               void* user_data) noexcept {
+    if (callback == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        std::unique_lock lock(subscribers_mutex_);
+        const auto existing = std::find_if(
+            subscribers_.begin(), subscribers_.end(),
+            [&](const SubscriberEntry& entry) {
+                return entry.callback == callback && entry.user_data == user_data;
+            });
+        if (existing == subscribers_.end()) {
+            return SAO_STATUS_ERR_NOT_FOUND;
+        }
+        subscribers_.erase(existing);
+        // A copied snapshot may still be dispatching this callback on a
+        // mutating thread; drain it before returning so the caller can free
+        // user_data safely (mirrors the entitlement surface).
+        subscribers_cv_.wait(lock, [this] { return subscribers_dispatching_ == 0U; });
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+void SettingsOwner::notify_change() noexcept {
+    std::vector<SubscriberEntry> callbacks;
+    try {
+        {
+            std::lock_guard lock(subscribers_mutex_);
+            if (subscribers_.empty()) {
+                return;
+            }
+            ++subscribers_dispatching_;
+            callbacks = subscribers_;
+        }
+        for (const auto& entry : callbacks) {
+            if (entry.callback == nullptr) {
+                continue;
+            }
+            try {
+                entry.callback(entry.user_data);
+            } catch (...) {
+            }
+        }
+        {
+            std::lock_guard lock(subscribers_mutex_);
+            if (subscribers_dispatching_ != 0U) {
+                --subscribers_dispatching_;
+            }
+            if (subscribers_dispatching_ == 0U) {
+                subscribers_cv_.notify_all();
+            }
+        }
+    } catch (...) {
+        std::lock_guard lock(subscribers_mutex_);
+        if (subscribers_dispatching_ != 0U) {
+            --subscribers_dispatching_;
+        }
+        subscribers_cv_.notify_all();
+    }
+}
+
 } // namespace sao::launcher::settings_owner
+
+extern "C" sao_status_t sao_launcher_settings_owner_subscribe_change(
+    void* owner_opaque, sao::launcher::settings_owner::change_callback_fn callback,
+    void* user_data) noexcept {
+    auto* owner =
+        reinterpret_cast<sao::launcher::settings_owner::SettingsOwner*>(owner_opaque);
+    if (owner == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    return owner->subscribe_change(callback, user_data);
+}
+
+extern "C" sao_status_t sao_launcher_settings_owner_unsubscribe_change(
+    void* owner_opaque, sao::launcher::settings_owner::change_callback_fn callback,
+    void* user_data) noexcept {
+    auto* owner =
+        reinterpret_cast<sao::launcher::settings_owner::SettingsOwner*>(owner_opaque);
+    if (owner == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    return owner->unsubscribe_change(callback, user_data);
+}

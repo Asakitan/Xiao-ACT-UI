@@ -33,6 +33,12 @@ extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 }
 
+// init_pipeline::notify_settings_panel_dirty calls this unconditionally —
+// the ui-off build keeps the symbol so the link survives.
+extern "C" sao_status_t sao_launcher_settings_config_external_refresh(void) {
+    return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+}
+
 sao_status_t set_compositor_for_testing(sao_ui_compositor_handle_t compositor) noexcept {
     (void)compositor;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;

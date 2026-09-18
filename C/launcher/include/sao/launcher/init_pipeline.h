@@ -244,7 +244,7 @@ enum sao_launcher_rt_io_operator_admission_bit_e : uint32_t {
 
 enum sao_launcher_rt_io_operator_capability_bit_e : uint32_t {
     SAO_LAUNCHER_RT_IO_CAP_R3_SHARED = 1u << 0u,
-    SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT = 1u << 1u,
+    SAO_LAUNCHER_RT_IO_CAP_RESERVED_1 = 1u << 1u,
     SAO_LAUNCHER_RT_IO_CAP_MF = 1u << 2u,
     SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE = 1u << 3u,
     SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE = 1u << 4u,
@@ -254,7 +254,7 @@ enum sao_launcher_rt_io_operator_capability_bit_e : uint32_t {
 };
 
 #ifdef __cplusplus
-static_assert(((SAO_LAUNCHER_RT_IO_CAP_R3_SHARED | SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT |
+static_assert(((SAO_LAUNCHER_RT_IO_CAP_R3_SHARED | SAO_LAUNCHER_RT_IO_CAP_RESERVED_1 |
                 SAO_LAUNCHER_RT_IO_CAP_MF | SAO_LAUNCHER_RT_IO_CAP_MOUSE_PROVENANCE |
                 SAO_LAUNCHER_RT_IO_CAP_KEYBOARD_PROVENANCE | SAO_LAUNCHER_RT_IO_CAP_OB |
                 SAO_LAUNCHER_RT_IO_CAP_WATCHDOG) &

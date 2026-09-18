@@ -7,8 +7,10 @@
 #pragma once
 
 #include "sao/core/status.h"
+#include "sao/license/sdk/license_events.h"
 #include "sao/ui/abi.h"
 
+#include <atomic>
 #include <cstddef>
 
 #include <cstdint>
@@ -31,6 +33,15 @@ inline constexpr char kCopyHwidAction[] = "license.copy_hwid";
 inline constexpr char kRefreshAction[] = "license.refresh";
 inline constexpr char kKeyInputAction[] = "license.key_input";
 inline constexpr char kSkipAction[] = "license.skip";
+inline constexpr char kDeactivateAction[] = "license.deactivate";
+inline constexpr char kRenewAction[] = "license.renew";
+
+// Live heartbeat/revocation snapshot for the status strip.
+struct HeartbeatState {
+    bool running{};
+    bool revoked{};
+    std::uint32_t consecutive_failures{};
+};
 
 // Injectable operations so focused tests can avoid touching the real license
 // client / clipboard / refresh path.
@@ -47,6 +58,12 @@ struct Operations {
     using CopyToClipboard = std::function<sao_status_t(std::string_view text)>;
     // Triggers the license refresh path so feature flags update live.
     using RefreshLicense = std::function<sao_status_t()>;
+    // Revokes the installed token via POST /revoke (USER_REQUEST).
+    using Deactivate = std::function<sao_status_t()>;
+    // Runs the early-renewal path (POST /renew inside the 30-day window).
+    using Renew = std::function<sao_status_t()>;
+    // Reads heartbeat/revocation state for the status strip.
+    using GetHeartbeatState = std::function<sao_status_t(HeartbeatState& out)>;
 
     Activate activate;
     CancelActivation cancel_activation;
@@ -54,6 +71,9 @@ struct Operations {
     GetStatus get_status;
     CopyToClipboard copy_to_clipboard;
     RefreshLicense refresh_license;
+    Deactivate deactivate;
+    Renew renew;
+    GetHeartbeatState get_heartbeat_state;
 
     [[nodiscard]] bool complete() const noexcept;
 };
@@ -72,6 +92,9 @@ struct Snapshot {
     std::string tier;
     std::uint64_t expiry_ms{};
     bool activated{};
+    bool heartbeat_running{};
+    bool revoked{};
+    std::uint32_t heartbeat_failures{};
     std::string rendered_spec_json;
 };
 
@@ -113,7 +136,10 @@ class Owner final {
     void handle_panel_event(std::int32_t event_kind) noexcept;
     sao_status_t ensure_panel() noexcept;
     sao_status_t publish() noexcept;
-    sao_status_t run_activation(std::string key) noexcept;
+    // Async jobs on the activation worker: activation, deactivation and
+    // early renewal share the same busy gate and single-worker plumbing.
+    enum class JobKind : std::uint8_t { activate, deactivate, renew };
+    sao_status_t run_job(JobKind kind, std::string key) noexcept;
     static void stop_background_threads(State& state) noexcept;
 
     static void SAO_UI_CALL panel_action_callback(const char* action_id_utf8,
@@ -122,7 +148,15 @@ class Owner final {
                                                   void* user_data) noexcept;
     static void SAO_UI_CALL panel_event_callback(std::int32_t event_kind,
                                                  void* user_data) noexcept;
-    static void activation_thread_main(State* state, std::string key) noexcept;
+    static void background_job_main(State* state, JobKind kind,
+                                    std::string key) noexcept;
+    // SDK event fan-out: license_event_trampoline is registered once per
+    // process (event_registered_) and arms event_target_ so the armed Owner
+    // sees license_event_pending on its next service_ui tick.
+    static void SAO_LICENSE_SDK_CALL license_event_trampoline(
+        sao_license_event_kind_t kind, void* user_data) noexcept;
+    static std::atomic<State*> event_target_;
+    static std::atomic<bool> event_registered_;
 
     static void defer_state(std::unique_ptr<State> state) noexcept;
     static void drain_deferred_cleanup() noexcept;

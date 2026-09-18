@@ -46,7 +46,54 @@ namespace sao::launcher {
 
 namespace {
 
-constexpr UINT kUiFrameIntervalMs = 16;
+// Raised timer resolution so refresh-matched sub-16 ms WM_TIMER delivery
+// lands near the requested cadence.  Same dllimport pattern as
+// platform/ui/src/scheduler.cpp — avoids pulling <mmsystem.h> aliases.
+extern "C" {
+__declspec(dllimport) unsigned int __stdcall timeBeginPeriod(unsigned int uPeriod);
+__declspec(dllimport) unsigned int __stdcall timeEndPeriod(unsigned int uPeriod);
+}
+
+// Refresh-matched frame pacing — mirrors
+// platform/ui/src/scheduler.cpp::detect_refresh_hz_impl: dmDisplayFrequency
+// (the committed mode) on every active display, fastest wins, clamped to
+// 60-240 Hz so the UI still ticks ≥60 fps on any panel.  Detected once; the
+// WM_TIMER is armed with this interval at loop entry.
+int32_t uiFrameIntervalMs() noexcept {
+    static const int32_t interval_ms = []() -> int32_t {
+        int32_t best_hz = 0;
+        for (DWORD index = 0;; ++index) {
+            DISPLAY_DEVICEW device{};
+            device.cb = sizeof(device);
+            if (!::EnumDisplayDevicesW(nullptr, index, &device, 0))
+                break;
+            if ((device.StateFlags & DISPLAY_DEVICE_ACTIVE) == 0)
+                continue;
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            if (::EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS, &mode) &&
+                mode.dmDisplayFrequency > 1) {
+                const int32_t hz = static_cast<int32_t>(mode.dmDisplayFrequency);
+                if (hz > best_hz)
+                    best_hz = hz;
+            }
+        }
+        if (best_hz == 0) {
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            if (::EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) &&
+                mode.dmDisplayFrequency > 1)
+                best_hz = static_cast<int32_t>(mode.dmDisplayFrequency);
+        }
+        if (best_hz < 60)
+            best_hz = 60;
+        if (best_hz > 240)
+            best_hz = 240;
+        const int32_t interval = 1000 / best_hz;
+        return interval < 4 ? 4 : interval;
+    }();
+    return interval_ms;
+}
 
 // Console-readable smoke/operator output.  Prefer an inherited stdout pipe
 // so subprocess harnesses keep deterministic capture; allocate a console only
@@ -161,8 +208,8 @@ constexpr int kBootstrapQuitRequested = -1000;
 // runtimes, then plugin engines.
 constexpr uint32_t kBootstrapStageCount = 6u;
 constexpr const char* kBootstrapCaptions[kBootstrapStageCount] = {
-    "DRIVER CHAIN",  "ENGINE SURFACES", "CAPTURE SHIELD",
-    "WINDOW SCRUB",  "ENGINE RUNTIMES", "PLUGIN ENGINES",
+    "DRIVER CHAIN", "ENGINE SURFACES", "CAPTURE SHIELD",
+    "WINDOW SCRUB", "ENGINE RUNTIMES", "PLUGIN ENGINES",
 };
 
 // Runs the driver chain off the owner thread so the intro keeps animating while
@@ -280,8 +327,7 @@ IntroPumpResult pump_intro_frame(sao_platform_ctx* ctx) {
             break;
         }
         int32_t handled = 0;
-        result.status =
-            sao_ui_handle_message(ctx, msg.message, msg.wParam, msg.lParam, &handled);
+        result.status = sao_ui_handle_message(ctx, msg.message, msg.wParam, msg.lParam, &handled);
         if (result.status != SAO_STATUS_OK)
             return result;
         if (!handled) {
@@ -500,6 +546,14 @@ int App::run() {
     if (rc != SAO_EXIT_OK) {
         return fail(rc, L"bootstrap_under_intro", "bootstrap_under_intro");
     }
+    if (state_.rt_io_operator) {
+        rc = runRtIoOperator();
+        if (rc != SAO_EXIT_OK)
+            return fail(rc, L"rt_io_operator", "rt_io_operator");
+        if (!shutdown())
+            return finish(SAO_EXIT_PLATFORM_INIT_FAIL, "shutdown");
+        return finish(SAO_EXIT_OK, nullptr);
+    }
 #else
     if (ensureConfiguredPluginRuntimes(state_, provider_configuration.plugins) != SAO_STATUS_OK) {
         return fail(SAO_EXIT_PLUGIN_LOAD_FAIL, L"runtime_installer", "runtime_installer");
@@ -544,10 +598,11 @@ int App::run() {
     }
 
     // Boot-residency restart UX (W6.9).  After the UI is online, offer the
-    // one-shot restart prompt when the helper armed a boot-start promotion
-    // this session and the machine has not yet performed the real restart.
-    // Skipped in smoke/acceptance/operator runs and safe mode (the probe
-    // suppresses safe mode internally).
+    // one-shot restart prompt when the helper armed a restart-required
+    // latch this session (a resident image that could not be retired in
+    // the current boot) and the machine has not yet performed the real
+    // restart.  Skipped in smoke/acceptance/operator runs and safe mode
+    // (the probe suppresses safe mode internally).
     if (!state_.smoke_mode && !state_.exit_after_init && !state_.rt_io_operator) {
         const int32_t prompt_result = sao::launcher::boot_residency_prompt_if_required(nullptr);
         if (prompt_result == sao::launcher::BOOT_RESIDENCY_ERROR) {
@@ -762,8 +817,7 @@ int App::runBootstrapUnderIntro() {
     // Smoke/operator/safe runs keep the historical order and never present the
     // overlay surface; only an interactive launch is covered by the intro.
     const bool headless = state_.smoke_mode || state_.rt_io_operator || state_.safe_mode;
-    const bool cover_with_intro =
-        !headless && sao_ui_intro_show(platform, 1) == SAO_STATUS_OK;
+    const bool cover_with_intro = !headless && sao_ui_intro_show(platform, 1) == SAO_STATUS_OK;
     bool quit_requested = false;
     const auto release_intro = [&](bool failed) -> sao_status_t {
         if (cover_with_intro && platform != nullptr)
@@ -771,14 +825,11 @@ int App::runBootstrapUnderIntro() {
         return SAO_STATUS_OK;
     };
     const auto quit_bootstrap = [&]() -> int {
-        return release_intro(true) == SAO_STATUS_OK
-                   ? kBootstrapQuitRequested
-                   : SAO_EXIT_PLATFORM_INIT_FAIL;
+        return release_intro(true) == SAO_STATUS_OK ? kBootstrapQuitRequested
+                                                    : SAO_EXIT_PLATFORM_INIT_FAIL;
     };
     const auto fail_bootstrap = [&](int exit_code) -> int {
-        return release_intro(true) == SAO_STATUS_OK
-                   ? exit_code
-                   : SAO_EXIT_PLATFORM_INIT_FAIL;
+        return release_intro(true) == SAO_STATUS_OK ? exit_code : SAO_EXIT_PLATFORM_INIT_FAIL;
     };
     const auto advance_intro = [&]() -> sao_status_t {
         if (quit_requested)
@@ -839,6 +890,8 @@ int App::runBootstrapUnderIntro() {
     if (quit_requested) {
         return quit_bootstrap();
     }
+    if (state_.rt_io_operator)
+        return SAO_EXIT_OK;
 
     // Stage 2 — engine surfaces (panels, window-rect registration, capture
     // shield, entity shell).  Owner thread only.
@@ -992,7 +1045,7 @@ int App::runRtIoOperator() {
     options.r5_check = state_.rt_io_r5_check ? 1u : 0u;
     options.mf_check = state_.rt_io_mf_check ? 1u : 0u;
     options.exit_after_validation = state_.rt_io_exit_after_validation ? 1u : 0u;
-    options.timeout_ms = 120000u;
+    options.timeout_ms = 600000u;
 
     int32_t ready = 0;
     const sao_status_t status =
@@ -1009,10 +1062,13 @@ int App::runRtIoOperator() {
 }
 
 int App::runMessageLoop() {
-    const UINT_PTR timer_id = SetTimer(nullptr, 0, kUiFrameIntervalMs, nullptr);
+    const UINT frame_ms = static_cast<UINT>(uiFrameIntervalMs());
+    const UINT_PTR timer_id = SetTimer(nullptr, 0, frame_ms, nullptr);
     if (timer_id == 0) {
         return SAO_EXIT_UI_ONLINE_FAIL;
     }
+    if (frame_ms < 16)
+        (void)timeBeginPeriod(1);
     MSG msg{};
     BOOL result = 0;
     while ((result = GetMessageW(&msg, nullptr, 0, 0)) > 0) {
@@ -1022,7 +1078,7 @@ int App::runMessageLoop() {
             handled = 1;
             tickUserGuideWebView();
             status = sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
-                                 kUiFrameIntervalMs);
+                                 static_cast<uint32_t>(uiFrameIntervalMs()));
             if (status == SAO_STATUS_OK)
                 serviceFirstRunGuide();
             const int32_t restart_result = boot_residency_take_prompt_result();
@@ -1036,6 +1092,8 @@ int App::runMessageLoop() {
         }
         if (status != SAO_STATUS_OK) {
             KillTimer(nullptr, timer_id);
+            if (frame_ms < 16)
+                (void)timeEndPeriod(1);
             return SAO_EXIT_UI_ONLINE_FAIL;
         }
         if (!handled) {
@@ -1044,6 +1102,8 @@ int App::runMessageLoop() {
         }
     }
     KillTimer(nullptr, timer_id);
+    if (frame_ms < 16)
+        (void)timeEndPeriod(1);
     if (result < 0)
         return SAO_EXIT_UI_ONLINE_FAIL;
     return playExitAnimation(static_cast<int>(msg.wParam));
@@ -1073,9 +1133,10 @@ int App::playExitAnimation(int exit_code) noexcept {
     while (GetTickCount64() < deadline && !user_menu_.sessionEnding() &&
            !GetSystemMetrics(SM_SHUTTINGDOWN)) {
         MSG pending{};
-        for (unsigned count = 0; count < 64u && GetTickCount64() < deadline &&
-             !user_menu_.sessionEnding() &&
-             PeekMessageW(&pending, nullptr, 0, 0, PM_REMOVE); ++count) {
+        for (unsigned count = 0;
+             count < 64u && GetTickCount64() < deadline && !user_menu_.sessionEnding() &&
+             PeekMessageW(&pending, nullptr, 0, 0, PM_REMOVE);
+             ++count) {
             if (pending.message == WM_QUIT) {
                 if (pending.wParam != 0) {
                     exit_code = static_cast<int>(pending.wParam);
@@ -1093,11 +1154,14 @@ int App::playExitAnimation(int exit_code) noexcept {
             DispatchMessageW(&pending);
         }
         if (exit_code != SAO_EXIT_OK || user_menu_.sessionEnding() ||
-            GetSystemMetrics(SM_SHUTTINGDOWN) || GetTickCount64() >= deadline) break;
+            GetSystemMetrics(SM_SHUTTINGDOWN) || GetTickCount64() >= deadline)
+            break;
         int32_t active = 0;
         if (sao_ui_outro_pump(ctx, &active) != SAO_STATUS_OK || active == 0)
             break;
-        (void)MsgWaitForMultipleObjectsEx(0, nullptr, kUiFrameIntervalMs, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        (void)MsgWaitForMultipleObjectsEx(0, nullptr,
+                                          static_cast<DWORD>(uiFrameIntervalMs()), QS_ALLINPUT,
+                                          MWMO_INPUTAVAILABLE);
     }
     (void)sao_ui_outro_cancel(ctx);
 #endif
@@ -1204,14 +1268,16 @@ bool App::shutdown() noexcept {
                     dual_run_driver_acquired_ = false;
                 }
                 shutdown_called_ = true;
-                if (quit_pending) PostQuitMessage(quit_code);
+                if (quit_pending)
+                    PostQuitMessage(quit_code);
                 return true;
             }
         }
         if (GetTickCount64() >= deadline)
             break;
         MSG pending{};
-        for (unsigned count = 0; count < 64 && PeekMessageW(&pending, nullptr, 0, 0, PM_REMOVE); ++count) {
+        for (unsigned count = 0; count < 64 && PeekMessageW(&pending, nullptr, 0, 0, PM_REMOVE);
+             ++count) {
             if (pending.message == WM_QUIT) {
                 quit_pending = true;
                 quit_code = static_cast<int>(pending.wParam);
@@ -1222,11 +1288,12 @@ bool App::shutdown() noexcept {
         }
         if (state_.platform_ctx != nullptr) {
             (void)sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
-                              kUiFrameIntervalMs);
+                              static_cast<uint32_t>(uiFrameIntervalMs()));
         }
         (void)MsgWaitForMultipleObjectsEx(0, nullptr, 2u, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
-    if (quit_pending) PostQuitMessage(quit_code);
+    if (quit_pending)
+        PostQuitMessage(quit_code);
     return false;
 }
 

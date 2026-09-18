@@ -566,6 +566,7 @@ target_link_libraries(SaoAuto PRIVATE
     dbghelp        # for minidump generation in crash_handler
     version
     shlwapi
+    winmm          # timeBeginPeriod for refresh-tick pacing below 60 Hz
     bcrypt         # HMAC-SHA-256 for deterministic rollout bucketing
     crypt32        # current-user DPAPI for secure settings envelopes
 )

@@ -222,6 +222,11 @@ build_menu_items(const entity_action_routes::EntityActionRouteSnapshot& snapshot
                          SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS,
                          authority.reload_plugins && plugins_ready,
                          {false, false, false}});
+    candidate.push_back({"插件状态 Status",
+                         "",
+                         SAO_UI_ENTITY_ACTION_PLUGIN_STATUS,
+                         authority.plugin_status && plugins_ready,
+                         {false, false, false}});
     if (authority.plugin_runtime == PluginRuntimePublicationStatus::degraded_internal) {
         candidate.push_back(
             {"Plugin Runtime: DEGRADED/INTERNAL", "!", -1, false, {false, false, false}});
@@ -330,7 +335,7 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
 
     const bool topmost_ready = authority.topmost_status == TopmostPublicationStatus::ready;
     const bool controls_ready = authority.controls == ControlPublicationStatus::ready;
-    const std::array<SaoUiMenuItem, 8> control_rows{{
+    const std::array<SaoUiMenuItem, 11> control_rows{{
         {topmost_ready ? (topmost ? "置顶: ON" : "置顶: OFF")
                        : "置顶: DEGRADED (平台 authority 不可观测)",
          "",
@@ -348,6 +353,17 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
          SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE,
          controls_ready && authority.streaming,
          {false, false, false}},
+        {"设置 Settings",
+         "",
+         SAO_UI_ENTITY_ACTION_OPEN_SETTINGS_PANEL,
+         controls_ready && authority.settings_panel,
+         {false, false, false}},
+        {"快捷键 Hotkeys",
+         "",
+         SAO_UI_ENTITY_ACTION_OPEN_HOTKEY_PANEL,
+         controls_ready && authority.hotkey_panel,
+         {false, false, false}},
+        {"──────────", "", -1, false, {false, false, false}},
         {"鱼眼背景: 程序生成",
          "",
          SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL,
@@ -358,14 +374,13 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
          SAO_UI_ENTITY_ACTION_SET_FISHEYE_LIVE,
          controls_ready && authority.fisheye_live,
          {false, false, false}},
-        {"──────────", "", -1, false, {false, false, false}},
         {"保存设置",
          "",
          SAO_UI_ENTITY_ACTION_SAVE_SETTINGS,
          controls_ready && authority.save_settings,
          {false, false, false}},
     }};
-    const std::array<SaoUiMenuItem, 4> tool_rows{{
+    const std::array<SaoUiMenuItem, 5> tool_rows{{
         {"AI Editor (LLM)",
          "",
          SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR,
@@ -380,6 +395,11 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
          "",
          SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR,
          authority.process_selector,
+         {false, false, false}},
+        {"内存查看器 (Memory Viewer)",
+         "",
+         SAO_UI_ENTITY_ACTION_OPEN_MEMORY_VIEWER,
+         authority.memory_viewer,
          {false, false, false}},
         {"授权激活 (License Activation)",
          "",

@@ -50,6 +50,11 @@ constexpr std::size_t kMaximumPruneDirectories = 32u;
 constexpr std::size_t kMaximumPruneEntries = 256u;
 constexpr std::size_t kMaximumTreeEntries = 100'000u;
 constexpr std::size_t kMaximumTreeDepth = 64u;
+// Marker-less gen-* orphan reclaim: the directory's ftCreationTime must be
+// at least this old (FILETIME 100ns units — 10 minutes) before pruning, so
+// a racing create_generation_directory can never be swept between
+// CreateDirectoryW and write_owner_marker.
+constexpr std::uint64_t kOrphanGenerationAgeMargin = 10ull * 60ull * 10'000'000ull;
 constexpr std::size_t kMaximumEnvironmentCharacters = 32'767u;
 constexpr std::size_t kMaximumCommandLineCharacters = 32'767u;
 constexpr DWORD kCleanupRetryTimeoutMs = 5'000u;
@@ -1058,11 +1063,15 @@ encode_marker(const MarkerRecord& marker) noexcept {
         return TreeDeleteResult::retained;
 
     if (is_root) {
+        // The marker may legitimately be absent (orphaned generation whose
+        // creator crashed between CreateDirectoryW and write_owner_marker,
+        // reclaimed by prune_stale_generations); accept absent as clean.
         const FileDeleteResult marker_result =
             delete_regular_file(directory / kOwnerMarkerLeaf, true);
         if (marker_result == FileDeleteResult::locked)
             return TreeDeleteResult::retained;
-        if (marker_result != FileDeleteResult::deleted)
+        if (marker_result != FileDeleteResult::deleted &&
+            marker_result != FileDeleteResult::absent)
             return TreeDeleteResult::failed;
     }
 
@@ -1145,10 +1154,40 @@ void prune_stale_generations(const fs::path& runtime_root,
                     if (parse_generation_name(name, parsed_pid, parsed_nonce)) {
                         const fs::path candidate = runtime_root / data.cFileName;
                         MarkerRecord marker{};
-                        if (read_owner_marker(candidate, marker) &&
-                            marker.owner_pid == parsed_pid && marker.nonce == parsed_nonce &&
-                            owner_process_state(marker) == OwnerState::dead) {
-                            (void)safe_delete_generation(candidate, &marker, true, descriptor);
+                        if (read_owner_marker(candidate, marker)) {
+                            if (marker.owner_pid == parsed_pid && marker.nonce == parsed_nonce &&
+                                owner_process_state(marker) == OwnerState::dead) {
+                                (void)safe_delete_generation(candidate, &marker, true, descriptor);
+                            }
+                        } else if (path_is_absent(candidate / kOwnerMarkerLeaf) &&
+                                   parsed_pid != ::GetCurrentProcessId()) {
+                            // Marker-less orphan: the creator died between
+                            // CreateDirectoryW and write_owner_marker.  The
+                            // dir name itself proves pid+nonce.  Reclaim only
+                            // when the encoded pid is provably dead
+                            // (ERROR_INVALID_PARAMETER — an ACCESS_DENIED or
+                            // live open means a live/reused pid, keep it)
+                            // and the directory is older than the in-flight
+                            // create margin.
+                            UniqueHandle probe(
+                                ::OpenProcess(SYNCHRONIZE, FALSE, parsed_pid));
+                            const bool pid_dead =
+                                !probe && ::GetLastError() == ERROR_INVALID_PARAMETER;
+                            FILETIME now{};
+                            ::GetSystemTimeAsFileTime(&now);
+                            const bool old_enough =
+                                file_time_value(now) >=
+                                    file_time_value(data.ftCreationTime) +
+                                        kOrphanGenerationAgeMargin;
+                            if (pid_dead && old_enough) {
+                                std::size_t tree_entries = 0u;
+                                if (scan_generation_tree(candidate, 0u, tree_entries) ==
+                                    TreeScanResult::safe) {
+                                    std::size_t deleted = 0u;
+                                    (void)delete_generation_tree(candidate, true, 0u, deleted,
+                                                                 nullptr, descriptor);
+                                }
+                            }
                         }
                     }
                 }
@@ -1497,9 +1536,19 @@ void set_environment_value(std::vector<EnvironmentEntry>& entries, std::wstring 
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
+    DWORD creation_flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
+    // Temporary bring-up diagnostic: SAO_BOOTSTRAP_INHERIT_STDIO lets the
+    // payload inherit this console's std handles so its trace output is
+    // visible when launched from a shell.
+    if (::GetEnvironmentVariableW(L"SAO_BOOTSTRAP_INHERIT_STDIO", nullptr, 0u) != 0u) {
+        startup.dwFlags |= STARTF_USESTDHANDLES;
+        startup.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+        startup.hStdOutput = ::GetStdHandle(STD_OUTPUT_HANDLE);
+        startup.hStdError = ::GetStdHandle(STD_ERROR_HANDLE);
+    }
     PROCESS_INFORMATION process_information{};
-    if (::CreateProcessW(payload.c_str(), command_line.data(), nullptr, nullptr, FALSE,
-                         CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT, environment.data(),
+    if (::CreateProcessW(payload.c_str(), command_line.data(), nullptr, nullptr, TRUE,
+                         creation_flags, environment.data(),
                          install_root.c_str(), &startup, &process_information) == FALSE) {
         return false;
     }

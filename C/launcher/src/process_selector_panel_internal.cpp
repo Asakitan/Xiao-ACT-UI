@@ -8,11 +8,14 @@
 #include <nlohmann/json.hpp>
 
 #include <windows.h>
+#include <psapi.h>
+#include <tlhelp32.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +24,7 @@
 #include <exception>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <new>
 #include <ranges>
@@ -44,12 +48,14 @@ constexpr std::size_t kMaximumStatusBytes = 1024U;
 constexpr std::size_t kMaximumPanelSpecBytes = 256U * 1024U;
 constexpr std::size_t kMaximumImagePathBytes = SAO_PROCESS_IMAGE_PATH_MAX - 1U;
 constexpr std::size_t kMaximumBaseNameBytes = 1024U;
-constexpr std::size_t kProcessesPerPage = 32U;
+// Expanded telemetry rows must fit the compositor's 400-node document budget.
+constexpr std::size_t kProcessesPerPage = 12U;
 constexpr std::string_view kPreviousPageAction = "process_selector.page.previous";
 constexpr std::string_view kNextPageAction = "process_selector.page.next";
 constexpr std::size_t kMaximumSearchQueryBytes = 512U;
 constexpr std::size_t kMaximumCollapsedPidSet = 4096U;
-constexpr std::uint32_t kAutoRefreshIntervalMs = 5000U;
+constexpr std::uint32_t kAutoRefreshIntervalMs = 3000U;
+constexpr std::size_t kPerformanceHistoryLimit = 60U;
 constexpr int kEnumerationAttempts = 3;
 
 struct VisibleView {
@@ -126,6 +132,161 @@ struct CoreProcessCloser {
 };
 
 using CoreProcess = std::unique_ptr<sao_core_process_s, CoreProcessCloser>;
+
+struct QueryHandleCloser {
+    void operator()(HANDLE handle) const noexcept {
+        if (handle != nullptr && handle != INVALID_HANDLE_VALUE)
+            CloseHandle(handle);
+    }
+};
+
+using QueryHandle = std::unique_ptr<void, QueryHandleCloser>;
+
+std::uint64_t filetime_ticks(const FILETIME& time) noexcept {
+    return (static_cast<std::uint64_t>(time.dwHighDateTime) << 32U) | time.dwLowDateTime;
+}
+
+struct CpuBaseline {
+    std::uint64_t kernel{};
+    std::uint64_t user{};
+    std::uint64_t idle{};
+    std::chrono::steady_clock::time_point sampled_at;
+};
+
+struct PerformanceSampler {
+    std::optional<CpuBaseline> system_baseline;
+    std::map<std::pair<std::uint32_t, std::uint64_t>, CpuBaseline> process_baselines;
+    std::uint32_t processor_count{};
+    std::vector<PerformanceSample> history;
+
+    PerformanceSnapshot sample(std::vector<ProcessRecord>& records, std::stop_token stop) {
+        PerformanceSnapshot result;
+        result.uptime_ms = GetTickCount64();
+        const auto now = std::chrono::steady_clock::now();
+        result.logical_processor_count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+        if (processor_count != result.logical_processor_count) {
+            system_baseline.reset();
+            process_baselines.clear();
+            processor_count = result.logical_processor_count;
+        }
+        FILETIME idle{}, kernel{}, user{};
+        if (processor_count != 0U && GetActiveProcessorGroupCount() == 1U &&
+            GetSystemTimes(&idle, &kernel, &user)) {
+            const CpuBaseline current{filetime_ticks(kernel), filetime_ticks(user),
+                                      filetime_ticks(idle), now};
+            if (system_baseline.has_value()) {
+                const auto& previous = *system_baseline;
+                const double elapsed = std::chrono::duration<double>(now - previous.sampled_at).count();
+                if (elapsed >= 0.1 && elapsed <= 10.0 && current.kernel >= previous.kernel &&
+                    current.user >= previous.user && current.idle >= previous.idle) {
+                    // GetSystemTimes kernel time already includes idle time.
+                    const double total = static_cast<double>(current.kernel - previous.kernel) +
+                                         static_cast<double>(current.user - previous.user);
+                    const double idle_delta = static_cast<double>(current.idle - previous.idle);
+                    if (total > 0.0 && idle_delta <= total)
+                        result.cpu_percent = std::clamp(100.0 * (total - idle_delta) / total, 0.0, 100.0);
+                }
+            }
+            system_baseline = current;
+        } else {
+            system_baseline.reset();
+        }
+
+        MEMORYSTATUSEX memory{};
+        memory.dwLength = sizeof(memory);
+        if (GlobalMemoryStatusEx(&memory) && memory.ullTotalPhys != 0U &&
+            memory.ullAvailPhys <= memory.ullTotalPhys) {
+            result.physical_total_bytes = memory.ullTotalPhys;
+            result.physical_used_bytes = memory.ullTotalPhys - memory.ullAvailPhys;
+            result.memory_percent = 100.0 * static_cast<double>(*result.physical_used_bytes) /
+                                    static_cast<double>(memory.ullTotalPhys);
+        }
+
+        FILETIME snapshot_started{};
+        GetSystemTimeAsFileTime(&snapshot_started);
+        std::unordered_map<std::uint32_t, std::uint32_t> threads;
+        QueryHandle process_snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
+        if (process_snapshot.get() != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32W entry{};
+            entry.dwSize = sizeof(entry);
+            if (Process32FirstW(process_snapshot.get(), &entry)) {
+                std::uint32_t count = 0;
+                do {
+                    if (stop.stop_requested())
+                        return {};
+                    ++count;
+                    threads.emplace(entry.th32ProcessID, entry.cntThreads);
+                } while (Process32NextW(process_snapshot.get(), &entry));
+                if (GetLastError() == ERROR_NO_MORE_FILES)
+                    result.process_count = count;
+                else
+                    threads.clear();
+            }
+        }
+
+        using ArchitectureQuery = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
+        const auto query_architecture = reinterpret_cast<ArchitectureQuery>(
+            GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2"));
+        std::map<std::pair<std::uint32_t, std::uint64_t>, CpuBaseline> next_baselines;
+        for (auto& record : records) {
+            if (stop.stop_requested())
+                return {};
+            record.cpu_percent.reset();
+            record.thread_count.reset();
+            record.working_set_bytes.reset();
+            record.architecture.clear();
+            QueryHandle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, record.pid));
+            if (!process)
+                continue;
+            FILETIME created{}, exited{}, process_kernel{}, process_user{};
+            if (!GetProcessTimes(process.get(), &created, &exited, &process_kernel, &process_user) ||
+                filetime_ticks(created) != record.start_time_100ns)
+                continue;
+            const auto sampled_at = std::chrono::steady_clock::now();
+            const CpuBaseline current{filetime_ticks(process_kernel), filetime_ticks(process_user),
+                                      0U, sampled_at};
+            const auto key = std::make_pair(record.pid, record.start_time_100ns);
+            const auto previous = process_baselines.find(key);
+            if (previous != process_baselines.end() && processor_count != 0U) {
+                const auto& baseline = previous->second;
+                const double elapsed = std::chrono::duration<double>(sampled_at - baseline.sampled_at).count();
+                if (elapsed >= 0.1 && elapsed <= 10.0 && current.kernel >= baseline.kernel &&
+                    current.user >= baseline.user) {
+                    const double ticks = static_cast<double>(current.kernel - baseline.kernel) +
+                                         static_cast<double>(current.user - baseline.user);
+                    record.cpu_percent = std::clamp(
+                        100.0 * ticks / (elapsed * 10000000.0 * processor_count), 0.0, 100.0);
+                }
+            }
+            next_baselines.emplace(key, current);
+            const auto thread_count = threads.find(record.pid);
+            if (thread_count != threads.end() &&
+                record.start_time_100ns <= filetime_ticks(snapshot_started))
+                record.thread_count = thread_count->second;
+            PROCESS_MEMORY_COUNTERS counters{};
+            counters.cb = sizeof(counters);
+            if (K32GetProcessMemoryInfo(process.get(), &counters, sizeof(counters)))
+                record.working_set_bytes = counters.WorkingSetSize;
+            USHORT process_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+            USHORT native_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+            if (query_architecture && query_architecture(process.get(), &process_machine, &native_machine)) {
+                switch (process_machine == IMAGE_FILE_MACHINE_UNKNOWN ? native_machine : process_machine) {
+                case IMAGE_FILE_MACHINE_I386: record.architecture = "x86"; break;
+                case IMAGE_FILE_MACHINE_AMD64: record.architecture = "x64"; break;
+                case IMAGE_FILE_MACHINE_ARM64: record.architecture = "ARM64"; break;
+                case IMAGE_FILE_MACHINE_ARMNT: record.architecture = "ARM32"; break;
+                default: break;
+                }
+            }
+        }
+        process_baselines = std::move(next_baselines);
+        history.push_back({*result.uptime_ms, result.cpu_percent, result.memory_percent});
+        if (history.size() > kPerformanceHistoryLimit)
+            history.erase(history.begin());
+        result.history = history;
+        return result;
+    }
+};
 
 std::string lower_ascii(std::string_view value) {
     std::string lowered(value);
@@ -275,6 +436,38 @@ VisibleView select_visible(const std::vector<ProcessRecord>& processes, FilterMo
                            const std::unordered_set<std::uint32_t>& collapsed_parents) {
     VisibleView view{};
     const bool has_search = !search_query_lower.empty();
+    const bool descending = sort_direction == SortDirection::descending;
+    const auto comparator = [sort_column, descending](const ProcessRecord& left,
+                                                       const ProcessRecord& right) {
+        const auto metric = [sort_column](const ProcessRecord& record) -> std::optional<double> {
+            if (sort_column == SortColumn::cpu)
+                return record.cpu_percent;
+            if (sort_column == SortColumn::threads && record.thread_count)
+                return static_cast<double>(*record.thread_count);
+            if (sort_column == SortColumn::memory && record.working_set_bytes)
+                return static_cast<double>(*record.working_set_bytes);
+            return std::nullopt;
+        };
+        int order = 0;
+        if (sort_column == SortColumn::cpu || sort_column == SortColumn::threads ||
+            sort_column == SortColumn::memory) {
+            const auto a = metric(left);
+            const auto b = metric(right);
+            if (a.has_value() != b.has_value())
+                return a.has_value();
+            if (a && b && *a != *b)
+                order = *a < *b ? -1 : 1;
+        } else if (sort_column == SortColumn::name) {
+            order = lower_ascii(left.base_name_utf8).compare(lower_ascii(right.base_name_utf8));
+        } else if (sort_column == SortColumn::parent_pid && left.parent_pid != right.parent_pid) {
+            order = left.parent_pid < right.parent_pid ? -1 : 1;
+        }
+        if (order == 0 && left.pid != right.pid)
+            order = left.pid < right.pid ? -1 : 1;
+        if (order == 0 && left.start_time_100ns != right.start_time_100ns)
+            order = left.start_time_100ns < right.start_time_100ns ? -1 : 1;
+        return descending ? order > 0 : order < 0;
+    };
     if (view_mode == ViewMode::flat) {
         view.processes.reserve(processes.size());
         for (const ProcessRecord& record : processes) {
@@ -283,54 +476,13 @@ VisibleView select_visible(const std::vector<ProcessRecord>& processes, FilterMo
                 view.processes.push_back(record);
             }
         }
-        const bool descending = sort_direction == SortDirection::descending;
-        const auto comparator = [sort_column, descending](const ProcessRecord& left,
-                                                          const ProcessRecord& right) {
-            bool less = false;
-            switch (sort_column) {
-            case SortColumn::name: {
-                const std::string left_name = lower_ascii(left.base_name_utf8);
-                const std::string right_name = lower_ascii(right.base_name_utf8);
-                if (left_name != right_name)
-                    less = left_name < right_name;
-                else if (left.pid != right.pid)
-                    less = left.pid < right.pid;
-                else
-                    less = left.start_time_100ns < right.start_time_100ns;
-                break;
-            }
-            case SortColumn::pid:
-                if (left.pid != right.pid)
-                    less = left.pid < right.pid;
-                else
-                    less = left.start_time_100ns < right.start_time_100ns;
-                break;
-            case SortColumn::parent_pid:
-                if (left.parent_pid != right.parent_pid)
-                    less = left.parent_pid < right.parent_pid;
-                else if (left.pid != right.pid)
-                    less = left.pid < right.pid;
-                else
-                    less = left.start_time_100ns < right.start_time_100ns;
-                break;
-            }
-            return descending ? !less && (left != right) : less;
-        };
         std::ranges::sort(view.processes, comparator);
         view.root_count = static_cast<std::uint32_t>(view.processes.size());
         return view;
     }
 
     std::vector<ProcessRecord> sorted = processes;
-    std::ranges::sort(sorted, [](const ProcessRecord& left, const ProcessRecord& right) {
-        const std::string left_name = lower_ascii(left.base_name_utf8);
-        const std::string right_name = lower_ascii(right.base_name_utf8);
-        if (left_name != right_name)
-            return left_name < right_name;
-        if (left.pid != right.pid)
-            return left.pid < right.pid;
-        return left.start_time_100ns < right.start_time_100ns;
-    });
+    std::ranges::sort(sorted, comparator);
     std::unordered_map<std::uint32_t, std::size_t> index_by_pid;
     index_by_pid.reserve(sorted.size());
     for (std::size_t index = 0; index < sorted.size(); ++index)
@@ -452,6 +604,96 @@ Json section_node(std::string title, Json children, std::string_view accent = "c
                 {"children", std::move(children)}};
 }
 
+std::string decimal_value(double value, std::string_view suffix) {
+    std::array<char, 48> buffer{};
+    const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(),
+                                         value, std::chars_format::fixed, 1);
+    if (converted.ec != std::errc{})
+        return "Unavailable";
+    return std::string(buffer.data(), converted.ptr) + std::string(suffix);
+}
+
+std::string percent_text(const std::optional<double>& percent) {
+    return percent ? decimal_value(*percent, "%") : "Unavailable";
+}
+
+Json utilization_bar(std::string id, double fraction) {
+    return Json{{"type", "bar"}, {"id", std::move(id)},
+                {"pct", std::clamp(fraction, 0.0, 1.0)}, {"height", 5}};
+}
+
+Json performance_summary(const PerformanceSnapshot& performance) {
+    const auto cell = [](std::string id, std::string label, std::string value,
+                         const std::optional<double>& percent = std::nullopt) {
+        Json children = Json::array({text_node(std::move(label), "muted", 22),
+                                     text_node(std::move(value), "value", 28)});
+        if (percent)
+            children.push_back(utilization_bar(id + ".bar", *percent / 100.0));
+        Json result = card_node("", std::move(children));
+        result["id"] = std::move(id);
+        result["weight"] = 1.0;
+        result["padding"] = 8;
+        return result;
+    };
+    Json memory = cell("process.summary.memory", "Memory", percent_text(performance.memory_percent),
+                       performance.memory_percent);
+    if (performance.physical_used_bytes && performance.physical_total_bytes) {
+        memory["children"].push_back(text_node(
+            decimal_value(static_cast<double>(*performance.physical_used_bytes) / 1073741824.0, "") +
+                "/" + decimal_value(static_cast<double>(*performance.physical_total_bytes) /
+                                        1073741824.0, " GiB"), "muted", 22));
+    }
+    std::string uptime = "Unavailable";
+    if (performance.uptime_ms) {
+        const auto seconds = *performance.uptime_ms / 1000U;
+        uptime = std::to_string(seconds / 86400U) + "d " +
+                 std::to_string((seconds / 3600U) % 24U) + "h " +
+                 std::to_string((seconds / 60U) % 60U) + "m";
+    }
+    Json summary = row_node(Json::array({
+        cell("process.summary.cpu", "CPU", percent_text(performance.cpu_percent), performance.cpu_percent),
+        std::move(memory),
+        cell("process.summary.processes", "Processes", performance.process_count
+                 ? std::to_string(*performance.process_count) : "Unavailable"),
+        cell("process.summary.uptime", "Uptime", std::move(uptime))}));
+    summary["id"] = "process.summary";
+    summary["fallback"] = {{"layout", "vertical"}, {"threshold_width", 640}};
+    return summary;
+}
+
+Json performance_charts(const PerformanceSnapshot& performance) {
+    const auto chart = [&](bool cpu) {
+        Json values = Json::array();
+        std::uint64_t previous_time = 0;
+        for (const auto& sample : performance.history) {
+            const auto& value = cpu ? sample.cpu_percent : sample.memory_percent;
+            if (!value || (previous_time != 0 &&
+                           (sample.uptime_ms <= previous_time ||
+                            sample.uptime_ms - previous_time > 10000U)))
+                values.clear();
+            if (value)
+                values.push_back(*value);
+            previous_time = sample.uptime_ms;
+        }
+        Json children = Json::array();
+        if (values.size() >= 2U) {
+            children.push_back(Json{{"type", "sparkline"},
+                                     {"id", cpu ? "process.history.cpu" : "process.history.memory"},
+                                     {"values", std::move(values)}, {"height", 40}});
+        } else {
+            children.push_back(text_node("Waiting for two valid samples / 等待有效采样", "muted", 40));
+        }
+        children.push_back(text_node("Recent samples · relative scale / 近期采样·自动量程", "muted", 18));
+        Json result = card_node(cpu ? "CPU history / CPU 曲线" : "Memory history / 内存曲线",
+                                std::move(children));
+        result["weight"] = 1.0;
+        return result;
+    };
+    Json result = row_node(Json::array({chart(true), chart(false)}));
+    result["fallback"] = {{"layout", "vertical"}, {"threshold_width", 640}};
+    return result;
+}
+
 Json dock_document(Json nodes, std::string content_id, int min_width = 560) {
     if (!nodes.is_array() || nodes.empty())
         return Json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
@@ -513,6 +755,12 @@ std::string_view sort_column_label(SortColumn column) noexcept {
         return "PID";
     case SortColumn::parent_pid:
         return "父进程";
+    case SortColumn::cpu:
+        return "CPU";
+    case SortColumn::threads:
+        return "Threads";
+    case SortColumn::memory:
+        return "Memory";
     }
     return "名称";
 }
@@ -550,14 +798,14 @@ std::string build_panel_spec(const Snapshot& snapshot) {
                       {"min_width", 180}};
     controls.push_back(std::move(search_input));
     Json sort_items = Json::array();
-    const std::array<SortColumn, 3> columns{SortColumn::name, SortColumn::pid,
-                                            SortColumn::parent_pid};
+    const std::array<SortColumn, 6> columns{SortColumn::name, SortColumn::pid,
+                                          SortColumn::parent_pid, SortColumn::cpu,
+                                          SortColumn::threads, SortColumn::memory};
+    constexpr std::array<std::string_view, 6> column_values{"name", "pid", "ppid", "cpu", "threads", "memory"};
     for (std::size_t column_index = 0; column_index < columns.size(); ++column_index) {
         sort_items.push_back({{"id", static_cast<std::int32_t>(column_index + 1)},
                               {"label", std::string(sort_column_label(columns[column_index]))},
-                              {"value", column_index == 0 ? "name"
-                                        : column_index == 1 ? "pid"
-                                                            : "ppid"}});
+                              {"value", column_values[column_index]}});
     }
     controls.push_back(Json{{"type", "dropdown"},
                             {"id", "process.sort.column"},
@@ -565,10 +813,7 @@ std::string build_panel_spec(const Snapshot& snapshot) {
                             {"payload", Json::object()},
                             {"items", std::move(sort_items)},
                             {"selected_id",
-                             static_cast<std::int32_t>(
-                                 snapshot.sort_column == SortColumn::name      ? 1
-                                 : snapshot.sort_column == SortColumn::pid     ? 2
-                                                                               : 3)},
+                             static_cast<std::int32_t>(snapshot.sort_column) + 1},
                             {"height", 38},
                             {"width", 112}});
     controls.push_back(button_node(
@@ -629,6 +874,8 @@ std::string build_panel_spec(const Snapshot& snapshot) {
     nodes.front()["padding"] = 8;
     nodes.front()["height"] = 60;
     nodes.push_back(section_node("", std::move(filters)));
+    nodes.push_back(performance_summary(snapshot.performance));
+    nodes.push_back(performance_charts(snapshot.performance));
     if (snapshot.attached_process.has_value()) {
         const ProcessRecord& process = *snapshot.attached_process;
         Json details = Json::array();
@@ -650,7 +897,8 @@ std::string build_panel_spec(const Snapshot& snapshot) {
             "Attached / 已附加",
             Json::array({card_node(process.base_name_utf8, std::move(details), "ok")}), "ok"));
     }
-    if (!snapshot.status_text.empty()) {
+    if (!snapshot.status_text.empty() &&
+        (snapshot.last_status != SAO_STATUS_OK || snapshot.visible_processes.empty())) {
         const std::string_view style = snapshot.last_status == SAO_STATUS_OK ? "muted" : "bad";
         Json status = Json::array();
         status.push_back(text_node(snapshot.status_text, style, 28));
@@ -679,6 +927,11 @@ std::string build_panel_spec(const Snapshot& snapshot) {
         nodes.push_back(section_node("Process List / 进程列表", std::move(empty)));
     } else {
         Json cards = Json::array();
+        std::uint64_t maximum_working_set = 0U;
+        for (const auto& process : snapshot.visible_processes) {
+            if (process.working_set_bytes)
+                maximum_working_set = std::max(maximum_working_set, *process.working_set_bytes);
+        }
         for (std::size_t index = page_begin; index < page_end; ++index) {
             const ProcessRecord& process = snapshot.visible_processes[index];
             const std::uint8_t depth =
@@ -690,22 +943,25 @@ std::string build_panel_spec(const Snapshot& snapshot) {
             std::string display_name = process.base_name_utf8;
             if (depth != 0U)
                 display_name.insert(0, static_cast<std::size_t>(depth) * 2U, ' ');
-            Json identity =
-                section_node("", Json::array({
-                                     text_node(std::move(display_name), "label", 28),
-                                     text_node(process.image_path_utf8, "muted", 24)}));
+            Json identity = section_node("", Json::array({text_node("Name", "muted", 22),
+                                                          text_node(std::move(display_name), "label", 28)}));
             identity["padding"] = 0;
             identity["gap"] = 0;
             identity["weight"] = 1.0;
             Json pid = badge_node("PID " + std::to_string(process.pid), "muted");
-            pid["width"] = 108;
+            pid["width"] = 92;
             if (snapshot.view_mode == ViewMode::tree && process.parent_pid != 0U) {
                 pid["text"] = "PID " + std::to_string(process.pid) + " ▸" +
                               std::to_string(process.parent_pid);
             }
-            Json category = badge_node(is_likely_game_process(process) ? "可能的游戏" : "进程",
-                                       is_likely_game_process(process) ? "ok" : "muted");
-            category["width"] = 104;
+            const auto metric_cell = [](std::string label, std::string value, int width) {
+                Json cell = section_node("", Json::array({text_node(std::move(label), "muted", 22),
+                                                          text_node(std::move(value), "value", 28)}));
+                cell["padding"] = 0;
+                cell["gap"] = 0;
+                cell["width"] = width;
+                return cell;
+            };
             Json row_children = Json::array();
             if (snapshot.view_mode == ViewMode::tree && has_children) {
                 Json twist = button_node("process.expand." + std::to_string(process.pid),
@@ -715,17 +971,37 @@ std::string build_panel_spec(const Snapshot& snapshot) {
                 twist["width"] = 34;
                 row_children.push_back(std::move(twist));
             }
-            row_children.push_back(std::move(identity));
             row_children.push_back(std::move(pid));
-            row_children.push_back(std::move(category));
+            row_children.push_back(std::move(identity));
+            row_children.push_back(metric_cell("Arch", process.architecture.empty()
+                                                           ? "Unavailable" : process.architecture, 84));
+            row_children.push_back(metric_cell("CPU", percent_text(process.cpu_percent), 90));
+            row_children.push_back(metric_cell("Threads", process.thread_count
+                                                              ? std::to_string(*process.thread_count)
+                                                              : "Unavailable", 84));
+            Json memory_cell = metric_cell("Memory", process.working_set_bytes
+                ? decimal_value(static_cast<double>(*process.working_set_bytes) / 1048576.0, " MiB")
+                : "Unavailable", 112);
+            if (process.working_set_bytes) {
+                memory_cell["children"].push_back(utilization_bar(
+                    "process.memory.bar." + std::to_string(process.pid),
+                    maximum_working_set == 0U ? 0.0 : static_cast<double>(*process.working_set_bytes) /
+                                                       static_cast<double>(maximum_working_set)));
+            }
+            row_children.push_back(std::move(memory_cell));
             Json attach = button_node(
                 "process.attach." + std::to_string(process.pid), "选择并附加", kAttachAction,
                 {{"pid", process.pid}, {"start_time_100ns", process.start_time_100ns}}, "default",
                 !attach_allowed);
             attach["width"] = 120;
-            row_children.push_back(std::move(attach));
             Json row = row_node(std::move(row_children));
-            Json item = card_node("", Json::array({std::move(row)}));
+            row["fallback"] = {{"layout", "vertical"},
+                                {"threshold_width", 720 + static_cast<int>(depth) * 14}};
+            Json path = text_node("Path: " + process.image_path_utf8, "muted", 28);
+            path["weight"] = 1.0;
+            Json details = row_node(Json::array({std::move(path), std::move(attach)}));
+            Json item = card_node("", Json::array({std::move(row), std::move(details)}),
+                                  is_likely_game_process(process) ? "ok" : "cyan");
             item["padding"] = 12;
             if (depth != 0U)
                 item["padding"] = Json{{"top", 12},
@@ -788,9 +1064,12 @@ sao_status_t query_with_core(std::uint32_t pid, ProcessRecord& out) {
     }
 }
 
-sao_status_t enumerate_with_core(std::vector<ProcessRecord>& out) {
+sao_status_t enumerate_with_core_cancellable(std::vector<ProcessRecord>& out,
+                                              std::stop_token stop) {
     try {
         for (int attempt = 0; attempt < kEnumerationAttempts; ++attempt) {
+            if (stop.stop_requested())
+                return SAO_STATUS_ERR_CANCELLED;
             std::size_t count = 0;
             sao_status_t status = sao_core_process_enumerate(nullptr, 0, &count);
             if (status != SAO_STATUS_OK)
@@ -808,6 +1087,8 @@ sao_status_t enumerate_with_core(std::vector<ProcessRecord>& out) {
             std::vector<ProcessRecord> snapshot;
             snapshot.reserve(pids.size());
             for (const std::uint32_t pid : pids) {
+                if (stop.stop_requested())
+                    return SAO_STATUS_ERR_CANCELLED;
                 if (pid == 0U || pid == 4U || pid == GetCurrentProcessId())
                     continue;
                 ProcessRecord record{};
@@ -824,6 +1105,10 @@ sao_status_t enumerate_with_core(std::vector<ProcessRecord>& out) {
     } catch (...) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
+}
+
+sao_status_t enumerate_with_core(std::vector<ProcessRecord>& out) {
+    return enumerate_with_core_cancellable(out, {});
 }
 
 std::optional<std::uint64_t> json_unsigned(const Json& object, std::string_view key) {
@@ -880,16 +1165,19 @@ struct Owner::State {
         std::string status_text;
         std::vector<ProcessRecord> processes;
         std::optional<ProcessRecord> attached_process;
+        PerformanceSnapshot performance;
     };
 
     State(sao_ui_compositor_handle_t borrowed_compositor, Operations value)
         : compositor(borrowed_compositor), operations(std::move(value)) {
         if (operations.current_process_id == 0U)
             operations.current_process_id = GetCurrentProcessId();
+        auto_refresh = operations.monitor_os_performance;
         worker = std::jthread([this](std::stop_token stop) { worker_main(stop); });
     }
 
     void worker_main(std::stop_token stop) noexcept {
+        PerformanceSampler performance_sampler;
         while (!stop.stop_requested()) {
             WorkItem item;
             std::function<sao_status_t(std::vector<ProcessRecord>&)> enumerate;
@@ -934,11 +1222,21 @@ struct Owner::State {
                     if (!enumerate) {
                         completion.status = SAO_STATUS_ERR_NOT_INITIALIZED;
                     } else {
-                        completion.status = enumerate(completion.processes);
+                        const auto default_enumerator =
+                            enumerate.target<decltype(&enumerate_with_core)>();
+                        completion.status =
+                            default_enumerator && *default_enumerator == &enumerate_with_core
+                                ? enumerate_with_core_cancellable(completion.processes, stop)
+                                : enumerate(completion.processes);
                         if (completion.status == SAO_STATUS_OK) {
                             completion.processes = normalize_snapshot(
                                 std::move(completion.processes), current_process_id);
                         }
+                    }
+                    if (operations.monitor_os_performance && !stop.stop_requested()) {
+                        if (completion.status != SAO_STATUS_OK)
+                            completion.processes.clear();
+                        completion.performance = performance_sampler.sample(completion.processes, stop);
                     }
                 } else if (item.kind == WorkKind::detach) {
                     if (!detach_operation) {
@@ -1100,6 +1398,7 @@ struct Owner::State {
     sao_status_t last_status{SAO_STATUS_OK};
     std::string status_text{"Not refreshed yet."};
     std::vector<ProcessRecord> processes;
+    PerformanceSnapshot performance;
     std::optional<ProcessRecord> attached_process;
     std::string rendered_spec_json;
     std::jthread worker;
@@ -1176,6 +1475,7 @@ Operations make_default_operations(sao_rt_io_proxy_handle_t proxy) {
     operations.current_process_id = GetCurrentProcessId();
     operations.enumerate_snapshot = &enumerate_with_core;
     operations.query_process = &query_with_core;
+    operations.monitor_os_performance = true;
     if (proxy != nullptr) {
         operations.attach = [proxy](std::uint32_t pid) {
             return sao_rt_io_proxy_attach(proxy, pid);
@@ -1482,6 +1782,7 @@ sao_status_t Owner::publish() noexcept {
             view.last_status = state_->last_status;
             view.status_text = state_->status_text;
             view.all_processes = state_->processes;
+            view.performance = state_->performance;
             VisibleView visible_view =
                 select_visible(view.all_processes, view.filter, state_->search_query_lower,
                                view.sort_column, view.sort_direction, view.view_mode,
@@ -1600,7 +1901,7 @@ sao_status_t Owner::service_ui() noexcept {
         const auto service_now = std::chrono::steady_clock::now();
         {
             std::lock_guard lock(state_->mutex);
-            if (state_->auto_refresh && state_->refresh_authoritative &&
+            if (state_->visible && state_->auto_refresh &&
                 !state_->loading && !state_->worker_active &&
                 state_->work_items.empty() && !state_->pending_attach.has_value()) {
                 const auto now = std::chrono::steady_clock::now();
@@ -1617,16 +1918,13 @@ sao_status_t Owner::service_ui() noexcept {
                 } else if (state_->next_auto_refresh_at.time_since_epoch().count() == 0) {
                     state_->next_auto_refresh_at = now;
                 } else if (now >= state_->next_auto_refresh_at) {
-                    const std::chrono::steady_clock::time_point due =
-                        state_->next_auto_refresh_at + std::chrono::milliseconds(
-                                                           kAutoRefreshIntervalMs);
-                    state_->next_auto_refresh_at = due;
+                    state_->next_auto_refresh_at = now + std::chrono::milliseconds(kAutoRefreshIntervalMs);
                     state_->busy_since = {};
                     if (state_->requested_generation !=
                         (std::numeric_limits<std::uint64_t>::max)()) {
                         ++state_->requested_generation;
                         State::WorkItem follow_up{State::WorkKind::refresh,
-                                                  state_->requested_generation, {}, due};
+                                                  state_->requested_generation, {}, now};
                         state_->work_items.push_back(std::move(follow_up));
                         state_->loading = true;
                         state_->refresh_authoritative = false;
@@ -1649,6 +1947,8 @@ sao_status_t Owner::service_ui() noexcept {
                 state_->loading = false;
                 state_->last_status = completion.status;
                 if (completion.kind == State::WorkKind::refresh) {
+                    state_->performance = std::move(completion.performance);
+                    state_->next_auto_refresh_at = service_now + std::chrono::milliseconds(kAutoRefreshIntervalMs);
                     state_->refresh_authoritative = completion.status == SAO_STATUS_OK;
                     if (completion.status == SAO_STATUS_OK) {
                         state_->processes = std::move(completion.processes);
@@ -1763,6 +2063,8 @@ sao_status_t Owner::service_ui() noexcept {
                 publish_needed = true;
             }
         }
+        if (wake_worker)
+            state_->worker_cv.notify_all();
         return publish_needed ? publish() : SAO_STATUS_OK;
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -2098,7 +2400,8 @@ sao_status_t Owner::set_search_query(std::string_view query) noexcept {
 sao_status_t Owner::set_sort(SortColumn column,
                              std::optional<bool> direction_ascending) noexcept {
     if (column != SortColumn::name && column != SortColumn::pid &&
-        column != SortColumn::parent_pid) {
+        column != SortColumn::parent_pid && column != SortColumn::cpu &&
+        column != SortColumn::threads && column != SortColumn::memory) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     OperationGuard operation(*this);
@@ -2164,7 +2467,7 @@ sao_status_t Owner::set_auto_refresh(bool enabled) noexcept {
             enabled ? std::chrono::steady_clock::now()
                     : std::chrono::steady_clock::time_point{};
         state_->status_text = enabled
-                                  ? "Auto refresh on (every 5s, worker-driven)."
+                                  ? "Auto refresh on (every 3s, worker-driven)."
                                   : "Auto refresh off.";
         state_->dirty = true;
     }
@@ -2438,9 +2741,8 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
         bool have_column = false;
         if (selection != payload.end() && selection->is_number_integer()) {
             const std::int64_t id = selection->get<std::int64_t>();
-            if (id >= 1 && id <= 3) {
-                column = id == 1 ? SortColumn::name : id == 2 ? SortColumn::pid
-                                                              : SortColumn::parent_pid;
+            if (id >= 1 && id <= 6) {
+                column = static_cast<SortColumn>(id - 1);
                 have_column = true;
             }
         }
@@ -2454,6 +2756,15 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
                 have_column = true;
             } else if (name == "ppid") {
                 column = SortColumn::parent_pid;
+                have_column = true;
+            } else if (name == "cpu") {
+                column = SortColumn::cpu;
+                have_column = true;
+            } else if (name == "threads") {
+                column = SortColumn::threads;
+                have_column = true;
+            } else if (name == "memory") {
+                column = SortColumn::memory;
                 have_column = true;
             }
         }
@@ -2528,6 +2839,7 @@ sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
             copy.last_status = state_->last_status;
             copy.status_text = state_->status_text;
             copy.all_processes = state_->processes;
+            copy.performance = state_->performance;
             VisibleView visible_view =
                 select_visible(copy.all_processes, copy.filter, state_->search_query_lower,
                                copy.sort_column, copy.sort_direction, copy.view_mode,

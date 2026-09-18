@@ -7,9 +7,18 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace sao::launcher::settings_owner {
 using Json = nlohmann::ordered_json;
+
+// Change-notification callback: fires synchronously on the committing thread
+// after a successful document mutation or save clears the dirty flag. The
+// callback runs after the owner mutex is released, so it may read the owner
+// (snapshot/get_value); it must not block, must not call back into mutate or
+// subscribe/unsubscribe paths, and must not throw.
+using change_callback_fn = void (*)(void* user_data) noexcept;
+
 struct LoadInfo {
     bool found = false;
     bool legacy_migrated = false;
@@ -62,9 +71,21 @@ class SettingsOwner final {
     void resume_after_retire() noexcept;
     bool dirty() const noexcept;
     sao_status_t path(std::wstring& out) const noexcept;
+    // Subscribes to committed document/dirty transitions. Re-registering the
+    // same (callback, user_data) pair is a no-op. unsubscribe waits for any
+    // in-flight dispatch of that callback to return before reporting success,
+    // so the caller may free user_data immediately afterwards.
+    sao_status_t subscribe_change(change_callback_fn callback, void* user_data) noexcept;
+    sao_status_t unsubscribe_change(change_callback_fn callback, void* user_data) noexcept;
   private:
-    sao_status_t set_value_locked(std::string_view top_level_key, Json value) noexcept;
+    struct SubscriberEntry {
+        change_callback_fn callback{};
+        void* user_data{};
+    };
+    sao_status_t set_value_locked(std::string_view top_level_key, Json value,
+                                  bool* out_changed) noexcept;
     sao_status_t save_locked() noexcept;
+    void notify_change() noexcept;
     mutable std::mutex mutex_;
     std::wstring path_;
     std::wstring registry_path_;
@@ -72,5 +93,19 @@ class SettingsOwner final {
     Json document_ = Json::object();
     bool dirty_ = false;
     std::shared_ptr<Lease::LeaseState> lease_state_;
+    std::mutex subscribers_mutex_;
+    std::condition_variable subscribers_cv_;
+    std::vector<SubscriberEntry> subscribers_;
+    std::size_t subscribers_dispatching_ = 0;
 };
 } // namespace sao::launcher::settings_owner
+
+// Owner-scoped change subscription over the C ABI: the panel and other
+// launcher modules bind these to the live owner so committed mutations
+// (menu toggles, profile loads, hotkey saves) refresh open surfaces.
+extern "C" sao_status_t sao_launcher_settings_owner_subscribe_change(
+    void* owner_opaque, sao::launcher::settings_owner::change_callback_fn callback,
+    void* user_data) noexcept;
+extern "C" sao_status_t sao_launcher_settings_owner_unsubscribe_change(
+    void* owner_opaque, sao::launcher::settings_owner::change_callback_fn callback,
+    void* user_data) noexcept;

@@ -19,6 +19,16 @@ constexpr std::string_view kNativeUpdateManifestUrl =
     "https://x2.sjcmc.cn:15018/update/stable/windows-x64-native/latest.json";
 constexpr std::string_view kNativeUpdateTlsSpkiSha256 =
     "d3171ec5b86303233b6abda8e83142293d6910099aedd0cdac947d276006db0a";
+// License deployment identity — the shipped SaoAuto.provider.json must carry
+// exactly this endpoint, TLS SPKI pin and Ed25519 verify key. Rotating any
+// of them means a new binary release; a config file alone cannot retarget
+// the build at an attacker-controlled licensing service.
+constexpr std::string_view kLicenseEndpoint =
+    "https://x2.sjcmc.cn:15522";
+constexpr std::string_view kLicenseTlsSpkiSha256 =
+    "d3171ec5b86303233b6abda8e83142293d6910099aedd0cdac947d276006db0a";
+constexpr std::string_view kLicenseServerEd25519Pubkey =
+    "381e5d38fa236a4cd8349e7fdd592e1a4fe83a8f919418fb134da43d174c3bc8";
 
 std::mutex g_configuration_mutex;
 LauncherProviderConfiguration g_configuration;
@@ -308,15 +318,29 @@ bool parseLicense(const json& root, LicenseProviderConfiguration& output) {
     }
     const auto public_key = section->find("server_ed25519_pubkey");
     const auto tls_spki_pin = section->find("server_tls_spki_sha256");
-    return public_key != section->end() && public_key->is_string() &&
-        decodeHex(public_key->get_ref<const std::string&>(),
-                  output.server_public_key.data(), output.server_public_key.size()) &&
+    if (public_key == section->end() || !public_key->is_string() ||
+        !decodeHex(public_key->get_ref<const std::string&>(),
+                   output.server_public_key.data(),
+                   output.server_public_key.size()) ||
+        tls_spki_pin == section->end() || !tls_spki_pin->is_string() ||
+        !decodeHex(tls_spki_pin->get_ref<const std::string&>(),
+                   output.server_tls_spki_sha256.data(),
+                   output.server_tls_spki_sha256.size())) {
+        return false;
+    }
+    std::array<uint8_t, 32> native_spki{};
+    std::array<uint8_t, 32> native_pubkey{};
+    if (!decodeHex(kLicenseTlsSpkiSha256, native_spki.data(),
+                   native_spki.size()) ||
+        !decodeHex(kLicenseServerEd25519Pubkey, native_pubkey.data(),
+                   native_pubkey.size())) {
+        return false;
+    }
+    return output.endpoint == kLicenseEndpoint &&
+        !isAllZero(output.server_tls_spki_sha256) &&
+        equalBytes(output.server_tls_spki_sha256, native_spki) &&
         !isAllZero(output.server_public_key) &&
-        tls_spki_pin != section->end() && tls_spki_pin->is_string() &&
-        decodeHex(tls_spki_pin->get_ref<const std::string&>(),
-                  output.server_tls_spki_sha256.data(),
-                  output.server_tls_spki_sha256.size()) &&
-        !isAllZero(output.server_tls_spki_sha256);
+        equalBytes(output.server_public_key, native_pubkey);
 }
 
 

@@ -129,4 +129,7 @@ sao_status_t profile_path(const std::string& name, std::wstring& out) noexcept {
     if (!valid_profile_name(name)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
     try { out = profile_file(name).wstring(); return SAO_STATUS_OK; } catch (const std::bad_alloc&) { return SAO_STATUS_ERR_UNKNOWN; } catch (...) { return SAO_STATUS_ERR_OS_CALL_FAILED; }
 }
+sao_status_t profiles_directory(std::wstring& out) noexcept {
+    try { out = profiles_dir().wstring(); return SAO_STATUS_OK; } catch (const std::bad_alloc&) { return SAO_STATUS_ERR_UNKNOWN; } catch (...) { return SAO_STATUS_ERR_OS_CALL_FAILED; }
+}
 } // namespace sao::launcher::settings

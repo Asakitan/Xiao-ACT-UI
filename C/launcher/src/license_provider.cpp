@@ -1,7 +1,9 @@
 #include "sao/launcher/init_pipeline.h"
 #include "sao/launcher/provider_config.h"
+#include "license_provider.h"
 
 #include "sao/license/client/client_public.h"
+#include "sao/license/sdk/license_events.h"
 #include "sao/license/sdk/license_sdk.h"
 #include "sao/license/sdk/license_status.h"
 #include "sao_core/sao_status.h"
@@ -12,10 +14,11 @@
 #include <winhttp.h>
 
 #include <algorithm>
-#include <array>
-#include <chrono>
+#include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -584,6 +587,117 @@ void setTestNow(NowFn fn) noexcept {
 }
 #endif
 
+// ---- Entitlement service --------------------------------------------------
+//
+// Layered on top of the SDK event surface. Each feature the launcher gates
+// maps onto a sao_license_feature_id_t bit; entitlement is recomputed from
+// the live tier (sao_license_sdk_get_tier enforces expiry and server-side
+// revocation) rather than a cached mask, so a stale snapshot cannot keep
+// a feature enabled after the license lapses.
+
+struct EntitlementSubscriber final {
+    sao_license_entitlement_changed_fn fn = nullptr;
+    void* user_data = nullptr;
+};
+
+std::mutex g_entitlement_mutex;
+std::condition_variable g_entitlement_drain_cv;
+std::vector<EntitlementSubscriber> g_entitlement_subscribers;
+std::size_t g_entitlement_inflight = 0;
+std::uint32_t g_entitlement_mask = 0;
+bool g_entitlement_mask_initialized = false;
+bool g_entitlement_bridge_registered = false;
+// True on the thread currently inside dispatch_entitlement_mask's callback
+// loop so unsubscribe issued from a callback does not wait on itself.
+thread_local bool g_entitlement_dispatching = false;
+
+// Policy: every gated feature requires a PAID or INTERNAL tier.
+constexpr std::uint32_t kEntitledFeatureMask =
+    (1u << SAO_LICENSE_FEATURE_STREAMING_ID) |
+    (1u << SAO_LICENSE_FEATURE_AI_CHAT_ID) |
+    (1u << SAO_LICENSE_FEATURE_WORKSHOP_DOWNLOAD_ID) |
+    (1u << SAO_LICENSE_FEATURE_KERNEL_MAP_ID);
+
+std::uint32_t compute_entitlement_mask() {
+    sao_license_tier_t tier = SAO_LICENSE_TIER_UNKNOWN;
+    if (sao_license_sdk_get_tier(&tier) != SAO_OK) return 0;
+    switch (tier) {
+        case SAO_LICENSE_TIER_PAID:
+        case SAO_LICENSE_TIER_INTERNAL:
+            return kEntitledFeatureMask;
+        default:
+            return 0;
+    }
+}
+
+void dispatch_entitlement_mask(std::uint32_t new_mask) {
+    std::vector<EntitlementSubscriber> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(g_entitlement_mutex);
+        ++g_entitlement_inflight;
+        snapshot = g_entitlement_subscribers;
+    }
+    g_entitlement_dispatching = true;
+    try {
+        for (const EntitlementSubscriber& entry : snapshot) {
+            if (entry.fn == nullptr) continue;
+            try {
+                entry.fn(new_mask, entry.user_data);
+            } catch (...) {
+            }
+        }
+    } catch (...) {
+    }
+    g_entitlement_dispatching = false;
+    {
+        std::lock_guard<std::mutex> lock(g_entitlement_mutex);
+        if (g_entitlement_inflight != 0U) --g_entitlement_inflight;
+    }
+    g_entitlement_drain_cv.notify_all();
+}
+
+void drain_entitlement_inflight() {
+    if (g_entitlement_dispatching) return;
+    std::unique_lock<std::mutex> lock(g_entitlement_mutex);
+    g_entitlement_drain_cv.wait(
+        lock, [] { return g_entitlement_inflight == 0U; });
+}
+
+// SDK event -> entitlement transition. Runs on the license client's worker
+// thread; refreshes the cached mask and only fans out to subscribers when
+// the mask actually changed.
+void SAO_LICENSE_SDK_CALL entitlement_event_bridge(
+    sao_license_event_kind_t kind, void* /*user_data*/) {
+    switch (kind) {
+        case SAO_LICENSE_EVT_INITIALIZED:
+        case SAO_LICENSE_EVT_EXPIRED:
+        case SAO_LICENSE_EVT_REVOKED:
+        case SAO_LICENSE_EVT_RENEWED:
+        case SAO_LICENSE_EVT_TIER_CHANGED:
+            break;
+        default:
+            return;
+    }
+    const std::uint32_t mask = compute_entitlement_mask();
+    bool fire = false;
+    {
+        std::lock_guard<std::mutex> lock(g_entitlement_mutex);
+        if (!g_entitlement_mask_initialized || mask != g_entitlement_mask) {
+            g_entitlement_mask = mask;
+            g_entitlement_mask_initialized = true;
+            fire = true;
+        }
+    }
+    if (fire) dispatch_entitlement_mask(mask);
+}
+
+void refresh_entitlement_mask() {
+    const std::uint32_t mask = compute_entitlement_mask();
+    std::lock_guard<std::mutex> lock(g_entitlement_mutex);
+    g_entitlement_mask = mask;
+    g_entitlement_mask_initialized = true;
+}
+
 } // namespace
 
 extern "C" sao_status_t sao_license_verify(sao_license_result* out) {
@@ -656,4 +770,165 @@ extern "C" sao_status_t sao_license_shutdown(void) {
     sao_license_client_set_http_transport(nullptr, nullptr);
     sao_license_client_set_provider(nullptr, nullptr);
     return SAO_STATUS_OK;
+}
+
+extern "C" int32_t sao_license_subscribe_entitlement(
+    sao_license_entitlement_changed_fn fn, void* user_data) {
+    if (fn == nullptr) return SAO_STATUS_INVALID_ARGUMENT;
+    try {
+        int32_t status = SAO_OK;
+        {
+            std::lock_guard<std::mutex> lock(g_entitlement_mutex);
+            g_entitlement_subscribers.push_back(
+                EntitlementSubscriber{fn, user_data});
+            if (!g_entitlement_bridge_registered) {
+                status = sao_license_sdk_register_event_handler(
+                    &entitlement_event_bridge, nullptr);
+                if (status == SAO_OK) {
+                    g_entitlement_bridge_registered = true;
+                } else {
+                    g_entitlement_subscribers.pop_back();
+                }
+            }
+        }
+        return status == SAO_OK ? SAO_STATUS_OK : SAO_STATUS_LICENSE_INVALID;
+    } catch (...) {
+        return SAO_STATUS_INTERNAL;
+    }
+}
+
+extern "C" int32_t sao_license_unsubscribe_entitlement(
+    sao_license_entitlement_changed_fn fn, void* user_data) {
+    if (fn == nullptr) return SAO_STATUS_INVALID_ARGUMENT;
+    try {
+        bool release_bridge = false;
+        {
+            std::lock_guard<std::mutex> lock(g_entitlement_mutex);
+            const auto found = std::find_if(
+                g_entitlement_subscribers.begin(),
+                g_entitlement_subscribers.end(),
+                [fn, user_data](const EntitlementSubscriber& entry) {
+                    return entry.fn == fn && entry.user_data == user_data;
+                });
+            if (found == g_entitlement_subscribers.end()) {
+                return SAO_STATUS_INVALID_ARGUMENT;
+            }
+            g_entitlement_subscribers.erase(found);
+            release_bridge = g_entitlement_subscribers.empty() &&
+                             g_entitlement_bridge_registered;
+            if (release_bridge) g_entitlement_bridge_registered = false;
+        }
+        if (release_bridge) {
+            (void)sao_license_sdk_unregister_event_handler(
+                &entitlement_event_bridge);
+        }
+        drain_entitlement_inflight();
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_INTERNAL;
+    }
+}
+
+extern "C" int32_t sao_license_entitled_for_feature(
+    sao_license_feature_id_t feature) {
+    if (feature < 0 || feature >= SAO_LICENSE_FEATURE_COUNT_ID) return 0;
+    try {
+        return (compute_entitlement_mask() &
+                (1u << static_cast<unsigned>(feature)))
+                       != 0
+                   ? 1
+                   : 0;
+    } catch (...) {
+        return 0;
+    }
+}
+
+extern "C" int32_t sao_license_provider_status(
+    sao_license_provider_status_t* out) {
+    if (out == nullptr ||
+        out->struct_size != sizeof(sao_license_provider_status_t)) {
+        return SAO_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        sao_license_tier_t tier = SAO_LICENSE_TIER_UNKNOWN;
+        uint64_t expiry_ms = 0;
+        std::array<uint8_t, 32> hwid{};
+        out->tier = static_cast<int32_t>(SAO_LICENSE_TIER_UNKNOWN);
+        out->activated = 0;
+        out->expiry_ms = 0;
+        out->heartbeat_running = 0;
+        out->revoked = 0;
+        out->retry_failures = 0;
+        out->retry_next_ms = 0;
+        out->hwid_masked[0] = '\0';
+        const bool tier_ok = sao_license_sdk_get_tier(&tier) == SAO_OK;
+        const bool hwid_ok = sao_license_sdk_get_hwid(hwid.data()) == SAO_OK;
+        out->initialized = (tier_ok || hwid_ok) ? 1 : 0;
+        if (tier_ok) {
+            out->tier = static_cast<int32_t>(tier);
+            out->activated = (tier != SAO_LICENSE_TIER_UNKNOWN) ? 1 : 0;
+        }
+        if (sao_license_sdk_get_expiry_ms(&expiry_ms) == SAO_OK) {
+            out->expiry_ms = static_cast<int64_t>(expiry_ms);
+        }
+        int32_t running = 0;
+        if (sao_license_client_is_heartbeat_running(&running) == SAO_OK) {
+            out->heartbeat_running = running;
+        }
+        int32_t revoked = 0;
+        if (sao_license_client_check_revocation(&revoked) == SAO_OK) {
+            out->revoked = revoked;
+        }
+        sao_license_client_retry_state_t retry{};
+        if (sao_license_client_get_retry_state(&retry) == SAO_OK) {
+            out->retry_failures =
+                static_cast<int32_t>(retry.consecutive_failures);
+            out->retry_next_ms = static_cast<int64_t>(retry.next_retry_ms);
+        }
+        if (hwid_ok) {
+            constexpr char digits[] = "0123456789abcdef";
+            char hex[65]{};
+            for (size_t index = 0; index < hwid.size(); ++index) {
+                hex[index * 2] = digits[hwid[index] >> 4U];
+                hex[index * 2 + 1] = digits[hwid[index] & 0x0fU];
+            }
+            std::snprintf(out->hwid_masked, sizeof(out->hwid_masked),
+                          "%.8s...%s", hex, hex + 56);
+            SecureZeroMemory(hex, sizeof(hex));
+        }
+        return SAO_OK;
+    } catch (...) {
+        return SAO_STATUS_INTERNAL;
+    }
+}
+
+extern "C" int32_t sao_license_provider_auto_start(void) {
+    try {
+        const auto configuration =
+            sao::launcher::launcherProviderConfigurationSnapshot().license;
+        sao_license_client_set_provider(&provider, nullptr);
+        sao_license_client_set_http_transport(&httpTransport, nullptr);
+        if (!configuration.enabled || configuration.endpoint.empty()) {
+            return SAO_STATUS_OK;  // inert — license gate stays off
+        }
+        int32_t status = sao_license_sdk_init();
+        if (status == SAO_OK) status = sao_license_sdk_refresh();
+        if (status == SAO_LICENSE_ERR_NO_TOKEN) status = SAO_OK;
+        if (status != SAO_OK) return SAO_STATUS_LICENSE_INVALID;
+        sao_license_tier_t tier = SAO_LICENSE_TIER_UNKNOWN;
+        if (sao_license_sdk_get_tier(&tier) != SAO_OK) {
+            return SAO_STATUS_LICENSE_INVALID;
+        }
+        if (tier != SAO_LICENSE_TIER_UNKNOWN &&
+            tier != SAO_LICENSE_TIER_FREE &&
+            configuration.heartbeat_interval_ms != 0 &&
+            sao_license_client_start_heartbeat(
+                configuration.heartbeat_interval_ms) != SAO_OK) {
+            return SAO_STATUS_LICENSE_INVALID;
+        }
+        refresh_entitlement_mask();
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_LICENSE_INVALID;
+    }
 }

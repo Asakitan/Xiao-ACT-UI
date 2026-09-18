@@ -34,6 +34,14 @@
 #include "settings_theme_internal.h"
 #include "tool_launch_internal.h"
 
+// Sibling-owned surface that may be absent pre-merge; __has_include keeps
+// this TU compiling in every preset and activates the wiring sites when
+// the license entitlement header lands.
+#if __has_include("license_provider.h")
+#include "license_provider.h"
+#define SAO_LAUNCHER_HAS_LICENSE_ENTITLEMENT 1
+#endif
+
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION) &&                                              \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "license_panel_internal.h"
@@ -51,6 +59,7 @@
 #endif
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -82,6 +91,13 @@
 #include "sao/rt_io/window_rect.h"
 #include "sao/sdk/sao_sdk.h"
 #include "sao/sdk/sao_sdk_platform_internal.h"
+// SDK panel-open binding header (contract C). Sibling-owned; absent
+// pre-merge, the dispatch + bind sites stay compiled out via
+// SAO_LAUNCHER_HAS_SDK_PANEL_OPEN.
+#if __has_include("sao/sdk/sao_sdk_platform_panels.h")
+#include "sao/sdk/sao_sdk_platform_panels.h"
+#define SAO_LAUNCHER_HAS_SDK_PANEL_OPEN 1
+#endif
 #include "sao/ui/compositor.h"
 #include "sao/ui/dc_mutation.h"
 #include "sao/ui/dialog.h"
@@ -282,7 +298,80 @@ bool buildPlatformConfig(const AppState& state, sao_platform_config& config,
 namespace {
 
 constexpr UINT_PTR kUiFrameTimerId = 0x53415549U;
-constexpr int32_t kUiFrameIntervalMs = 16;
+// 60 Hz fallback interval lives inside ui_frame_interval_ms() — see below.
+
+// Raised timer resolution so sub-16 ms WM_TIMER / wait intervals actually
+// land near the refresh-matched cadence instead of the ~15.6 ms default
+// quantum.  Same dllimport pattern as platform/ui/src/scheduler.cpp —
+// avoids pulling <mmsystem.h> aliases into this TU.
+extern "C" {
+__declspec(dllimport) unsigned int __stdcall timeBeginPeriod(unsigned int uPeriod);
+__declspec(dllimport) unsigned int __stdcall timeEndPeriod(unsigned int uPeriod);
+}
+
+int32_t g_ui_fine_timer_users = 0;
+
+// Engage/release bracketed by the live message loops.  Engage only pays when
+// a sub-16 ms cadence was probed; calls are idempotent per bracketed loop.
+void ui_fine_timer_engage() {
+    if (g_ui_fine_timer_users == 0)
+        (void)timeBeginPeriod(1);
+    ++g_ui_fine_timer_users;
+}
+
+void ui_fine_timer_release() {
+    if (g_ui_fine_timer_users <= 0)
+        return;
+    if (--g_ui_fine_timer_users == 0)
+        (void)timeEndPeriod(1);
+}
+
+// Refresh-matched frame pacing: the SetTimer + sao_ui_tick cadence follows
+// the display's committed refresh rate instead of a fixed 16 ms so
+// 120/144/165/240 Hz panels receive sub-60 Hz-locked frames.  Mirrors the
+// scheduler probe (platform/ui/src/scheduler.cpp detect_refresh_hz_impl):
+// dmDisplayFrequency — the mode actually committed to each active display —
+// wins over GetDeviceCaps which can lag on dynamic-refresh panels; 0/1 are
+// the hardware-default sentinels.  Result is clamped to 60-240 Hz (16-4 ms)
+// so a bogus probe never starves the loop.  Detected once — the WM_TIMER is
+// created with this interval at loop entry, and a monitor hot-plug mid-run
+// is a rare enough event that re-probing inside the tick isn't worth the
+// EnumDisplayDevicesW walk.
+int32_t ui_frame_interval_ms() {
+    static const int32_t interval_ms = []() -> int32_t {
+        int32_t best_hz = 0;
+        for (DWORD index = 0;; ++index) {
+            DISPLAY_DEVICEW device{};
+            device.cb = sizeof(device);
+            if (!::EnumDisplayDevicesW(nullptr, index, &device, 0))
+                break;
+            if ((device.StateFlags & DISPLAY_DEVICE_ACTIVE) == 0)
+                continue;
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            if (::EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS, &mode) &&
+                mode.dmDisplayFrequency > 1) {
+                const int32_t hz = static_cast<int32_t>(mode.dmDisplayFrequency);
+                if (hz > best_hz)
+                    best_hz = hz;
+            }
+        }
+        if (best_hz == 0) {
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            if (::EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) &&
+                mode.dmDisplayFrequency > 1)
+                best_hz = static_cast<int32_t>(mode.dmDisplayFrequency);
+        }
+        if (best_hz < 60)
+            best_hz = 60;
+        if (best_hz > 240)
+            best_hz = 240;
+        const int32_t interval = 1000 / best_hz;
+        return interval < 4 ? 4 : interval;
+    }();
+    return interval_ms;
+}
 constexpr int kMaximumTeardownAttempts = 3;
 constexpr int kMaximumStreamingReleaseAttempts = 2;
 constexpr uint64_t kRtIoMandatoryLiveStepMask = ((uint64_t{1} << 9u) - 1u) | (uint64_t{1} << 13u) |
@@ -616,10 +705,21 @@ sao_launcher_composition_test_hooks_t g_composition_test_hooks{};
 //     so the Panel shows plugin runtimes as unavailable.
 // ---------------------------------------------------------------------------
 
-// Pass-through default. When SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL is
-// OFF (default in windows-hardened), or when the installer-core track has
-// not been linked in yet, this returns OK immediately so plugin hosts are
-// left to their pre-installed runtimes.
+// Pass-through default. The installer-core track DOES ship a matching ABI
+// (sao_runtime_installer_ensure_all / load_manifest / bind_manifest /
+// manifest_release are exported by the sao_runtime_installer target), but
+// this SaoAuto target intentionally does not link it: no launcher preset
+// defines SAO_LAUNCHER_HAS_RUNTIME_INSTALLER, so the hook stays on this
+// passthrough and the guarded extern declarations below stay dormant.
+//
+// Consequence: with SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL off, or when no
+// runtime_manifest is configured (true for every shipped provider config),
+// this returns OK and plugin hosts use their pre-installed runtimes.  When
+// a manifest IS configured the caller reports SAO_STATUS_NOT_IMPLEMENTED
+// and records the failure so the Panel marks plugin runtimes unavailable --
+// honest fail-closed instead of pretending an install ran.  Enabling the
+// real installer is a CMake-side switch: link sao_runtime_installer and
+// define SAO_LAUNCHER_HAS_RUNTIME_INSTALLER for this target.
 sao_status_t
 runtime_installer_ensure_all_passthrough(const wchar_t* /*base_dir*/,
                                          sao::launcher::runtime_installer_glue::ProgressFn
@@ -1068,7 +1168,7 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
                 }
             }
             if (sao_ui_tick(static_cast<sao_platform_ctx*>(state.platform_ctx),
-                            kUiFrameIntervalMs) != SAO_STATUS_OK) {
+                            static_cast<uint32_t>(ui_frame_interval_ms())) != SAO_STATUS_OK) {
                 return SAO_EXIT_UI_ONLINE_FAIL;
             }
             if (hooks->poll_should_exit(hooks->user_data) != 0)
@@ -1076,9 +1176,12 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
             Sleep(0);
         }
     } else {
-        if (SetTimer(nullptr, kUiFrameTimerId, kUiFrameIntervalMs, nullptr) == 0) {
+        const UINT frame_ms = static_cast<UINT>(ui_frame_interval_ms());
+        if (SetTimer(nullptr, kUiFrameTimerId, frame_ms, nullptr) == 0) {
             return SAO_EXIT_UI_ONLINE_FAIL;
         }
+        if (frame_ms < 16)
+            ui_fine_timer_engage();
         MSG msg{};
         BOOL result = 0;
         while ((result = GetMessageW(&msg, nullptr, 0, 0)) > 0) {
@@ -1087,6 +1190,8 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
                                       msg.message, msg.wParam, msg.lParam,
                                       &handled) != SAO_STATUS_OK) {
                 KillTimer(nullptr, kUiFrameTimerId);
+                if (frame_ms < 16)
+                    ui_fine_timer_release();
                 return SAO_EXIT_UI_ONLINE_FAIL;
             }
             if (!handled) {
@@ -1095,6 +1200,8 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
             }
         }
         KillTimer(nullptr, kUiFrameTimerId);
+        if (frame_ms < 16)
+            ui_fine_timer_release();
         if (result < 0)
             return SAO_EXIT_UI_ONLINE_FAIL;
         return static_cast<int>(msg.wParam);
@@ -2296,6 +2403,24 @@ sao_status_t sao_ui_outro_cancel(sao_platform_ctx*) {
     return SAO_STATUS_NOT_IMPLEMENTED;
 }
 #elif defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+} // extern "C" — the namespaced forward decls below must keep C++ linkage;
+//   giving them C linkage would collapse both onto the same unmangled
+//   `open_config_panel_status` symbol (C2733/C2116).
+// Status-returning panel openers owned by sibling TUs. user_menu.cpp
+// forward-declares the same pair because the settings/hotkey module
+// headers do not publish them yet; keep this TU consistent until then.
+namespace sao::launcher::settings {
+sao_status_t open_config_panel_status() noexcept;
+}
+namespace sao::launcher::hotkey {
+sao_status_t open_config_panel_status(Owner* owner) noexcept;
+}
+extern "C" {
+// Defined by settings_config_panel.cpp (sibling contract item): republishes
+// the open Settings panel from its bound owner and must be a no-op when the
+// panel is closed or was never created.
+extern "C" sao_status_t sao_launcher_settings_config_external_refresh(void);
+
 struct DcMutationWindowRegistration {
     void* hwnd = nullptr;
     void* token = nullptr;
@@ -2326,6 +2451,18 @@ struct sao_platform_ctx {
     sao_ui_input_router_deep_handle_t keyboard_router = nullptr;
     bool sdk_compositor_bound;
     bool sdk_streaming_apply_bound = false;
+    // SDK panel-open binding, streaming-flow persisted-settings reader and
+    // the license-entitlement subscription each latch their own flag so
+    // teardown and bring-up rollback never drop a stale global hook.
+    bool sdk_panel_open_bound = false;
+    bool streaming_flow_reader_installed = false;
+    bool license_entitlement_subscribed = false;
+    // Worker-thread handoff for on_license_entitlement_changed: the callback
+    // stores the mask under release order; sao_ui_tick drains it on the
+    // owner thread with an acquire exchange. unsubscribe_entitlement waits
+    // for in-flight dispatch, so no writer outlives the unsubscribe call.
+    std::atomic<bool> license_entitlement_pending{false};
+    uint32_t license_entitlement_mask = 0u;
     void* user_menu = nullptr;
     sao_ui_entity_shell_handle_t entity_shell;
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
@@ -2342,6 +2479,7 @@ struct sao_platform_ctx {
     SaoUiThemeId previous_theme = SAO_UI_THEME_DARK;
     bool restore_theme_on_rollback = false;
     bool settings_save_enabled = false;
+    bool rt_io_operator_mode = false;
     bool rt_io_operator_shutdown = false;
     sao_launcher_rt_io_operator_report_t rt_io_cleanup_report{};
     bool nervgear_mode{true};
@@ -2562,9 +2700,8 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
                     ctx->compositor, [ctx] { return reload_plugins(ctx); });
             auto process_operations =
                 sao::launcher::process_selector_panel::make_default_operations(ctx->rt_io_proxy);
-            ctx->memory_viewer_panel =
-                std::make_unique<sao::launcher::memory_viewer_panel::Owner>(
-                    ctx->compositor, ctx->rt_io_proxy);
+            ctx->memory_viewer_panel = std::make_unique<sao::launcher::memory_viewer_panel::Owner>(
+                ctx->compositor, ctx->rt_io_proxy);
             process_operations.open_memory_viewer = [ctx]() -> sao_status_t {
                 if (!ctx->memory_viewer_panel)
                     return SAO_STATUS_ERR_NOT_INITIALIZED;
@@ -2591,6 +2728,12 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
                       std::uint64_t generation) -> sao_status_t {
                 if (ctx->ai_editor == nullptr || ctx->rt_io_proxy == nullptr)
                     return SAO_STATUS_ERR_NOT_INITIALIZED;
+                // The memory-viewer bind failing must not skip the AI-editor
+                // memory-target bind: the editor is an independent consumer
+                // of the same attach event.  Attempt both; surface the
+                // viewer's error first when it failed, otherwise the
+                // editor's result.
+                sao_status_t viewer_status = SAO_STATUS_OK;
                 if (ctx->memory_viewer_panel) {
                     sao::launcher::memory_viewer_panel::TargetBinding binding{};
                     binding.proxy = ctx->rt_io_proxy;
@@ -2599,12 +2742,14 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
                     binding.generation = generation;
                     binding.base_name_utf8 = process.base_name_utf8;
                     binding.image_path_utf8 = process.image_path_utf8;
-                    const sao_status_t bind_status = ctx->memory_viewer_panel->bind_target(binding);
-                    if (bind_status != SAO_STATUS_OK)
-                        return bind_status;
+                    viewer_status = ctx->memory_viewer_panel->bind_target(binding);
                 }
-                return ctx->ai_editor->bind_memory_target(ctx->rt_io_proxy, process.pid,
-                                                          process.start_time_100ns, generation);
+                const sao_status_t editor_status =
+                    ctx->ai_editor->bind_memory_target(ctx->rt_io_proxy, process.pid,
+                                                       process.start_time_100ns, generation);
+                if (viewer_status != SAO_STATUS_OK)
+                    return viewer_status;
+                return editor_status;
             };
             process_operations.on_detached = drain_memory_target;
             ctx->process_selector_panel =
@@ -2962,19 +3107,41 @@ sao_status_t SAO_UI_CALL unlink_z_order(void* user_data, void* hwnd, uint32_t ti
     return sao_rt_io_unlink_z_order(controller, &token, timeout_ms, &result);
 }
 
-sao_status_t SAO_UI_CALL apply_overlay_protection_provider(void* render_hwnd, void* control_hwnd,
-                                                           void* owner_hwnd, bool enable,
-                                                           void* user_data) {
-    (void)render_hwnd;
-    (void)control_hwnd;
-    (void)owner_hwnd;
-    (void)enable;
-    (void)user_data;
-    // WdiSvcHost is deliberately not an affinity authority.  The local
-    // anti-screencap facade owns these SaoAuto HWNDs; a foreign helper
-    // request would create a second WDA owner and could make the UI roll
-    // back a successful local transition when the helper rejects it.
+// Settings-panel external refresh: republishes the open panel's draft/spec
+// from the bound owner so a panel left open while the entity menu mutates
+// streaming/theme state never renders stale values.  An absent or closed
+// panel is a documented no-op on the settings side.
+void notify_settings_panel_dirty() noexcept {
+    (void)sao_launcher_settings_config_external_refresh();
+}
+
+// dispatch()'s post-commit hook (entity_builtin_action::Operations.
+// notify_state_changed): fires after a successful apply+persist+refresh
+// transaction such as toggle_streaming, where a mid-transaction refresh
+// would republish pre-commit values.  Always returns OK -- the committed
+// state is the truth; the panel refresh is advisory.
+sao_status_t notify_state_changed(void* /*user_data*/) {
+    notify_settings_panel_dirty();
     return SAO_STATUS_OK;
+}
+
+// Persisted-settings reader for sao_streaming_flow: honours the stored
+// "streaming_mode" flag so sao_streaming_flow_load_persisted_setting() does
+// not silently fall back to the caller default.  The reader borrows
+// ctx->settings_owner; teardown clears the slot before the owner is
+// destroyed (streaming_flow_reader_installed governs the ordering).
+bool SAO_UI_CALL streaming_flow_persisted_settings_reader(const char* key, bool* out_value,
+                                                          void* user) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user);
+    if (key == nullptr || out_value == nullptr || ctx == nullptr ||
+        std::strcmp(key, "streaming_mode") != 0 || !ctx->settings_owner) {
+        return false;
+    }
+    bool value = *out_value;
+    if (ctx->settings_owner->get_truthy("streaming_mode", value, value) != SAO_STATUS_OK)
+        return false;
+    *out_value = value;
+    return true;
 }
 
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
@@ -2993,6 +3160,11 @@ void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept {
     target.plugin_manager = source.plugin_manager;
     target.reload_plugins = source.reload_plugins;
     target.plugin_status = source.plugin_status;
+    // Panel-presence fields (contract B): mirror the action side so the
+    // published authority matches what entity_action can actually open.
+    target.settings_panel = source.settings_panel;
+    target.hotkey_panel = source.hotkey_panel;
+    target.memory_viewer = source.memory_viewer;
     target.fisheye_procedural = source.fisheye_procedural;
     target.fisheye_live = source.fisheye_live;
     target.theme = source.theme;
@@ -3099,8 +3271,12 @@ sao_status_t apply_streaming_mode(bool enabled, void* user_data) {
                                                              : SAO_STATUS_OK;
         },
         [](void*) { return sao_streaming_flow_mode_lock_release(); }, ctx);
-    if (result == SAO_STATUS_OK)
+    if (result == SAO_STATUS_OK) {
         ctx->builtin_action_state.streaming_mode = enabled;
+        // The SDK and entity-menu paths both land here; an open Settings
+        // panel must republish its streaming row from the owner value.
+        notify_settings_panel_dirty();
+    }
     return result;
 }
 
@@ -3159,6 +3335,50 @@ sao_status_t open_plugin_manager(void* user_data) {
 
 sao_status_t open_plugin_status(void* user_data) {
     return open_plugin_manager(user_data);
+}
+
+// Settings, Hotkey and Memory Viewer openers (contract A): each lands on
+// the same toggle path the user-menu tray row uses, and each publishes a
+// shared-panel visibility refresh so the fisheye backdrop tracks the new
+// visible set just like the workshop/process/plugin rows.
+sao_status_t open_settings_panel(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t status = sao::launcher::toggle_menu_panel(
+        sao::launcher::settings::kSettingsPanelId,
+        [] { return sao::launcher::settings::open_config_panel_status(); },
+        [] { return sao::launcher::settings::close_for_testing(); });
+    if (status != SAO_STATUS_OK)
+        return status;
+    return update_shared_fisheye_visibility(ctx);
+}
+
+sao_status_t open_hotkey_panel(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || !ctx->hotkey_owner)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    auto* owner = ctx->hotkey_owner.get();
+    const sao_status_t status = sao::launcher::toggle_menu_panel(
+        sao::launcher::hotkey::kPanelId,
+        [owner] { return sao::launcher::hotkey::open_config_panel_status(owner); },
+        [owner] { return owner->close(); });
+    if (status != SAO_STATUS_OK)
+        return status;
+    return update_shared_fisheye_visibility(ctx);
+}
+
+sao_status_t open_memory_viewer(void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || !ctx->memory_viewer_panel)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    auto* owner = ctx->memory_viewer_panel.get();
+    const sao_status_t status = sao::launcher::toggle_menu_panel(
+        sao::launcher::memory_viewer_panel::kPanelId, [owner] { return owner->open(); },
+        [owner] { return owner->close(); });
+    if (status != SAO_STATUS_OK)
+        return status;
+    return update_shared_fisheye_visibility(ctx);
 }
 
 sao_status_t open_license_panel(void* user_data) {
@@ -3250,6 +3470,65 @@ sao_status_t publish_nervgear_degraded(void* user_data) {
 #endif
 }
 
+#if defined(SAO_LAUNCHER_HAS_LICENSE_ENTITLEMENT)
+// License entitlement watch (contract D). The callback delivers the fresh
+// entitlement mask on the license client's worker thread, which forbids
+// blocking, owning locks, or re-entry into the license surface -- so the
+// callback only hands the mask to the owner thread through this
+// release/acquire pair.  The next sao_ui_tick folds the streaming bit into
+// builtin state and republishes through refresh_entity, the same
+// owner-thread publish path the streaming toggle uses.
+void on_license_entitlement_changed(uint32_t new_mask, void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr)
+        return;
+    ctx->license_entitlement_mask = new_mask;
+    ctx->license_entitlement_pending.store(true, std::memory_order_release);
+}
+#endif
+
+#if defined(SAO_LAUNCHER_HAS_SDK_PANEL_OPEN)
+// Plugin-facing panel router (contract C): names are frozen by
+// sao/sdk/sao_sdk_platform_panels.h; each name lands on the same open path
+// the entity/user menus use so SDK consumers never open a second widget
+// tree.  Matching sao_launcher_streaming_apply, sao_status_t values are
+// returned through the int32_t ABI; unmapped names surface the SDK
+// NOT_FOUND the sibling header defines.
+int32_t SAO_SDK_CALL sao_launcher_panel_open_dispatch(const char* panel_name, void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (panel_name == nullptr || panel_name[0] == '\0')
+        return SAO_STATUS_INVALID_ARGUMENT;
+    if (ctx == nullptr || ctx->ui_exiting)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (std::strcmp(panel_name, "settings") == 0)
+        return sao::launcher::settings::open_config_panel_status();
+    if (std::strcmp(panel_name, "hotkeys") == 0)
+        return !ctx->hotkey_owner
+                   ? SAO_STATUS_ERR_NOT_INITIALIZED
+                   : sao::launcher::hotkey::open_config_panel_status(ctx->hotkey_owner.get());
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    // Direct opens, not the toggle paths used by menu rows: an SDK caller
+    // asking for a panel expects it shown, not closed when already visible.
+    if (std::strcmp(panel_name, "workshop") == 0)
+        return !ctx->workshop_panel ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                    : ctx->workshop_panel->open();
+    if (std::strcmp(panel_name, "plugins") == 0)
+        return !ctx->plugin_manager_panel ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                          : ctx->plugin_manager_panel->open();
+    if (std::strcmp(panel_name, "process") == 0)
+        return !ctx->process_selector_panel ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                            : ctx->process_selector_panel->open();
+    if (std::strcmp(panel_name, "memory") == 0)
+        return !ctx->memory_viewer_panel ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                         : ctx->memory_viewer_panel->open();
+    if (std::strcmp(panel_name, "license") == 0)
+        return !ctx->license_panel ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                   : ctx->license_panel->open();
+#endif
+    return SAO_SDK_ERR_NOT_FOUND;
+}
+#endif
+
 sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data) {
     if (user_data != nullptr && static_cast<sao_platform_ctx*>(user_data)->ui_exiting)
         return SAO_STATUS_OK;
@@ -3299,6 +3578,9 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
     case SAO_UI_ENTITY_ACTION_OPEN_LICENSE_ACTIVATION:
+    case SAO_UI_ENTITY_ACTION_OPEN_SETTINGS_PANEL:
+    case SAO_UI_ENTITY_ACTION_OPEN_HOTKEY_PANEL:
+    case SAO_UI_ENTITY_ACTION_OPEN_MEMORY_VIEWER:
     case SAO_UI_ENTITY_ACTION_RELOAD_PLUGINS:
     case SAO_UI_ENTITY_ACTION_PLUGIN_STATUS: {
         sao::launcher::entity_builtin_action::Operations operations;
@@ -3320,9 +3602,13 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         operations.open_plugin_manager = &open_plugin_manager;
         operations.open_plugin_status = &open_plugin_status;
         operations.open_license_panel = &open_license_panel;
+        operations.open_settings_panel = &open_settings_panel;
+        operations.open_hotkey_panel = &open_hotkey_panel;
+        operations.open_memory_viewer = &open_memory_viewer;
         operations.set_fisheye_procedural = &set_fisheye_procedural;
         operations.set_fisheye_live = &set_fisheye_live;
 #endif
+        operations.notify_state_changed = &notify_state_changed;
         operations.user_data = ctx;
         const sao_status_t status = sao::launcher::entity_builtin_action::dispatch(
             action, ctx->builtin_action_state, operations);
@@ -3339,7 +3625,7 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         if (ctx == nullptr || ctx->entity_shell == nullptr || !ctx->settings_owner) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
-        return applyNervgearModeTransaction(
+        const sao_status_t nervgear_status = applyNervgearModeTransaction(
             ctx->nervgear_mode,
             [](bool enabled, void* context) {
                 return sao_ui_entity_shell_set_nervgear_mode(
@@ -3350,6 +3636,9 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
                     "nervgear_mode", enabled);
             },
             &publish_nervgear_degraded, ctx);
+        if (nervgear_status == SAO_STATUS_OK)
+            notify_settings_panel_dirty();
+        return nervgear_status;
     }
     case SAO_UI_ENTITY_ACTION_OPEN_AI_EDITOR: {
         if (ctx == nullptr || !ctx->ai_editor) {
@@ -3379,7 +3668,12 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         if (status != SAO_STATUS_OK) {
             return status;
         }
-        return sao_ui_theme_set_active_id(runtime_theme_id(theme));
+        const sao_status_t theme_status = sao_ui_theme_set_active_id(runtime_theme_id(theme));
+        // The owner-side theme set just changed persisted settings; keep an
+        // open Settings panel in sync with the new values.
+        if (theme_status == SAO_STATUS_OK)
+            notify_settings_panel_dirty();
+        return theme_status;
     }
     default:
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -3449,8 +3743,6 @@ uint32_t rt_io_operator_capability_mask(const SaoRtIoProductionStateWireV1& stat
     uint32_t mask = 0u;
     if (state.hid.r3_shared_ready != 0u)
         mask |= SAO_LAUNCHER_RT_IO_CAP_R3_SHARED;
-    if (state.hid.r5_direct_ready != 0u)
-        mask |= SAO_LAUNCHER_RT_IO_CAP_R5_DIRECT;
     if (state.hid.mf_ready != 0u || state.mf_ready != 0u)
         mask |= SAO_LAUNCHER_RT_IO_CAP_MF;
     if (state.hid_mouse_provenance != 0u)
@@ -3723,7 +4015,7 @@ rt_io_operator_live_options(const sao_launcher_rt_io_operator_options_t& options
         flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_F24_DOWN_UP;
     }
     if (options.r5_check != 0u)
-        flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_R5_FALLBACK_PROBE;
+        flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_R5_USER_WRITER_PROBE;
     if (options.mf_check != 0u)
         flags |= SAO_RT_IO_LIVE_VALIDATE_OPTION_MF_FALLBACK_DIAGNOSTIC;
     return flags;
@@ -3832,9 +4124,6 @@ sao_platform_rt_io_operator_preflight(sao_platform_ctx* ctx,
     out_report->provider_observable = response.provider_observable;
 
     if (capabilities_operation_ok &&
-        capabilities.capabilities.vt_readiness == SAO_RT_IO_PRODUCTION_VT_READINESS_UNKNOWN)
-        ++out_report->unknown_count;
-    if (capabilities_operation_ok &&
         capabilities.capabilities.vt_readiness == SAO_RT_IO_PRODUCTION_VT_READINESS_READY)
         out_report->capability_mask |= SAO_LAUNCHER_RT_IO_CAP_VT_READY;
 
@@ -3906,7 +4195,7 @@ sao_status_t sao_platform_rt_io_operator_init(sao_platform_ctx* ctx,
     rt_io_operator_copy_call(call, out_report);
     rt_io_operator_copy_strict_response(response, out_report);
     rt_io_operator_cache_strict_chain(ctx, response);
-    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
+    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_NATIVE;
     out_report->loaded = out_report->strict_vt_root_active;
     out_report->strict_success =
         rt_io_operator_strict_success(*out_report, response.wire.snapshot.state.provider_generation)
@@ -4004,7 +4293,7 @@ sao_platform_rt_io_operator_status(sao_platform_ctx* ctx,
     rt_io_operator_copy_call(call, out_report);
     rt_io_operator_copy_strict_response(response, out_report);
     rt_io_operator_cache_strict_chain(ctx, response);
-    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
+    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_NATIVE;
     out_report->backend_ready = out_report->strict_vt_root_active;
     out_report->strict_success =
         rt_io_operator_strict_success(*out_report, response.wire.snapshot.state.provider_generation)
@@ -4088,7 +4377,7 @@ sao_platform_rt_io_operator_cleanup(sao_platform_ctx* ctx,
     rt_io_operator_copy_call(recover_call, out_report);
     rt_io_operator_copy_strict_response(recover_response, out_report);
     rt_io_operator_cache_strict_chain(ctx, recover_response);
-    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW;
+    out_report->driver_strategy = SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_NATIVE;
     out_report->cleanup_acknowledged = rt_io_operator_call_complete(*out_report) ? 1u : 0u;
     const bool recovery_required = rt_io_operator_strict_recovery_required(recover_response);
     const bool terminal_clean = rt_io_operator_strict_terminal_clean(recover_response);
@@ -4210,6 +4499,17 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
     action_authority.fisheye_live = false;
     action_authority.theme = true;
     action_authority.about = true;
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    // Shared-panel rows (contract B): advertise panel presence.  The
+    // settings/hotkey owners were bound above and every shared Owner is
+    // created in bringup_engines; PLUGIN_STATUS dispatch still gates on
+    // plugin_runtime on top of this flag.  memory_viewer is re-derived in
+    // bringup_engines once its Owner exists; it stays false here.
+    action_authority.settings_panel = true;
+    action_authority.hotkey_panel = true;
+    action_authority.plugin_status = true;
+    action_authority.memory_viewer = ctx->memory_viewer_panel != nullptr;
+#endif
     // Topmost toggling is a compositor-thread z-order operation performed by
     // sao_ui_z_order_manager. The headless launcher pipeline does not own a
     // z-order manager (only the shipping compositor does), so there is no
@@ -4223,6 +4523,17 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     ctx->entity_provider_publication.topmost = ctx->builtin_action_state.topmost;
     ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
+#endif
+#if defined(SAO_LAUNCHER_HAS_LICENSE_ENTITLEMENT)
+    // Subscribe to license entitlement changes once the boot-time
+    // streaming_entitled value exists; the callback only latches the mask
+    // and sao_ui_tick drains it on the owner thread.  Best-effort by
+    // design: when the provider is not running the boot-time cfg snapshot
+    // remains the truth and the stage continues unaffected.  (0 = ok per
+    // license_provider.h.)
+    if (sao_license_subscribe_entitlement(&on_license_entitlement_changed, ctx) == 0) {
+        ctx->license_entitlement_subscribed = true;
+    }
 #endif
     sao::launcher::settings_theme::PanelTheme restored_theme{};
     status =
@@ -4260,10 +4571,21 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
 
     SaoOverlayHostConfig overlay_cfg{};
     overlay_cfg.dc_mutation_coordinator = ctx->dc_mutation_coordinator;
+    // Capture exclusion is established inside sao_ui_overlay_host_create
+    // whenever the master protection switch AND the persisted streaming_mode
+    // flag ask for it.  The entitlement is deliberately NOT consulted here:
+    // this flag governs the span between host creation and the stage-3
+    // apply_streaming_mode transaction, and a hidden span must never expose
+    // a window that persisted settings said should be excluded.  The
+    // stage-3 transaction re-derives entitled && persisted afterwards and
+    // remains authoritative, releasing the exclusion when unentitled.
     overlay_cfg.sao_screencap_protection =
-        ctx->screencap_protection && ctx->builtin_action_state.streaming_mode;
-    overlay_cfg.protection_provider = &apply_overlay_protection_provider;
-    overlay_cfg.protection_provider_user_data = ctx;
+        ctx->screencap_protection && persisted_streaming_mode;
+    // protection_provider stays nullptr by design: the local anti-screencap
+    // facade inside sao_ui_overlay_host_set_capture_mode is the sole WDA
+    // affinity owner of the SaoAuto window trio.  A foreign-helper apply
+    // callback would be a second owner that could roll back a successful
+    // local transition when the helper rejects it.
     status = sao_ui_overlay_host_create(&overlay_cfg, &ctx->overlay_host);
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("ui_overlay_host_create", status);
@@ -4325,6 +4647,7 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
 sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_platform_ctx* ctx) {
     if (!cfg || !ctx)
         return SAO_STATUS_INVALID_ARGUMENT;
+    ctx->rt_io_operator_mode = cfg->rt_io_operator != 0;
     if (cfg->safe_mode != 0)
         return SAO_STATUS_OK;
 
@@ -4337,8 +4660,10 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_pl
     rt_io_cfg.v2_config.legacy_config.session_name_utf8 = "launcher";
     rt_io_cfg.v2_config.legacy_config.strict_bootstrap = 1;
     rt_io_cfg.v2_config.legacy_config.driver_strategy =
-        cfg->rt_io_operator != 0 ? SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_PHYSRW
+        cfg->rt_io_operator != 0 ? SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_NATIVE
                                  : SAO_RT_IO_OPERATOR_DRIVER_STRATEGY_DEFAULT;
+    rt_io_cfg.v2_config.legacy_config.handshake_timeout_ms =
+        cfg->rt_io_operator != 0 ? 1800000u : 0u;
     // Production always uses the LocalSystem SCM/HIDF bootstrap.  The
     // V2/LEGACY_CHILD API remains available to explicit compatibility
     // and test callers, but launcher defaults no longer bypass the
@@ -4421,6 +4746,9 @@ sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_pl
     action_authority.workshop = ctx->workshop_panel != nullptr;
     action_authority.process_selector = ctx->process_selector_panel != nullptr;
     action_authority.license_activation = ctx->license_panel != nullptr;
+    // Re-derive the memory-viewer row now that its Owner exists (the
+    // surface-stage claim above provisionally read a still-empty unique_ptr).
+    action_authority.memory_viewer = ctx->memory_viewer_panel != nullptr;
     action_authority.fisheye_procedural = ctx->fisheye_backdrop != nullptr;
     action_authority.fisheye_live = ctx->fisheye_backdrop != nullptr;
 #endif
@@ -4455,6 +4783,17 @@ sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_pl
     }
     ctx->streaming_flow_started = true;
 
+    // Install the persisted-settings reader so
+    // sao_streaming_flow_load_persisted_setting() reads the stored
+    // "streaming_mode" flag from the settings owner instead of always
+    // falling back to the caller default.
+    status = sao_streaming_flow_set_persisted_settings_reader(
+        &streaming_flow_persisted_settings_reader, ctx);
+    if (status != SAO_STATUS_OK) {
+        return rollback_and_fail("streaming_flow_settings_reader", status);
+    }
+    ctx->streaming_flow_reader_installed = true;
+
     // Register the SDK streaming-mode hook before the entity shell starts so
     // plugin/settings call sites can route through the host transaction.
     status = map_sdk_runtime_status(
@@ -4464,6 +4803,18 @@ sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_pl
     }
     g_streaming_apply_ctx = ctx;
     ctx->sdk_streaming_apply_bound = true;
+
+#if defined(SAO_LAUNCHER_HAS_SDK_PANEL_OPEN)
+    // Route plugin/SDK panel-open requests through the same menu open paths
+    // so SDK consumers share the existing panel tree instead of opening
+    // parallel widgets.  The unbind side lives in teardown_platform_context.
+    status = map_sdk_runtime_status(
+        sao_sdk_platform_bind_panel_open(&sao_launcher_panel_open_dispatch, ctx));
+    if (status != SAO_STATUS_OK) {
+        return rollback_and_fail("sdk_bind_panel_open", status);
+    }
+    ctx->sdk_panel_open_bound = true;
+#endif
 
     status = apply_streaming_mode(ctx->builtin_action_state.streaming_mode, ctx);
     if (status != SAO_STATUS_OK) {
@@ -4918,6 +5269,15 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept {
     if (!ctx)
         return SAO_STATUS_INVALID_ARGUMENT;
+#if defined(SAO_LAUNCHER_HAS_LICENSE_ENTITLEMENT)
+    // Drop the entitlement watch before anything else: a late license
+    // callback mid-teardown would re-enter refresh_entity against a
+    // half-released context.
+    if (ctx->license_entitlement_subscribed) {
+        (void)sao_license_unsubscribe_entitlement(&on_license_entitlement_changed, ctx);
+        ctx->license_entitlement_subscribed = false;
+    }
+#endif
     const sao_status_t dc_aux_status = invalidate_dc_mutation_aux(ctx);
     if (dc_aux_status != SAO_STATUS_OK)
         return dc_aux_status;
@@ -4954,15 +5314,33 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
     if (settings_panel_status != SAO_STATUS_OK)
         return settings_panel_status;
     drain_deferred_cleanup_for_owner();
+#if defined(SAO_LAUNCHER_HAS_SDK_PANEL_OPEN)
+    // Unbind the panel-open router before the streaming-apply hook (LIFO
+    // against the bring-up order) so SDK call sites fail cleanly instead
+    // of dispatching into a tearing-down context.
+    if (ctx->sdk_panel_open_bound) {
+        const sao_sdk_status_t panel_unbind_status =
+            sao_sdk_platform_bind_panel_open(nullptr, nullptr);
+        if (panel_unbind_status != SAO_SDK_OK)
+            return map_sdk_runtime_status(panel_unbind_status);
+        ctx->sdk_panel_open_bound = false;
+    }
+#endif
     if (ctx->sdk_streaming_apply_bound) {
-        const sao_sdk_status_t unbind_status =
-            sao_sdk_platform_bind_streaming_mode_apply(nullptr);
+        const sao_sdk_status_t unbind_status = sao_sdk_platform_bind_streaming_mode_apply(nullptr);
         if (unbind_status != SAO_SDK_OK)
             return map_sdk_runtime_status(unbind_status);
         g_streaming_apply_ctx = nullptr;
         ctx->sdk_streaming_apply_bound = false;
     }
     if (ctx->streaming_flow_started) {
+        if (ctx->streaming_flow_reader_installed) {
+            // The reader borrows ctx->settings_owner; release the global
+            // slot before the flow teardown so no late read walks the
+            // owner while teardown proceeds.
+            (void)sao_streaming_flow_set_persisted_settings_reader(nullptr, nullptr);
+            ctx->streaming_flow_reader_installed = false;
+        }
         const sao_status_t streaming_status = sao_streaming_flow_teardown(2.0, 2.0);
         if (streaming_status != SAO_STATUS_OK) {
             return streaming_status;
@@ -5047,7 +5425,7 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
         ctx->window_rect_controller = nullptr;
     }
     if (ctx->rt_io_proxy) {
-        if (ctx->rt_io_operator_shutdown) {
+        if (ctx->rt_io_operator_mode || ctx->rt_io_operator_shutdown) {
             sao_rt_io_proxy_destroy(ctx->rt_io_proxy);
         } else {
             const sao_status_t proxy_status = sao_rt_io_proxy_close(ctx->rt_io_proxy);
@@ -5491,6 +5869,21 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
         return sao_ui_outro_pump(ctx, &active);
     }
     drain_deferred_cleanup_for_owner();
+#if defined(SAO_LAUNCHER_HAS_LICENSE_ENTITLEMENT)
+    // Owner-thread drain of the worker-thread entitlement callback: when a
+    // license change arrived since the last frame, fold the streaming bit
+    // into builtin state and republish through refresh_entity -- the same
+    // publish path the menu toggle uses, on the owner thread it requires.
+    if (ctx->license_entitlement_pending.exchange(false, std::memory_order_acquire)) {
+        const bool streaming_entitled =
+            (ctx->license_entitlement_mask & (1u << SAO_LICENSE_FEATURE_STREAMING_ID)) != 0u;
+        if (ctx->builtin_action_state.streaming_entitled != streaming_entitled) {
+            ctx->builtin_action_state.streaming_entitled = streaming_entitled;
+            ctx->builtin_action_state.authority.streaming = streaming_entitled;
+            (void)refresh_entity(ctx);
+        }
+    }
+#endif
     sao_status_t status = sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     const sao_status_t provider_status =
@@ -5633,7 +6026,7 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
         return SAO_STATUS_OK;
     if (message == WM_TIMER && w_param == kUiFrameTimerId) {
         *out_handled = 1;
-        return sao_ui_tick(ctx, kUiFrameIntervalMs);
+        return sao_ui_tick(ctx, static_cast<uint32_t>(ui_frame_interval_ms()));
     }
     if (message == sao::launcher::hotkey::kCaptureCompletionMessage) {
         *out_handled = 1;

@@ -43,6 +43,9 @@ enum class SortColumn : std::uint8_t {
     name,
     pid,
     parent_pid,
+    cpu,
+    threads,
+    memory,
 };
 
 enum class SortDirection : std::uint8_t {
@@ -68,6 +71,10 @@ struct ProcessRecord {
     std::uint64_t start_time_100ns{};
     std::string image_path_utf8;
     std::string base_name_utf8;
+    std::optional<double> cpu_percent;
+    std::optional<std::uint32_t> thread_count;
+    std::optional<std::uint64_t> working_set_bytes;
+    std::string architecture;
 
     ProcessIdentity identity() const noexcept {
         return {pid, start_time_100ns};
@@ -88,6 +95,24 @@ struct Operations {
     // the current attachment. Optional; the action is hidden when unset.
     std::function<sao_status_t()> open_memory_viewer;
     std::uint32_t current_process_id{};
+    bool monitor_os_performance{};
+};
+
+struct PerformanceSample {
+    std::uint64_t uptime_ms{};
+    std::optional<double> cpu_percent;
+    std::optional<double> memory_percent;
+};
+
+struct PerformanceSnapshot {
+    std::optional<double> cpu_percent;
+    std::optional<double> memory_percent;
+    std::optional<std::uint64_t> physical_used_bytes;
+    std::optional<std::uint64_t> physical_total_bytes;
+    std::optional<std::uint32_t> process_count;
+    std::optional<std::uint64_t> uptime_ms;
+    std::uint32_t logical_processor_count{};
+    std::vector<PerformanceSample> history;
 };
 
 struct Snapshot {
@@ -119,6 +144,7 @@ struct Snapshot {
     std::optional<ProcessRecord> attached_process;
     bool memory_viewer_available{};
     std::string rendered_spec_json;
+    PerformanceSnapshot performance;
 };
 
 Operations make_default_operations(sao_rt_io_proxy_handle_t proxy);

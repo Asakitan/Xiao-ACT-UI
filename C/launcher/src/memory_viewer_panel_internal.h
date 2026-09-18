@@ -42,8 +42,12 @@ inline constexpr char kResetSessionAction[] = "memory_viewer.reset_session";
 
 inline constexpr std::size_t kMaximumReadBytes = 64U * 1024U;
 // One enumerated page carries at most this many regions; enumeration stops
-// at the bound instead of scanning without a cap.
-inline constexpr std::size_t kRegionsPerPage = 4096U;
+// at the bound instead of scanning without a cap.  The bound is also the
+// compositor budget: each rendered row is a container plus five badges =
+// 6 spec nodes, and kMaximumPanelSpecNodes is 400 — 48 rows = 288 nodes
+// leaves headroom for the header/health/read/paging chrome, while 4096
+// rows (≈24.6k nodes) would silently truncate the page render.
+inline constexpr std::size_t kRegionsPerPage = 48U;
 
 enum class TargetHealth : std::uint8_t {
     ok,

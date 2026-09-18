@@ -333,3 +333,6 @@ tools/rt_io_testkit.py
 tools/rt_io_testkit_selftest.py
 bin/
 .codex/
+
+# ── Runtime log dumps (local run artifacts) ──
+/C/sao_run_*.txt

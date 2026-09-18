@@ -46,6 +46,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -332,7 +333,6 @@ struct Host {
     bool user_menu_created{};
     ULONGLONG last_tick{};
     ULONGLONG last_service{};
-    ULONGLONG close_started{};
     ULONGLONG intro_started{};
     int32_t audition_phase{-1};
     bool audition_flight_reported{};
@@ -344,6 +344,9 @@ struct Host {
     uint32_t frame_height{};
     bool sdk_bound{};
     bool closing{};
+    bool shutdown_requested{};
+    bool message_failed{};
+    std::optional<int> quit_code;
 
     explicit Host(Options value)
         : config(std::move(value)), base_dir(executable_directory()) {}
@@ -356,6 +359,8 @@ struct Host {
         auto* host = static_cast<Host*>(user_data);
         if (host == nullptr)
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (host->closing)
+            return SAO_STATUS_ERR_CANCELLED;
         switch (static_cast<int32_t>(action)) {
         case kOpenLauncherSettings:
             return host->open_launcher_settings();
@@ -479,16 +484,43 @@ struct Host {
 
     int32_t drain_close() noexcept {
         closing = true;
+        if (window != nullptr)
+            KillTimer(window, kUiService);
+        if (!shutdown_requested) {
+            shutdown_requested = true;
+            if (user_menu_created)
+                user_menu.beginExit();
+            if (process_selector)
+                process_selector->request_shutdown();
+            if (memory_viewer)
+                memory_viewer->request_shutdown();
+        }
         const ULONGLONG deadline = GetTickCount64() + 5000;
         int32_t status = SAO_STATUS_ERR_CANCELLED;
         do {
+            MSG quit{};
+            if (PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE) && !quit_code)
+                quit_code = static_cast<int>(quit.wParam);
             status = close();
-            if (status == SAO_STATUS_OK) return status;
+            if (status == SAO_STATUS_OK) {
+                if (PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE) && !quit_code)
+                    quit_code = static_cast<int>(quit.wParam);
+                return status;
+            }
             MSG message{};
-              for (unsigned dispatched = 0; dispatched < 64 && GetTickCount64() < deadline &&
+            for (unsigned dispatched = 0; dispatched < 64 && GetTickCount64() < deadline &&
                   PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE); ++dispatched) {
-                if (message.message == WM_QUIT ||
-                    (message.hwnd == window && message.message == WM_TIMER)) continue;
+                if (message.message == WM_QUIT) {
+                    if (!quit_code)
+                        quit_code = static_cast<int>(message.wParam);
+                    continue;
+                }
+                if (message.hwnd == window && message.message == WM_TIMER) continue;
+                if ((message.message >= WM_KEYFIRST && message.message <= WM_KEYLAST) ||
+                    (message.message >= WM_MOUSEFIRST && message.message <= WM_MOUSELAST) ||
+                    message.message == WM_HOTKEY ||
+                    message.message == SAO_UI_NATIVE_TEXT_TAB_MESSAGE)
+                    continue;
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
@@ -648,7 +680,7 @@ struct Host {
     }
 
     void resize() {
-        if (overlay == nullptr)
+        if (closing || overlay == nullptr)
             return;
         if (IsIconic(window)) {
             require(sao_ui_overlay_host_set_visible(overlay, false));
@@ -1092,20 +1124,8 @@ struct Host {
 
     void service() {
         const ULONGLONG now = GetTickCount64();
-        if (closing) {
-            if (close_started == 0)
-                close_started = now;
-            if (close() == SAO_STATUS_OK) {
-                DestroyWindow(window);
-                return;
-            }
-            if (now - close_started > 5000) {
-                closing = false;
-                close_started = 0;
-                SetWindowTextW(window, L"SAO Classic · 页面仍在收口，请完成当前操作后再关闭");
-            }
+        if (closing)
             return;
-        }
         const uint32_t elapsed = static_cast<uint32_t>(std::min<ULONGLONG>(now - last_tick, 1000U));
         if (!config.outro)
             sao::launcher::tickUserGuideWebView();
@@ -1207,6 +1227,8 @@ struct Host {
     }
 
     bool key(const MSG& message) {
+        if (closing)
+            return true;
         if (config.outro &&
             (message.message == WM_KEYDOWN || message.message == WM_KEYUP ||
              message.message == WM_CHAR || message.message == WM_HOTKEY ||
@@ -1281,11 +1303,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         case WM_MBUTTONDOWN:
         case WM_MBUTTONUP:
         case WM_MOUSEWHEEL:
-            host->mouse(message, wp, lp);
+            if (!host->closing)
+                host->mouse(message, wp, lp);
             return 0;
         case WM_CANCELMODE:
         case WM_CAPTURECHANGED:
-            host->mouse(message, 0, 0);
+            if (!host->closing)
+                host->mouse(message, 0, 0);
             return DefWindowProcW(window, message, wp, lp);
         case WM_TIMER:
             if (wp == kUiService)
@@ -1294,14 +1318,22 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         case WM_GETMINMAXINFO:
             reinterpret_cast<MINMAXINFO*>(lp)->ptMinTrackSize = {820, 620};
             return 0;
+        case WM_SYSCOMMAND:
+            if (host->closing)
+                return 0;
+            break;
         case WM_CLOSE:
             host->closing = true;
+            if (!PostMessageW(window, WM_NULL, 0, 0))
+                PostQuitMessage(0);
             return 0;
         case WM_DESTROY:
+            host->closing = true;
             KillTimer(window, kUiService);
             PostQuitMessage(0);
             return 0;
         case WM_NCDESTROY:
+            host->window = nullptr;
             SetWindowLongPtrW(window, GWLP_USERDATA, 0);
             break;
         default:
@@ -1311,9 +1343,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         std::fprintf(stderr, "Production UI message %u: %s\n", message, error.what());
         std::fflush(stderr);
         SetWindowTextA(window, error.what());
+        host->message_failed = true;
         if (host->config.outro)
             host->outro_failed = true;
         host->closing = true;
+        if (!PostMessageW(window, WM_NULL, 0, 0))
+            PostQuitMessage(1);
     }
     return DefWindowProcW(window, message, wp, lp);
 }
@@ -1361,25 +1396,27 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             if (frame_export) {
                 host.export_frame();
                 require(host.drain_close());
-                code = host.outro_failed ? 1 : 0;
+                code = host.outro_failed || host.message_failed ? 1 : host.quit_code.value_or(0);
             } else {
                 ShowWindow(window, show);
                 MSG message{};
                 BOOL received = 0;
-                for (;;) {
+                while (!host.closing) {
                     received = GetMessageW(&message, nullptr, 0, 0);
-                    if (received == 0 && IsWindow(window)) {
-                        host.closing = true;
-                        continue;
-                    }
-                    if (received <= 0) break;
+                    if (received <= 0 || host.closing) break;
                     if (!host.key(message)) {
                         TranslateMessage(&message);
                         DispatchMessageW(&message);
                     }
+                    if (host.closing)
+                        break;
                 }
+                if (received == 0 && message.message == WM_QUIT)
+                    host.quit_code = static_cast<int>(message.wParam);
                 require(host.drain_close());
-                code = received == 0 && !host.outro_failed ? 0 : 1;
+                code = received < 0 || host.outro_failed || host.message_failed
+                           ? 1
+                           : host.quit_code.value_or(0);
             }
             if (IsWindow(window))
                 DestroyWindow(window);

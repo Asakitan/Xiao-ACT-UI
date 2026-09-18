@@ -22,6 +22,11 @@ sao_status_t settings_panel_set_owner(void* owner_opaque) noexcept;
 sao_status_t settings_panel_bind_owner(void* owner_opaque) noexcept;
 sao_status_t settings_panel_unbind_owner(void* owner_opaque) noexcept;
 extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque) noexcept;
+// Thread-safe entry for owner-side change notifications (init_pipeline dirty
+// notifications, owner subscriber). Repaints only on the owner/compositor
+// thread; foreign calls latch a pending flag for the next owner-thread pass.
+// Matches init_pipeline's forward declaration (no noexcept).
+extern "C" sao_status_t sao_launcher_settings_config_external_refresh(void);
 sao_status_t set_compositor_for_testing(sao_ui_compositor_handle_t compositor) noexcept;
 sao_status_t dispatch_action_for_testing(std::string_view action_id, std::string_view payload_json = {}) noexcept;
 sao_status_t close_for_testing() noexcept;

@@ -78,6 +78,9 @@ sao_status_t toggle_topmost(State& state, const Operations& operations) noexcept
         return fail(state, status, compensation_status);
     }
     state.last_status = SAO_STATUS_OK;
+    if (operations.notify_state_changed != nullptr) {
+        (void)operations.notify_state_changed(operations.user_data);
+    }
     return SAO_STATUS_OK;
 }
 
@@ -116,6 +119,9 @@ sao_status_t toggle_streaming(State& state, const Operations& operations) noexce
         return fail(state, status, compensation_status);
     }
     state.last_status = SAO_STATUS_OK;
+    if (operations.notify_state_changed != nullptr) {
+        (void)operations.notify_state_changed(operations.user_data);
+    }
     return SAO_STATUS_OK;
 }
 
@@ -170,6 +176,14 @@ sao_status_t authorization_status(std::int32_t action, const State& state) noexc
         control_action = true;
         available = controls_ready && state.authority.save_settings;
         break;
+    case SAO_UI_ENTITY_ACTION_OPEN_SETTINGS_PANEL:
+        control_action = true;
+        available = controls_ready && state.authority.settings_panel;
+        break;
+    case SAO_UI_ENTITY_ACTION_OPEN_HOTKEY_PANEL:
+        control_action = true;
+        available = controls_ready && state.authority.hotkey_panel;
+        break;
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
         control_action = true;
         available = controls_ready && state.authority.fisheye_procedural;
@@ -186,6 +200,9 @@ sao_status_t authorization_status(std::int32_t action, const State& state) noexc
         break;
     case SAO_UI_ENTITY_ACTION_OPEN_PROCESS_SELECTOR:
         available = state.authority.process_selector;
+        break;
+    case SAO_UI_ENTITY_ACTION_OPEN_MEMORY_VIEWER:
+        available = state.authority.memory_viewer;
         break;
     case SAO_UI_ENTITY_ACTION_OPEN_PLUGIN_MANAGER:
         available = state.authority.plugin_runtime && state.authority.plugin_manager;
@@ -242,6 +259,12 @@ sao_status_t dispatch(std::int32_t action, State& state, const Operations& opera
         return run_owned_action(state, operations.open_plugin_status, operations);
     case SAO_UI_ENTITY_ACTION_OPEN_LICENSE_ACTIVATION:
         return run_owned_action(state, operations.open_license_panel, operations);
+    case SAO_UI_ENTITY_ACTION_OPEN_SETTINGS_PANEL:
+        return run_owned_action(state, operations.open_settings_panel, operations);
+    case SAO_UI_ENTITY_ACTION_OPEN_HOTKEY_PANEL:
+        return run_owned_action(state, operations.open_hotkey_panel, operations);
+    case SAO_UI_ENTITY_ACTION_OPEN_MEMORY_VIEWER:
+        return run_owned_action(state, operations.open_memory_viewer, operations);
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
     case SAO_UI_ENTITY_ACTION_TOGGLE_NERVGEAR:
     case SAO_UI_ENTITY_ACTION_SAVE_SETTINGS:

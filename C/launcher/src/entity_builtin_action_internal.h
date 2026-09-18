@@ -15,6 +15,7 @@ using PersistStreamingModeFn = sao_status_t (*)(bool enabled, void* user_data);
 using ReloadPluginsFn = sao_status_t (*)(void* user_data);
 using RefreshEntityFn = sao_status_t (*)(void* user_data);
 using RunOwnedActionFn = sao_status_t (*)(void* user_data);
+using NotifyStateChangedFn = sao_status_t (*)(void* user_data);
 
 inline constexpr std::int32_t kSharedFisheyeBackdropZOrder = -500'000'000;
 
@@ -33,9 +34,12 @@ struct Authority {
     bool nervgear = false;
     bool streaming = false;
     bool save_settings = false;
+    bool settings_panel = false;
+    bool hotkey_panel = false;
     bool ai_editor = false;
     bool workshop = false;
     bool process_selector = false;
+    bool memory_viewer = false;
     bool plugin_runtime = false;
     bool plugin_manager = false;
     bool reload_plugins = false;
@@ -77,8 +81,12 @@ struct Operations {
     RunOwnedActionFn open_plugin_manager = nullptr;
     RunOwnedActionFn open_plugin_status = nullptr;
     RunOwnedActionFn open_license_panel = nullptr;
+    RunOwnedActionFn open_settings_panel = nullptr;
+    RunOwnedActionFn open_hotkey_panel = nullptr;
+    RunOwnedActionFn open_memory_viewer = nullptr;
     RunOwnedActionFn set_fisheye_procedural = nullptr;
     RunOwnedActionFn set_fisheye_live = nullptr;
+    NotifyStateChangedFn notify_state_changed = nullptr;
     void* user_data = nullptr;
 };
 

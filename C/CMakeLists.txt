@@ -809,6 +809,29 @@ if (TARGET SaoAuto)
         set(_SAO_RELEASE_AUDIT_DEPENDENCIES sao_runtime_bundle_audit)
     endif()
 
+    if (TARGET SaoRtIoHelper)
+        add_custom_target(sao_rt_io_driver_asset_package_audit
+            COMMAND "${CMAKE_COMMAND}"
+                "-DSAO_RT_IO_PACKAGE_MODE=audit"
+                "-DSAO_RT_IO_PACKAGE_ROOT=${SAO_SHIP_STAGE_DIRECTORY}"
+                "-DSAO_RT_IO_EXPECTED_R1_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R1_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_R1_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R1_SIZE}"
+                "-DSAO_RT_IO_EXPECTED_R3_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R3_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_R3_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R3_SIZE}"
+                "-DSAO_RT_IO_EXPECTED_R5_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_R5_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_R5_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_R5_SIZE}"
+                "-DSAO_RT_IO_EXPECTED_VT_DEBUG_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_VT_DEBUG_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_VT_DEBUG_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_VT_DEBUG_SIZE}"
+                "-DSAO_RT_IO_EXPECTED_VT_RELEASE_BUNDLE_SHA256=${SAO_RT_IO_BUNDLE_VT_RELEASE_SHA256}"
+                "-DSAO_RT_IO_EXPECTED_VT_RELEASE_PLAINTEXT_SIZE=${SAO_RT_IO_PIN_VT_RELEASE_SIZE}"
+                -P "${CMAKE_SOURCE_DIR}/platform/rt_io/cmake/verify_driver_asset_package.cmake"
+            DEPENDS sao_release_ship_stage
+            COMMENT "Auditing packaged RT I/O driver bundles"
+            VERBATIM)
+        list(APPEND _SAO_RELEASE_AUDIT_DEPENDENCIES
+            sao_rt_io_driver_asset_package_audit)
+    endif()
+
     add_custom_target(sao_release_artifact_audit
         COMMAND "${CMAKE_COMMAND}"
                 "-DSAO_AUDIT_BINARY=${SAO_SHIP_STAGE_DIRECTORY}/bin/$<TARGET_FILE_NAME:${_SAO_RELEASE_ENTRY_TARGET}>"

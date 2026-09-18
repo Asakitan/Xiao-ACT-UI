@@ -14,6 +14,7 @@
 #include "license_panel_internal.h"
 
 #include "sao/license/client/client_public.h"
+#include "sao/license/sdk/license_events.h"
 #include "sao/license/sdk/license_sdk.h"
 #include "sao/license/sdk/license_status.h"
 #include "sao/license/sdk/license_types.h"
@@ -307,6 +308,17 @@ std::string tier_display(std::string_view tier) {
     return "Unknown / 未知";
 }
 
+// Display-only HWID: keeps the first and last 8 hex chars so the panel can
+// show a fingerprint without leaking the full value on screen. Clipboard
+// copies still use the full string held in state.
+std::string mask_hwid(std::string_view hwid_hex) {
+    if (hwid_hex.size() <= 20U) return std::string(hwid_hex);
+    std::string masked(hwid_hex.substr(0U, 8U));
+    masked += "...";
+    masked += hwid_hex.substr(hwid_hex.size() - 8U);
+    return masked;
+}
+
 std::string_view license_accent(const Snapshot& snapshot) {
     if (snapshot.busy) return "gold";
     if (!snapshot.error_text.empty() || snapshot.last_status != SAO_STATUS_OK) return "danger";
@@ -345,9 +357,29 @@ std::string build_panel_spec(const Snapshot& snapshot) {
         status.push_back(row_node(std::move(row)));
     }
     {
+        // Live heartbeat/revocation strip.
+        const std::string_view hb_accent =
+            snapshot.revoked ? "danger"
+                             : (snapshot.heartbeat_running ? "ok" : "muted");
+        std::string hb_label =
+            snapshot.revoked            ? "Revoked / 已吊销"
+            : snapshot.heartbeat_running ? "Running / 心跳运行中"
+                                         : "Stopped / 心跳停止";
+        if (snapshot.heartbeat_failures > 0U && !snapshot.revoked) {
+            char suffix[48];
+            std::snprintf(suffix, sizeof(suffix), " (fails %u)",
+                          static_cast<unsigned>(snapshot.heartbeat_failures));
+            hb_label += suffix;
+        }
+        json row = json::array();
+        row.push_back(text_node("Heartbeat / 心跳", "muted", 22));
+        row.push_back(badge_node(hb_label, hb_accent));
+        status.push_back(row_node(std::move(row)));
+    }
+    {
         json row = json::array();
         row.push_back(text_node("HWID / 设备指纹", "muted", 22));
-        row.push_back(text_node(snapshot.hwid_hex.empty() ? "—" : snapshot.hwid_hex,
+        row.push_back(text_node(snapshot.hwid_hex.empty() ? "—" : mask_hwid(snapshot.hwid_hex),
                                 "mono", 22));
         status.push_back(row_node(std::move(row)));
     }
@@ -357,6 +389,11 @@ std::string build_panel_spec(const Snapshot& snapshot) {
                                   "ghost", snapshot.hwid_hex.empty() || snapshot.busy));
         row.push_back(button_node("license.refresh", "刷新", kRefreshAction, json::object(),
                                   "default", snapshot.busy));
+        row.push_back(button_node("license.renew", "续期", kRenewAction, json::object(),
+                                  "default", !snapshot.activated || snapshot.busy));
+        row.push_back(button_node("license.deactivate", "停用授权", kDeactivateAction,
+                                  json::object(), "ghost",
+                                  !snapshot.activated || snapshot.busy));
         status.push_back(row_node(std::move(row)));
     }
     nodes.push_back(card_node("授权与设备 / License", std::move(status), accent));
@@ -455,6 +492,42 @@ sao_status_t default_refresh_license() {
     return static_cast<sao_status_t>(sao_license_sdk_refresh());
 }
 
+std::uint64_t epoch_now_ms() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+}
+
+sao_status_t default_deactivate() {
+    return static_cast<sao_status_t>(sao_license_client_revoke(
+        3u /* SAO_LICENSE_REVOKE_USER_REQUEST */, ""));
+}
+
+sao_status_t default_renew() {
+    return static_cast<sao_status_t>(
+        sao_license_client_maybe_renew(epoch_now_ms(), 30u));
+}
+
+sao_status_t default_get_heartbeat_state(HeartbeatState& out) {
+    int32_t running = 0;
+    int32_t status = sao_license_client_is_heartbeat_running(&running);
+    if (status != SAO_OK)
+        return static_cast<sao_status_t>(status);
+    int32_t revoked = 0;
+    status = sao_license_client_check_revocation(&revoked);
+    if (status != SAO_OK)
+        return static_cast<sao_status_t>(status);
+    sao_license_client_retry_state_t retry{};
+    status = sao_license_client_get_retry_state(&retry);
+    if (status != SAO_OK)
+        return static_cast<sao_status_t>(status);
+    out.running = running != 0;
+    out.revoked = revoked != 0;
+    out.consecutive_failures = retry.consecutive_failures;
+    return SAO_STATUS_OK;
+}
+
 json parse_payload(std::string_view payload_json, bool& valid) {
     valid = false;
     if (payload_json.size() > kMaximumActionPayloadBytes ||
@@ -473,7 +546,8 @@ json parse_payload(std::string_view payload_json, bool& valid) {
 } // namespace
 
 bool Operations::complete() const noexcept {
-    return activate && get_hwid && get_status && copy_to_clipboard && refresh_license;
+    return activate && get_hwid && get_status && copy_to_clipboard &&
+           refresh_license && deactivate && renew && get_heartbeat_state;
 }
 
 Operations make_default_operations() {
@@ -488,6 +562,9 @@ Operations make_default_operations() {
     operations.get_status = &default_get_status;
     operations.copy_to_clipboard = &default_copy_to_clipboard;
     operations.refresh_license = &default_refresh_license;
+    operations.deactivate = &default_deactivate;
+    operations.renew = &default_renew;
+    operations.get_heartbeat_state = &default_get_heartbeat_state;
     return operations;
 }
 
@@ -523,6 +600,9 @@ struct Owner::State {
     bool event_handler_attached{};
     bool busy{};
     bool activated{};
+    bool heartbeat_running{};
+    bool revoked{};
+    std::uint32_t heartbeat_failures{};
     sao_status_t last_status{SAO_STATUS_OK};
     std::string status_text;
     std::string error_text;
@@ -532,6 +612,9 @@ struct Owner::State {
     std::uint64_t expiry_ms{};
     std::string rendered_spec_json;
     bool publish_pending{true};
+    // Set by license_event_trampoline on the license client worker thread;
+    // consumed by Owner::service_ui on the owner thread.
+    std::atomic<bool> license_event_pending{false};
     std::atomic<bool> activation_running{false};
     std::atomic<bool> activation_cancel_requested{false};
     std::condition_variable activation_cv;
@@ -545,6 +628,17 @@ struct Owner::State {
 std::mutex Owner::deferred_mutex_;
 std::vector<std::unique_ptr<Owner::State>>* Owner::deferred_cleanup_ =
     new std::vector<std::unique_ptr<Owner::State>>();
+std::atomic<Owner::State*> Owner::event_target_{nullptr};
+std::atomic<bool> Owner::event_registered_{false};
+
+// Runs on the license client's worker thread — only flags the armed Owner's
+// state; the owner thread consumes it in service_ui.
+void SAO_LICENSE_SDK_CALL Owner::license_event_trampoline(
+    sao_license_event_kind_t /*kind*/, void* /*user_data*/) noexcept {
+    State* target = event_target_.load(std::memory_order_acquire);
+    if (target != nullptr)
+        target->license_event_pending.store(true, std::memory_order_release);
+}
 
 void Owner::stop_background_threads(State& state) noexcept {
     state.status_cancel_requested.store(true);
@@ -581,6 +675,11 @@ void Owner::defer_state(std::unique_ptr<State> state) noexcept {
     if (state == nullptr)
         return;
     Owner::stop_background_threads(*state);
+    // Deferred cleanup still counts as retirement — drop the event target
+    // so the trampoline cannot touch a State owned by the deferred list.
+    State* expected = state.get();
+    event_target_.compare_exchange_strong(expected, nullptr,
+                                          std::memory_order_acq_rel);
     {
         std::unique_lock lock(state->mutex);
         state->accepting = false;
@@ -866,6 +965,15 @@ sao_status_t Owner::ensure_panel() noexcept {
         state_->action_handler_attached = true;
         state_->event_handler_attached = true;
     }
+    // Arm the process-wide SDK license-event subscription. The trampoline
+    // is registered once and forwards to whichever Owner is armed via
+    // event_target_; user_data is unused so later unregister calls (which
+    // match by function pointer only) cannot strand a live State*.
+    event_target_.store(state_.get(), std::memory_order_release);
+    if (!event_registered_.exchange(true, std::memory_order_acq_rel)) {
+        (void)sao_license_sdk_register_event_handler(
+            &Owner::license_event_trampoline, nullptr);
+    }
     return SAO_STATUS_OK;
 }
 
@@ -892,6 +1000,9 @@ sao_status_t Owner::publish() noexcept {
             view.tier = state_->tier;
             view.expiry_ms = state_->expiry_ms;
             view.activated = state_->activated;
+            view.heartbeat_running = state_->heartbeat_running;
+            view.revoked = state_->revoked;
+            view.heartbeat_failures = state_->heartbeat_failures;
         }
         std::string spec = build_panel_spec(view);
         const sao_status_t status = sao_ui_panel_body_set_spec(
@@ -923,15 +1034,19 @@ void start_status_refresh(StateT& state) noexcept {
             std::string tier;
             std::uint64_t expiry_ms = 0U;
             sao_status_t status = SAO_STATUS_ERR_UNKNOWN;
+            HeartbeatState heartbeat{};
+            bool heartbeat_ok = false;
             try {
                 Operations::GetStatus get_status;
                 Operations::GetHwid get_hwid;
                 Operations::RefreshLicense refresh_license;
+                Operations::GetHeartbeatState get_heartbeat_state;
                 {
                     std::lock_guard lock(state.mutex);
                     get_status = state.operations.get_status;
                     get_hwid = state.operations.get_hwid;
                     refresh_license = state.operations.refresh_license;
+                    get_heartbeat_state = state.operations.get_heartbeat_state;
                 }
                 if (!state.status_cancel_requested.load())
                     status = refresh_license();
@@ -940,9 +1055,21 @@ void start_status_refresh(StateT& state) noexcept {
                     status = get_hwid(hwid);
                 if (status == SAO_STATUS_OK && !state.status_cancel_requested.load())
                     status = get_status(tier, expiry_ms);
+                // Best-effort heartbeat snapshot — the strip updates even
+                // when the status round-trip failed.
+                if (!state.status_cancel_requested.load() &&
+                    get_heartbeat_state &&
+                    get_heartbeat_state(heartbeat) == SAO_STATUS_OK) {
+                    heartbeat_ok = true;
+                }
                 std::lock_guard lock(state.mutex);
                 if (!state.status_cancel_requested.load()) {
                     state.last_status = status;
+                    if (heartbeat_ok) {
+                        state.heartbeat_running = heartbeat.running;
+                        state.revoked = heartbeat.revoked;
+                        state.heartbeat_failures = heartbeat.consecutive_failures;
+                    }
                     if (status == SAO_STATUS_OK && valid_text(tier, 64U, true)) {
                         state.hwid_hex_ = std::move(hwid);
                         state.tier = std::move(tier);
@@ -1086,13 +1213,25 @@ sao_status_t Owner::service_ui() noexcept {
     if (operation.status != SAO_STATUS_OK)
         return operation.status;
     bool publish_needed = false;
+    bool license_event_seen = false;
     {
         std::lock_guard lock(state_->mutex);
         if (state_->panel == nullptr || state_->body == nullptr)
             return SAO_STATUS_OK;
+        license_event_seen =
+            state_->license_event_pending.exchange(false, std::memory_order_acq_rel);
+        if (license_event_seen && !state_->status_running.load() &&
+            !state_->activation_running.load()) {
+            state_->busy = true;
+            state_->status_text = "License state changed — refreshing...";
+            state_->error_text.clear();
+            state_->publish_pending = true;
+        }
         publish_needed = state_->publish_pending;
     }
-    if (publish_needed)
+    if (license_event_seen)
+        start_status_refresh(*state_);
+    if (publish_needed || license_event_seen)
         return publish();
     return SAO_STATUS_OK;
 }
@@ -1124,6 +1263,12 @@ sao_status_t Owner::take_offline() noexcept {
         had_action_handler = state_->action_handler_attached;
         had_event_handler = state_->event_handler_attached;
     }
+
+    // Disarm the license-event target before the panel comes down; the
+    // trampoline becomes a no-op until another Owner arms itself.
+    State* expected = state_.get();
+    event_target_.compare_exchange_strong(expected, nullptr,
+                                          std::memory_order_acq_rel);
 
     bool action_attached = had_action_handler;
     bool event_attached = had_event_handler;
@@ -1182,6 +1327,8 @@ sao_status_t Owner::take_offline() noexcept {
                             event_attached == had_event_handler;
         state_->retiring = false;
     }
+    // Panel survived a failed retire — keep it armed for license events.
+    event_target_.store(state_.get(), std::memory_order_release);
     return rollback_ok ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
 }
 
@@ -1304,10 +1451,24 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
                 state_->publish_pending = true;
                 action_status = SAO_STATUS_ERR_INVALID_ARGUMENT;
             } else {
-                action_status = run_activation(std::move(key));
+                action_status = run_job(JobKind::activate, std::move(key));
             }
             const sao_status_t publish_status = publish();
             return publish_status == SAO_STATUS_OK ? action_status : publish_status;
+        }
+
+        if (action_id == kDeactivateAction || action_id == kRenewAction) {
+            {
+                std::lock_guard lock(state_->mutex);
+                if (state_->activation_running.load() || state_->status_running.load())
+                    return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            }
+            const JobKind kind = action_id == kDeactivateAction
+                                     ? JobKind::deactivate
+                                     : JobKind::renew;
+            const sao_status_t job_status = run_job(kind, {});
+            const sao_status_t publish_status = publish();
+            return publish_status == SAO_STATUS_OK ? job_status : publish_status;
         }
 
         return SAO_STATUS_ERR_NOT_FOUND;
@@ -1341,7 +1502,7 @@ sao_status_t Owner::dispatch_event_for_testing(std::int32_t event_kind) noexcept
     return SAO_STATUS_OK;
 }
 
-sao_status_t Owner::run_activation(std::string key) noexcept {
+sao_status_t Owner::run_job(JobKind kind, std::string key) noexcept {
     {
         std::lock_guard lock(state_->mutex);
         if (state_->activation_running.load() || state_->status_running.load())
@@ -1350,17 +1511,22 @@ sao_status_t Owner::run_activation(std::string key) noexcept {
     try {
         if (state_->activation_thread.joinable())
             state_->activation_thread.join();
+        const char* busy_text =
+            kind == JobKind::activate   ? "Activating..."
+            : kind == JobKind::deactivate ? "Deactivating license..."
+                                        : "Renewing license...";
         {
             std::lock_guard lock(state_->mutex);
             state_->busy = true;
-            state_->status_text = "Activating...";
+            state_->status_text = busy_text;
             state_->error_text.clear();
             state_->activation_cancel_requested.store(false);
             state_->activation_running.store(true);
             state_->publish_pending = true;
         }
         state_->activation_thread =
-            std::thread(&Owner::activation_thread_main, state_.get(), std::move(key));
+            std::thread(&Owner::background_job_main, state_.get(), kind,
+                        std::move(key));
         return SAO_STATUS_OK;
     } catch (...) {
         std::lock_guard lock(state_->mutex);
@@ -1368,12 +1534,13 @@ sao_status_t Owner::run_activation(std::string key) noexcept {
         state_->activation_running.store(false);
         state_->last_status = SAO_STATUS_ERR_OS_CALL_FAILED;
         state_->status_text.clear();
-        state_->error_text = "Activation worker could not start.";
+        state_->error_text = "License job could not start.";
         state_->publish_pending = true;
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
 }
-void Owner::activation_thread_main(State* state_ptr, std::string key) noexcept {
+void Owner::background_job_main(State* state_ptr, JobKind kind,
+                                std::string key) noexcept {
     if (state_ptr == nullptr)
         return;
     State& state = *state_ptr;
@@ -1382,19 +1549,31 @@ void Owner::activation_thread_main(State* state_ptr, std::string key) noexcept {
     std::uint64_t expiry_ms = 0U;
     bool activated = false;
     try {
-        status = state.operations.activate(key);
+        switch (kind) {
+            case JobKind::activate:
+                status = state.operations.activate(key);
+                break;
+            case JobKind::deactivate:
+                status = state.operations.deactivate();
+                break;
+            case JobKind::renew:
+                status = state.operations.renew();
+                break;
+        }
         if (state.activation_cancel_requested.load() && status == SAO_STATUS_OK)
             status = SAO_STATUS_ERR_CANCELLED;
-        if (status == SAO_STATUS_OK)
+        if (status == SAO_STATUS_OK &&
+            (kind == JobKind::activate || kind == JobKind::renew)) {
             status = state.operations.refresh_license();
-        if (state.activation_cancel_requested.load() && status == SAO_STATUS_OK)
-            status = SAO_STATUS_ERR_CANCELLED;
-        if (status == SAO_STATUS_OK) {
-            status = state.operations.get_status(tier, expiry_ms);
-            if (status == SAO_STATUS_OK && valid_text(tier, 64U, true))
-                activated = true;
-            else if (status == SAO_STATUS_OK)
-                status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+            if (state.activation_cancel_requested.load() && status == SAO_STATUS_OK)
+                status = SAO_STATUS_ERR_CANCELLED;
+            if (status == SAO_STATUS_OK) {
+                status = state.operations.get_status(tier, expiry_ms);
+                if (status == SAO_STATUS_OK && valid_text(tier, 64U, true))
+                    activated = true;
+                else if (status == SAO_STATUS_OK)
+                    status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
         }
     } catch (...) {
         status = SAO_STATUS_ERR_UNKNOWN;
@@ -1407,11 +1586,20 @@ void Owner::activation_thread_main(State* state_ptr, std::string key) noexcept {
         state.busy = false;
         state.activation_running.store(false);
         state.last_status = status;
-        if (activated) {
+        if (kind == JobKind::deactivate && status == SAO_STATUS_OK) {
+            // Token revoked + removed from disk — nothing left to show.
+            state.activated = false;
+            state.tier.clear();
+            state.expiry_ms = 0U;
+            state.heartbeat_running = false;
+            state.status_text = "License deactivated.";
+            state.error_text.clear();
+        } else if (activated) {
             state.activated = true;
             state.tier = std::move(tier);
             state.expiry_ms = expiry_ms;
-            state.status_text = "Activation successful.";
+            state.status_text = kind == JobKind::renew ? "License renewed."
+                                                       : "Activation successful.";
             state.error_text.clear();
         } else {
             state.error_text = license_status_description(static_cast<std::int32_t>(status));
@@ -1437,6 +1625,9 @@ sao_status_t Owner::snapshot(Snapshot& out) const noexcept {
     out.tier = state_->tier;
     out.expiry_ms = state_->expiry_ms;
     out.activated = state_->activated;
+    out.heartbeat_running = state_->heartbeat_running;
+    out.revoked = state_->revoked;
+    out.heartbeat_failures = state_->heartbeat_failures;
     out.rendered_spec_json = state_->rendered_spec_json;
     return SAO_STATUS_OK;
 }

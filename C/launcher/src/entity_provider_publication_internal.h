@@ -63,9 +63,12 @@ struct EntityBuiltinAuthorityState {
     bool nervgear = false;
     bool streaming = false;
     bool save_settings = false;
+    bool settings_panel = false;
+    bool hotkey_panel = false;
     bool ai_editor = false;
     bool workshop = false;
     bool process_selector = false;
+    bool memory_viewer = false;
     bool license_activation = false;
     bool plugin_manager = false;
     bool reload_plugins = false;

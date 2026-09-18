@@ -264,7 +264,7 @@ int32_t boot_residency_prompt_if_required(void* owner_hwnd) noexcept {
     if (restart_dialog != nullptr) return BOOT_RESIDENCY_PROMPT_PENDING;
     BootEnvironmentGates gates{};
     boot_environment_probe(&gates);
-    // Safe mode never loads boot-start drivers; prompting is pointless there.
+    // Safe mode never loads our drivers; prompting is pointless there.
     if (gates.safe_mode != 0u)
         return BOOT_RESIDENCY_NOT_REQUIRED;
     uint32_t required = 0u;
