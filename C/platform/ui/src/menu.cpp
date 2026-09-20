@@ -26,8 +26,8 @@
 //
 //   CLOSED  --show-->  OPENING  --tick 450ms-->  OPEN
 //   OPEN    --hide-->  CLOSING  --tick 300ms-->  CLOSED
-//   OPEN    --child open  -->  CHILD_OPENING --220ms--> CHILD_OPEN
-//   CHILD_OPEN --child close--> CHILD_CLOSING --160ms--> OPEN
+//   OPEN    --child open  -->  CHILD_OPENING --480ms--> CHILD_OPEN
+//   CHILD_OPEN --child close--> CHILD_CLOSING --300ms--> OPEN
 //
 // The top-level 450 ms open / 300 ms close durations come from the
 // production popup fade authority. Child fade, staggered slide, and
@@ -85,14 +85,15 @@ constexpr int32_t kMenuOpenMs = 450;
 constexpr int32_t kMenuCloseMs = 300;
 constexpr int32_t kChildFadeInMs = 480;
 constexpr int32_t kChildFadeOutMs = 300;
-constexpr int32_t kChildJoinMs = 180;
-constexpr int32_t kChildBridgeOpenMs = 480;
+constexpr int32_t kChildJoinMs = 120;
+constexpr int32_t kChildMoveMs = 180;
+constexpr int32_t kChildSplitMs = 180;
 constexpr int32_t kChildSlideMs = 240;
 constexpr int32_t kChildSlideStaggerMs = 28;
-constexpr int32_t kRootHoverInMs = 200;
-constexpr int32_t kRootHoverOutMs = 200;
-constexpr int32_t kChildHoverInMs = 140;
-constexpr int32_t kChildHoverOutMs = 110;
+constexpr int32_t kRootHoverInMs = 120;
+constexpr int32_t kRootHoverOutMs = 140;
+constexpr int32_t kChildHoverInMs = 100;
+constexpr int32_t kChildHoverOutMs = 100;
 constexpr int32_t kAccentSweepMs = 420;
 constexpr float kGeometrySnapEpsilon = 1.0F / 512.0F;
 
@@ -190,10 +191,18 @@ struct sao_ui_menu_s {
     int32_t child_hover_idx{-1};
     int32_t child_slide_elapsed_ms{0};
     float child_fade_t{1.0F};
+    float child_anchor_slot{-1.0F};
+    float child_extension_t{};
+    float child_split_t{};
+    sao::ui::menu_visual::ChildTransitionState child_motion{};
     uint64_t visual_revision{1};
     float transition_eased_t{};
     float close_start_t{};
     std::vector<float> close_start_rows;
+    int32_t root_transition_ms{kMenuOpenMs};
+    bool root_reversing{};
+    SaoUiMenuPhase resume_phase{SAO_UI_MENU_PHASE_OPEN};
+    int32_t resume_phase_elapsed_ms{};
     float center_diffusion_t{};
     float close_suction_t{};
     int32_t selection_trail_idx{-1};
@@ -297,21 +306,31 @@ int32_t visible_item_count_locked(const sao_ui_menu_s* menu) {
 }
 
 float opening_root_stagger_locked(const sao_ui_menu_s* menu, int32_t index) {
-    const int32_t stagger_delay = menu->reduced_motion ? 0 : index * 18;
-    const int32_t duration = menu->reduced_motion ? 1 : std::max(1, kMenuOpenMs - stagger_delay);
+    const float start = index >= 0 && index < static_cast<int32_t>(menu->close_start_rows.size())
+                            ? menu->close_start_rows[static_cast<size_t>(index)]
+                            : menu->close_start_t;
+    const int32_t stagger_delay = menu->reduced_motion || menu->root_reversing
+                                      ? 0 : std::min(index * 18, kMenuOpenMs - 1);
+    const int32_t duration = menu->reduced_motion ? 1 : menu->root_reversing
+        ? std::max(1, static_cast<int32_t>(std::ceil(kMenuOpenMs * (1.0F - start))))
+        : std::max(1, kMenuOpenMs - stagger_delay);
     const float raw = std::clamp(
         static_cast<float>(menu->phase_elapsed_ms - stagger_delay) /
             static_cast<float>(duration),
         0.0F, 1.0F);
-    return 1.0F - (1.0F - raw) * (1.0F - raw) * (1.0F - raw);
+    const float eased = 1.0F - (1.0F - raw) * (1.0F - raw) * (1.0F - raw);
+    return std::lerp(start, 1.0F, eased);
 }
 
 float closing_root_stagger_locked(const sao_ui_menu_s* menu, int32_t index) {
     const float start = index >= 0 && index < static_cast<int32_t>(menu->close_start_rows.size())
                             ? menu->close_start_rows[static_cast<size_t>(index)]
                             : menu->close_start_t;
-    const int32_t delay = menu->reduced_motion ? 0 : std::max(0, visible_item_count_locked(menu) - 1 - index) * 12;
-    const int32_t duration = menu->reduced_motion ? 1 : std::max(1, kMenuCloseMs - delay);
+    const int32_t delay = menu->reduced_motion || menu->root_reversing ? 0
+        : std::min(std::max(0, visible_item_count_locked(menu) - 1 - index) * 12, kMenuCloseMs - 1);
+    const int32_t duration = menu->reduced_motion ? 1 : menu->root_reversing
+        ? std::max(1, static_cast<int32_t>(std::ceil(kMenuCloseMs * start)))
+        : std::max(1, kMenuCloseMs - delay);
     const float raw = std::clamp(static_cast<float>(menu->phase_elapsed_ms - delay) /
                                      static_cast<float>(duration),
                                  0.0F, 1.0F);
@@ -320,6 +339,8 @@ float closing_root_stagger_locked(const sao_ui_menu_s* menu, int32_t index) {
 }
 
 float root_stagger_locked(const sao_ui_menu_s* menu, int32_t index) {
+    if (menu->phase == SAO_UI_MENU_PHASE_CLOSED)
+        return 0.0F;
     if (menu->phase == SAO_UI_MENU_PHASE_OPENING)
         return opening_root_stagger_locked(menu, index);
     if (menu->phase == SAO_UI_MENU_PHASE_CLOSING)
@@ -328,10 +349,21 @@ float root_stagger_locked(const sao_ui_menu_s* menu, int32_t index) {
 }
 
 void capture_close_start_rows_locked(sao_ui_menu_s* menu) {
-    menu->close_start_rows.resize(menu->items.size());
+    std::vector<float> rows(menu->items.size());
     for (size_t index = 0; index < menu->items.size(); ++index) {
-        menu->close_start_rows[index] = root_stagger_locked(menu, static_cast<int32_t>(index));
+        rows[index] = root_stagger_locked(menu, static_cast<int32_t>(index));
     }
+    menu->close_start_rows = std::move(rows);
+}
+
+int32_t root_transition_duration_locked(const sao_ui_menu_s* menu, bool opening) {
+    const int32_t full_duration = opening ? kMenuOpenMs : kMenuCloseMs;
+    if (!menu->root_reversing)
+        return full_duration;
+    float distance = opening ? 1.0F - menu->close_start_t : menu->close_start_t;
+    for (const float row : menu->close_start_rows)
+        distance = std::max(distance, opening ? 1.0F - row : row);
+    return std::max(1, static_cast<int32_t>(std::ceil(full_duration * distance)));
 }
 
 int32_t aligned_boundary(float value) {
@@ -685,7 +717,13 @@ void clear_child_visual_locked(sao_ui_menu_s* menu) {
     menu->child_hover_idx = -1;
     menu->child_slide_elapsed_ms = 0;
     menu->child_fade_t = 1.0F;
+    menu->child_anchor_slot = -1.0F;
+    menu->child_extension_t = 0.0F;
+    menu->child_split_t = 0.0F;
+    menu->child_motion = {};
     menu->child_rail_glow_t = 0.0F;
+    menu->resume_phase = SAO_UI_MENU_PHASE_OPEN;
+    menu->resume_phase_elapsed_ms = 0;
 }
 
 void reset_child_rows_locked(ChildMenu* child_menu) {
@@ -700,12 +738,19 @@ float advance_hover_value(float current, float target, int32_t dt_ms, int32_t du
         return current;
     if (duration_ms <= 0)
         return target;
-    const float step = std::clamp(static_cast<float>(dt_ms) /
-                                      static_cast<float>(duration_ms),
-                                  0.0F, 1.0F);
-    if (target > current)
-        return std::min(target, current + step);
-    return std::max(target, current - step);
+    const float step = std::clamp(static_cast<float>(dt_ms) / static_cast<float>(duration_ms), 0.0F, 1.0F);
+    return target > current ? std::min(target, current + step) : std::max(target, current - step);
+}
+
+float ease_hover_value(float current, float target, int32_t dt_ms, int32_t duration_ms) {
+    if (duration_ms <= 0)
+        return target;
+    if (dt_ms <= 0 || current == target)
+        return current;
+    const float decay = std::exp(-3.0F * static_cast<float>(dt_ms) /
+                                static_cast<float>(duration_ms));
+    const float next = target + (current - target) * decay;
+    return std::abs(next - target) < 0.001F ? target : next;
 }
 
 void advance_root_hover_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
@@ -722,7 +767,8 @@ void advance_root_hover_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
         const int32_t duration = target > menu->root_hover_values[index] ? kRootHoverInMs
                                                                          : kRootHoverOutMs;
         const float next =
-            advance_hover_value(menu->root_hover_values[index], target, dt_ms, duration);
+            ease_hover_value(menu->root_hover_values[index], target, dt_ms,
+                             menu->reduced_motion ? 0 : duration);
         if (next != menu->root_hover_values[index]) {
             menu->root_hover_values[index] = next;
             changed = true;
@@ -730,6 +776,86 @@ void advance_root_hover_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
     }
     if (changed)
         mark_visual_changed_locked(menu);
+}
+
+float child_motion_stage(int32_t elapsed_ms, int32_t start_ms, int32_t duration_ms) {
+    const float t = duration_ms <= 0 ? 1.0F : std::clamp(
+        static_cast<float>(elapsed_ms - start_ms) / static_cast<float>(duration_ms), 0.0F, 1.0F);
+    return t * t * (3.0F - 2.0F * t);
+}
+
+void settle_child_open_locked(sao_ui_menu_s* menu) {
+    menu->child_anchor_slot = static_cast<float>(find_root(menu->items, menu->displayed_parent_name));
+    menu->child_extension_t = 1.0F;
+    menu->child_split_t = 1.0F;
+    menu->child_fade_t = 0.0F;
+    menu->child_switching = false;
+    menu->child_transition_queued = false;
+    menu->child_bridge_source.clear();
+    menu->pending_parent_name.clear();
+    menu->child_motion = {};
+    menu->phase = SAO_UI_MENU_PHASE_CHILD_OPEN;
+    menu->phase_elapsed_ms = 0;
+}
+
+void close_child_phase_locked(sao_ui_menu_s* menu);
+
+void advance_child_geometry_locked(sao_ui_menu_s* menu) {
+    const auto motion = menu->child_motion;
+    const int32_t elapsed = menu->phase_elapsed_ms;
+    if (motion.first_open) {
+        menu->child_extension_t = child_motion_stage(elapsed, 90, 150);
+        menu->child_split_t = child_motion_stage(elapsed, 300, 180);
+        menu->child_fade_t = 1.0F - std::clamp(
+            static_cast<float>(elapsed) / static_cast<float>(kChildFadeInMs), 0.0F, 1.0F);
+        if (menu->reduced_motion || elapsed >= kChildFadeInMs)
+            settle_child_open_locked(menu);
+    } else if (menu->phase == SAO_UI_MENU_PHASE_CHILD_CLOSING &&
+               menu->pending_parent_name.empty()) {
+        menu->child_split_t = motion.start_split_t *
+            (1.0F - child_motion_stage(elapsed, 0, motion.join_ms));
+        menu->child_extension_t = motion.start_extension_t *
+            (1.0F - child_motion_stage(elapsed, motion.join_ms, motion.finish_ms));
+        menu->child_fade_t = 1.0F - menu->child_split_t;
+        if (menu->reduced_motion || elapsed >= motion.join_ms + motion.finish_ms)
+            close_child_phase_locked(menu);
+    } else {
+        if (elapsed < motion.join_ms && !menu->reduced_motion) {
+            menu->child_split_t = motion.start_split_t *
+                (1.0F - child_motion_stage(elapsed, 0, motion.join_ms));
+            menu->child_fade_t = 1.0F - menu->child_split_t;
+        } else {
+            if (!menu->pending_parent_name.empty()) {
+                auto* child = find_child_menu_locked(menu, menu->pending_parent_name);
+                if (child == nullptr || child->items.empty() ||
+                    find_activatable_root(menu->items, menu->pending_parent_name) < 0) {
+                    close_child_phase_locked(menu);
+                    return;
+                }
+                if (menu->displayed_parent_name != menu->pending_parent_name) {
+                    menu->child_bridge_source = menu->displayed_parent_name;
+                    menu->displayed_parent_name = menu->pending_parent_name;
+                    menu->child_slide_elapsed_ms = 0;
+                    reset_child_rows_locked(child);
+                }
+                menu->pending_parent_name.clear();
+            }
+            menu->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
+            const float target = static_cast<float>(find_root(menu->items, menu->displayed_parent_name));
+            const float move = child_motion_stage(elapsed, motion.join_ms, motion.move_ms);
+            menu->child_anchor_slot = std::lerp(motion.start_anchor_slot, target, move);
+            menu->child_extension_t = std::lerp(motion.start_extension_t, 1.0F, move);
+            const float split_start = motion.join_ms > 0 ? 0.0F : motion.start_split_t;
+            menu->child_split_t = std::lerp(split_start, 1.0F,
+                child_motion_stage(elapsed, motion.join_ms + motion.move_ms, motion.finish_ms));
+            menu->child_fade_t = 1.0F - std::clamp(
+                static_cast<float>(elapsed - motion.join_ms) /
+                    static_cast<float>(std::max(1, motion.move_ms + motion.finish_ms)), 0.0F, 1.0F);
+            if (menu->reduced_motion || elapsed >= motion.join_ms + motion.move_ms + motion.finish_ms)
+                settle_child_open_locked(menu);
+        }
+    }
+    mark_visual_changed_locked(menu);
 }
 
 void begin_child_fadein_locked(sao_ui_menu_s* menu, const std::string& parent_name) {
@@ -741,28 +867,27 @@ void begin_child_fadein_locked(sao_ui_menu_s* menu, const std::string& parent_na
         mark_visual_changed_locked(menu);
         return;
     }
-    menu->child_switching = !menu->displayed_parent_name.empty();
-    menu->child_bridge_source = menu->displayed_parent_name;
+    menu->child_switching = false;
+    menu->child_bridge_source.clear();
     menu->child_transition_queued = false;
     reset_child_rows_locked(child_menu);
-    if (menu->reduced_motion) {
-        std::fill(child_menu->visible_widths.begin(), child_menu->visible_widths.end(),
-                  kChildTargetRowWidth);
-        menu->displayed_parent_name = parent_name;
-        menu->pending_parent_name.clear();
-        menu->child_hover_idx = -1;
-        menu->child_slide_elapsed_ms = 0;
-        menu->child_fade_t = 0.0F;
-        menu->phase = SAO_UI_MENU_PHASE_CHILD_OPEN;
-        menu->phase_elapsed_ms = 0;
-        restart_open_decoration_locked(menu);
-        mark_visual_changed_locked(menu);
-        return;
-    }
     menu->displayed_parent_name = parent_name;
     menu->pending_parent_name.clear();
     menu->child_hover_idx = -1;
     menu->child_slide_elapsed_ms = 0;
+    menu->child_anchor_slot = static_cast<float>(find_root(menu->items, parent_name));
+    menu->child_extension_t = 0.0F;
+    menu->child_split_t = 0.0F;
+    menu->child_motion = {};
+    menu->child_motion.first_open = true;
+    if (menu->reduced_motion) {
+        std::fill(child_menu->visible_widths.begin(), child_menu->visible_widths.end(),
+                  kChildTargetRowWidth);
+        settle_child_open_locked(menu);
+        restart_open_decoration_locked(menu);
+        mark_visual_changed_locked(menu);
+        return;
+    }
     menu->child_fade_t = 1.0F;
     menu->phase = SAO_UI_MENU_PHASE_CHILD_OPENING;
     menu->phase_elapsed_ms = 0;
@@ -770,43 +895,37 @@ void begin_child_fadein_locked(sao_ui_menu_s* menu, const std::string& parent_na
     mark_visual_changed_locked(menu);
 }
 
-void close_child_phase_locked(sao_ui_menu_s* menu);
-
 void begin_child_transition_locked(sao_ui_menu_s* menu, const std::string& next_parent_name) {
-    if (!menu->reduced_motion && menu->phase == SAO_UI_MENU_PHASE_CHILD_OPENING) {
-        menu->pending_parent_name = next_parent_name;
-        menu->child_transition_queued = true;
-        mark_visual_changed_locked(menu);
-        return;
-    }
-    if (!menu->reduced_motion && menu->phase == SAO_UI_MENU_PHASE_CHILD_CLOSING) {
-        menu->pending_parent_name = next_parent_name;
-        mark_visual_changed_locked(menu);
-        return;
-    }
-    if (!menu->displayed_parent_name.empty() && menu->reduced_motion) {
+    if (menu->reduced_motion || menu->displayed_parent_name.empty()) {
         if (next_parent_name.empty())
             close_child_phase_locked(menu);
         else
             begin_child_fadein_locked(menu, next_parent_name);
         return;
     }
-    if (!menu->displayed_parent_name.empty()) {
-        menu->child_switching = !next_parent_name.empty();
-        menu->child_bridge_source.clear();
-        menu->child_transition_queued = false;
-        menu->pending_parent_name = next_parent_name;
-        menu->child_hover_idx = -1;
-        menu->phase = SAO_UI_MENU_PHASE_CHILD_CLOSING;
-        menu->phase_elapsed_ms = 0;
-        mark_visual_changed_locked(menu);
-        return;
-    }
-    if (next_parent_name.empty()) {
-        close_child_phase_locked(menu);
-        return;
-    }
-    begin_child_fadein_locked(menu, next_parent_name);
+    auto& motion = menu->child_motion;
+    motion = {};
+    motion.start_anchor_slot = menu->child_anchor_slot;
+    motion.start_extension_t = menu->child_extension_t;
+    motion.start_split_t = menu->child_split_t;
+    const float target = static_cast<float>(find_root(menu->items, next_parent_name));
+    const bool same_anchor = !next_parent_name.empty() &&
+        next_parent_name == menu->displayed_parent_name &&
+        target == menu->child_anchor_slot;
+    motion.join_ms = same_anchor ? 0 : static_cast<int32_t>(std::ceil(kChildJoinMs * menu->child_split_t));
+    motion.move_ms = next_parent_name.empty() || (same_anchor && menu->child_extension_t >= 1.0F)
+        ? 0 : kChildMoveMs;
+    motion.finish_ms = next_parent_name.empty()
+        ? static_cast<int32_t>(std::ceil((kChildFadeOutMs - kChildJoinMs) * menu->child_extension_t))
+        : static_cast<int32_t>(std::ceil(kChildSplitMs * (same_anchor ? 1.0F - menu->child_split_t : 1.0F)));
+    menu->child_switching = !next_parent_name.empty();
+    menu->child_bridge_source.clear();
+    menu->child_transition_queued = false;
+    menu->pending_parent_name = next_parent_name;
+    menu->child_hover_idx = -1;
+    menu->phase = SAO_UI_MENU_PHASE_CHILD_CLOSING;
+    menu->phase_elapsed_ms = 0;
+    advance_child_geometry_locked(menu);
 }
 
 void close_child_phase_locked(sao_ui_menu_s* menu) {
@@ -838,7 +957,9 @@ void advance_child_rows_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
     const int32_t previous_elapsed = menu->child_slide_elapsed_ms;
     const int32_t last_row = std::max(0, static_cast<int32_t>(child_menu->items.size()) - 1);
     const int32_t slide_end = kChildSlideMs + last_row * kChildSlideStaggerMs;
-    if (dt_ms > 0) {
+    if (menu->reduced_motion) {
+        menu->child_slide_elapsed_ms = slide_end;
+    } else if (dt_ms > 0) {
         const int64_t next_elapsed =
             static_cast<int64_t>(menu->child_slide_elapsed_ms) + static_cast<int64_t>(dt_ms);
         menu->child_slide_elapsed_ms =
@@ -857,7 +978,7 @@ void advance_child_rows_locked(sao_ui_menu_s* menu, int32_t dt_ms) {
                                  : 0.0F;
         float& current = child_menu->hover_values[static_cast<size_t>(i)];
         const int32_t duration = target > current ? kChildHoverInMs : kChildHoverOutMs;
-        const float next = advance_hover_value(current, target, dt_ms, duration);
+        const float next = ease_hover_value(current, target, dt_ms, menu->reduced_motion ? 0 : duration);
         if (next != current) {
             current = next;
             changed = true;
@@ -965,7 +1086,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
         std::lock_guard<std::mutex> lock(handle->mtx);
         int32_t next_active_idx = -1;
         int32_t next_hover_idx = -1;
-        float previous_hover_t = 0.0F;
         if (handle->active_idx >= 0 &&
             handle->active_idx < static_cast<int32_t>(handle->items.size())) {
             next_active_idx =
@@ -974,8 +1094,41 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
         if (handle->hover_idx >= 0 &&
             handle->hover_idx < static_cast<int32_t>(handle->items.size())) {
             next_hover_idx = find_activatable_root(replacement, handle->items[handle->hover_idx].name);
-            if (handle->hover_idx < static_cast<int32_t>(handle->root_hover_values.size()))
-                previous_hover_t = handle->root_hover_values[static_cast<size_t>(handle->hover_idx)];
+        }
+        const bool root_moving = handle->phase == SAO_UI_MENU_PHASE_OPENING ||
+                                 handle->phase == SAO_UI_MENU_PHASE_CLOSING;
+        const bool order_changed = replacement.size() != handle->items.size() ||
+            !std::equal(replacement.begin(), replacement.end(), handle->items.begin(),
+                [](const MenuItem& next, const MenuItem& previous) { return next.name == previous.name; });
+        std::vector<float> next_hover_values(replacement.size(), 0.0F);
+        std::vector<float> next_start_rows(replacement.size(), handle->transition_eased_t);
+        for (size_t index = 0; index < replacement.size(); ++index) {
+            const int32_t old_index = find_root(handle->items, replacement[index].name);
+            if (old_index < 0)
+                continue;
+            if (old_index < static_cast<int32_t>(handle->root_hover_values.size()))
+                next_hover_values[index] = handle->root_hover_values[static_cast<size_t>(old_index)];
+            if (root_moving && order_changed)
+                next_start_rows[index] = root_stagger_locked(handle, old_index);
+        }
+        if (order_changed && !handle->items.empty() && !replacement.empty()) {
+            const auto remap_anchor = [&](float anchor) {
+                if (anchor < 0.0F)
+                    return anchor;
+                const float bounded = std::clamp(anchor, 0.0F, static_cast<float>(handle->items.size() - 1));
+                const auto lower = static_cast<size_t>(std::floor(bounded));
+                const auto upper = std::min(lower + 1, handle->items.size() - 1);
+                const int32_t next_lower = find_root(replacement, handle->items[lower].name);
+                const int32_t next_upper = find_root(replacement, handle->items[upper].name);
+                if (next_lower >= 0 && bounded == static_cast<float>(lower))
+                    return static_cast<float>(next_lower);
+                if (next_lower < 0 || next_upper < 0)
+                    return std::clamp(anchor, 0.0F, static_cast<float>(replacement.size() - 1));
+                return std::lerp(static_cast<float>(next_lower), static_cast<float>(next_upper),
+                                 bounded - static_cast<float>(lower));
+            };
+            handle->child_anchor_slot = remap_anchor(handle->child_anchor_slot);
+            handle->child_motion.start_anchor_slot = remap_anchor(handle->child_motion.start_anchor_slot);
         }
         handle->children.erase(std::remove_if(handle->children.begin(), handle->children.end(),
                                               [&replacement](const ChildMenu& child_menu) {
@@ -984,13 +1137,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
                                               }),
                                handle->children.end());
         handle->items = std::move(replacement);
-        handle->root_hover_values.assign(handle->items.size(), 0.0F);
-        if (handle->phase != SAO_UI_MENU_PHASE_CLOSING)
+        handle->root_hover_values = std::move(next_hover_values);
+        if (root_moving && order_changed) {
+            handle->close_start_rows = std::move(next_start_rows);
+            handle->close_start_t = handle->transition_eased_t;
+            handle->root_reversing = true;
+            handle->root_transition_ms = root_transition_duration_locked(
+                handle, handle->phase == SAO_UI_MENU_PHASE_OPENING);
+            handle->phase_elapsed_ms = 0;
+        } else if (!root_moving) {
             handle->close_start_rows.clear();
+        }
         handle->active_idx = next_active_idx;
         handle->hover_idx = next_hover_idx;
         if (next_hover_idx >= 0 && next_hover_idx < static_cast<int32_t>(handle->items.size())) {
-            handle->root_hover_values[static_cast<size_t>(next_hover_idx)] = previous_hover_t;
             if (handle->items[static_cast<size_t>(next_hover_idx)].state ==
                 SAO_UI_MENU_BTN_IDLE) {
                 handle->items[static_cast<size_t>(next_hover_idx)].state = SAO_UI_MENU_BTN_HOVER;
@@ -998,15 +1158,27 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_items(sao_ui_menu_handle_t h
         }
         if (next_active_idx >= 0)
             handle->items[next_active_idx].state = SAO_UI_MENU_BTN_ACTIVE;
+        const auto child_phase = root_moving ? handle->resume_phase : handle->phase;
+        if (order_changed && child_phase == SAO_UI_MENU_PHASE_CHILD_OPENING &&
+            !handle->child_motion.first_open && handle->child_motion.start_anchor_slot >= 0.0F) {
+            const int32_t elapsed = root_moving ? handle->resume_phase_elapsed_ms : handle->phase_elapsed_ms;
+            const int32_t target = find_root(handle->items, handle->displayed_parent_name);
+            if (target >= 0)
+                handle->child_anchor_slot = std::lerp(handle->child_motion.start_anchor_slot,
+                    static_cast<float>(target), child_motion_stage(elapsed,
+                        handle->child_motion.join_ms, handle->child_motion.move_ms));
+        }
         const bool preserve_child_transition =
-            handle->phase == SAO_UI_MENU_PHASE_CLOSING ||
-            (is_child_phase(handle->phase) &&
+            ((is_child_phase(handle->phase) || (root_moving && is_child_phase(handle->resume_phase))) &&
              find_activatable_root(handle->items, handle->displayed_parent_name) >= 0 &&
              (handle->pending_parent_name.empty() ||
-              find_activatable_root(handle->items, handle->pending_parent_name) >= 0) &&
-             (handle->child_bridge_source.empty() ||
-              find_root(handle->items, handle->child_bridge_source) >= 0));
+              find_activatable_root(handle->items, handle->pending_parent_name) >= 0));
         if (preserve_child_transition) {
+            mark_visual_changed_locked(handle);
+        } else if (root_moving || handle->phase == SAO_UI_MENU_PHASE_CLOSED) {
+            clear_child_visual_locked(handle);
+            handle->resume_phase = SAO_UI_MENU_PHASE_OPEN;
+            handle->resume_phase_elapsed_ms = 0;
             mark_visual_changed_locked(handle);
         } else if (next_active_idx >= 0) {
             auto* child_menu = find_child_menu_locked(handle, handle->items[next_active_idx].name);
@@ -1062,7 +1234,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_set_children(sao_ui_menu_handle_
         } else {
             *target = std::move(replacement);
         }
-        if (handle->phase == SAO_UI_MENU_PHASE_CLOSING) {
+        if (handle->phase == SAO_UI_MENU_PHASE_CLOSING ||
+            handle->phase == SAO_UI_MENU_PHASE_OPENING ||
+            handle->phase == SAO_UI_MENU_PHASE_CLOSED) {
+            if (target->items.empty() && handle->displayed_parent_name == target->parent_name) {
+                clear_child_visual_locked(handle);
+                handle->resume_phase = SAO_UI_MENU_PHASE_OPEN;
+                handle->resume_phase_elapsed_ms = 0;
+            } else if (target->items.empty() && handle->pending_parent_name == target->parent_name) {
+                handle->pending_parent_name.clear();
+            } else if (handle->displayed_parent_name == target->parent_name) {
+                handle->child_hover_idx = -1;
+                advance_child_rows_locked(handle, 0);
+            }
             mark_visual_changed_locked(handle);
         } else if (is_child_phase(handle->phase) &&
                    handle->displayed_parent_name == target->parent_name &&
@@ -1117,23 +1301,37 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_show(sao_ui_menu_handle_t handle
             handle->layout.center_y = anchor_y;
         }
         if (handle->phase == SAO_UI_MENU_PHASE_CLOSED || handle->phase == SAO_UI_MENU_PHASE_CLOSING) {
-            clear_child_visual_locked(handle);
-            handle->active_idx = -1;
-            handle->hover_idx = -1;
-            for (auto& item : handle->items)
-                if (item.state != SAO_UI_MENU_BTN_DISABLED) item.state = SAO_UI_MENU_BTN_IDLE;
-            std::fill(handle->root_hover_values.begin(), handle->root_hover_values.end(), 0.0F);
-            handle->close_start_t = 0.0F;
-            handle->close_start_rows.clear();
+            const bool reversing = handle->phase == SAO_UI_MENU_PHASE_CLOSING;
+            if (reversing) {
+                capture_close_start_rows_locked(handle);
+                handle->close_start_t = handle->transition_eased_t;
+            } else {
+                clear_child_visual_locked(handle);
+                handle->active_idx = -1;
+                handle->hover_idx = -1;
+                for (auto& item : handle->items)
+                    if (item.state != SAO_UI_MENU_BTN_DISABLED) item.state = SAO_UI_MENU_BTN_IDLE;
+                std::fill(handle->root_hover_values.begin(), handle->root_hover_values.end(), 0.0F);
+                handle->close_start_t = 0.0F;
+                handle->close_start_rows.clear();
+                handle->transition_eased_t = 0.0F;
+                handle->center_diffusion_t = 0.0F;
+                handle->backdrop_lens_t = 0.0F;
+                handle->resume_phase = SAO_UI_MENU_PHASE_OPEN;
+                handle->resume_phase_elapsed_ms = 0;
+            }
+            handle->root_reversing = reversing;
+            handle->root_transition_ms = root_transition_duration_locked(handle, true);
             handle->phase_elapsed_ms = 0;
-            handle->transition_eased_t = 0.0F;
-            handle->center_diffusion_t = 0.0F;
-            handle->backdrop_lens_t = 0.0F;
+            handle->close_suction_t = 0.0F;
             if (handle->reduced_motion) {
-                handle->phase = SAO_UI_MENU_PHASE_OPEN;
+                handle->phase = handle->resume_phase;
+                handle->phase_elapsed_ms = handle->resume_phase_elapsed_ms;
                 handle->transition_eased_t = 1.0F;
                 handle->center_diffusion_t = 1.0F;
                 handle->backdrop_lens_t = 1.0F;
+                if (is_child_phase(handle->phase))
+                    advance_child_geometry_locked(handle);
                 pending = capture_event_locked(handle, SAO_UI_MENU_EV_OPENED, -1, -1, 0);
             } else {
                 handle->phase = SAO_UI_MENU_PHASE_OPENING;
@@ -1161,6 +1359,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_menu_hide(sao_ui_menu_handle_t handle
             return SAO_STATUS_OK;
         capture_close_start_rows_locked(handle);
         handle->close_start_t = std::clamp(handle->transition_eased_t, 0.0F, 1.0F);
+        handle->root_reversing = handle->phase == SAO_UI_MENU_PHASE_OPENING;
+        handle->root_transition_ms = root_transition_duration_locked(handle, false);
+        if (handle->phase != SAO_UI_MENU_PHASE_OPENING) {
+            handle->resume_phase = is_child_phase(handle->phase) ? handle->phase : SAO_UI_MENU_PHASE_OPEN;
+            handle->resume_phase_elapsed_ms = is_child_phase(handle->phase) ? handle->phase_elapsed_ms : 0;
+        }
         handle->phase = SAO_UI_MENU_PHASE_CLOSING;
         handle->phase_elapsed_ms = 0;
         handle->close_suction_t = 0.0F;
@@ -1289,6 +1493,17 @@ sao_status_t sao::ui::menu_visual::activate_root(sao_ui_menu_handle_t handle,
         auto& it = handle->items[menu_idx];
         if (item_disabled(it))
             return SAO_STATUS_OK;
+        const auto root_phase = handle->phase;
+        const int32_t root_elapsed_ms = handle->phase_elapsed_ms;
+        const bool root_moving = root_phase == SAO_UI_MENU_PHASE_OPENING ||
+                                 root_phase == SAO_UI_MENU_PHASE_CLOSING;
+        if (emit_interaction && (root_phase == SAO_UI_MENU_PHASE_CLOSED ||
+                                 root_phase == SAO_UI_MENU_PHASE_CLOSING))
+            return SAO_STATUS_ERR_NOT_FOUND;
+        if (root_moving) {
+            handle->phase = handle->resume_phase;
+            handle->phase_elapsed_ms = handle->resume_phase_elapsed_ms;
+        }
         const bool toggle_off = handle->active_idx == menu_idx;
         bool opens_child = false;
         if (toggle_off) {
@@ -1310,6 +1525,16 @@ sao_status_t sao::ui::menu_visual::activate_root(sao_ui_menu_handle_t handle,
             const auto* child_menu = find_child_menu_locked(handle, it.name);
             opens_child = child_menu != nullptr && !child_menu->items.empty();
             begin_child_transition_locked(handle, opens_child ? it.name : "");
+        }
+        if (root_moving) {
+            handle->resume_phase = handle->phase;
+            handle->resume_phase_elapsed_ms = handle->phase_elapsed_ms;
+            handle->phase = root_phase;
+            handle->phase_elapsed_ms = root_elapsed_ms;
+        } else if (root_phase == SAO_UI_MENU_PHASE_CLOSED) {
+            clear_child_visual_locked(handle);
+            handle->phase = root_phase;
+            handle->phase_elapsed_ms = root_elapsed_ms;
         }
         handle->selection_trail_idx = menu_idx;
         handle->pressed_pulse_idx = menu_idx;
@@ -1516,12 +1741,19 @@ sao::ui::menu_visual::get_snapshot(sao_ui_menu_handle_t handle, Snapshot* out_sn
                 find_root(handle->items, handle->displayed_parent_name);
             snapshot.child_source_idx = find_root(handle->items, handle->child_bridge_source);
             snapshot.child_switching = handle->child_switching;
-            snapshot.child_joining = handle->child_switching && handle->child_bridge_source.empty();
+            const auto child_phase = handle->phase == SAO_UI_MENU_PHASE_OPENING ||
+                                     handle->phase == SAO_UI_MENU_PHASE_CLOSING
+                                         ? handle->resume_phase : handle->phase;
+            snapshot.child_joining = handle->child_switching &&
+                                     child_phase == SAO_UI_MENU_PHASE_CHILD_CLOSING;
             copy_fixed_utf8(&snapshot.displayed_parent_name_utf8,
                             handle->displayed_parent_name);
             snapshot.child_hover_idx = handle->child_hover_idx;
             snapshot.phase = handle->phase;
             snapshot.fade_t = handle->child_fade_t;
+            snapshot.child_anchor_slot = handle->child_anchor_slot;
+            snapshot.child_extension_t = handle->child_extension_t;
+            snapshot.child_split_t = handle->child_split_t;
             snapshot.revision = handle->visual_revision;
             snapshot.transition_eased_t = handle->transition_eased_t;
             snapshot.center_diffusion_t = handle->center_diffusion_t;
@@ -1670,6 +1902,20 @@ sao_status_t sao::ui::menu_visual::get_child_menu_snapshot(
             snapshot.child_hover_idx = handle->child_hover_idx;
             snapshot.child_slide_elapsed_ms = handle->child_slide_elapsed_ms;
             snapshot.child_fade_t = handle->child_fade_t;
+            snapshot.child_anchor_slot = handle->child_anchor_slot;
+            snapshot.child_extension_t = handle->child_extension_t;
+            snapshot.child_split_t = handle->child_split_t;
+            snapshot.child_motion = handle->child_motion;
+            snapshot.resume_phase = handle->resume_phase;
+            snapshot.resume_phase_elapsed_ms = handle->resume_phase_elapsed_ms;
+            snapshot.transition_eased_t = handle->transition_eased_t;
+            snapshot.close_start_t = handle->close_start_t;
+            snapshot.close_start_rows = handle->close_start_rows;
+            snapshot.root_transition_ms = handle->root_transition_ms;
+            snapshot.root_reversing = handle->root_reversing;
+            snapshot.center_diffusion_t = handle->center_diffusion_t;
+            snapshot.close_suction_t = handle->close_suction_t;
+            snapshot.backdrop_lens_t = handle->backdrop_lens_t;
             snapshot.visual_revision = handle->visual_revision;
             const auto* child_menu = find_child_menu_locked(handle, parent_name_utf8);
             if (child_menu != nullptr) {
@@ -1749,6 +1995,20 @@ sao_status_t sao::ui::menu_visual::restore_child_menu_snapshot(
         handle->child_hover_idx = snapshot.child_hover_idx;
         handle->child_slide_elapsed_ms = snapshot.child_slide_elapsed_ms;
         handle->child_fade_t = snapshot.child_fade_t;
+        handle->child_anchor_slot = snapshot.child_anchor_slot;
+        handle->child_extension_t = snapshot.child_extension_t;
+        handle->child_split_t = snapshot.child_split_t;
+        handle->child_motion = snapshot.child_motion;
+        handle->resume_phase = snapshot.resume_phase;
+        handle->resume_phase_elapsed_ms = snapshot.resume_phase_elapsed_ms;
+        handle->transition_eased_t = snapshot.transition_eased_t;
+        handle->close_start_t = snapshot.close_start_t;
+        handle->close_start_rows = snapshot.close_start_rows;
+        handle->root_transition_ms = snapshot.root_transition_ms;
+        handle->root_reversing = snapshot.root_reversing;
+        handle->center_diffusion_t = snapshot.center_diffusion_t;
+        handle->close_suction_t = snapshot.close_suction_t;
+        handle->backdrop_lens_t = snapshot.backdrop_lens_t;
         handle->visual_revision = snapshot.visual_revision;
         return SAO_STATUS_OK;
     } catch (...) {
@@ -1811,6 +2071,7 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
         return SAO_STATUS_ERR_HANDLE_INVALID;
     if (dt_ms < 0)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    dt_ms = std::min(dt_ms, 1000);
     PendingMenuEvent pending{};
     {
         std::lock_guard<std::mutex> lock(handle->mtx);
@@ -1866,26 +2127,35 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
             mark_visual_changed_locked(handle);
         switch (handle->phase) {
         case SAO_UI_MENU_PHASE_OPENING: {
-            const int32_t duration = handle->reduced_motion ? 1 : kMenuOpenMs;
+            const int32_t duration = handle->reduced_motion ? 1 : handle->root_transition_ms;
+            const int32_t progress_duration = handle->reduced_motion ? 1 : handle->root_reversing
+                ? std::max(1, static_cast<int32_t>(std::ceil(kMenuOpenMs * (1.0F - handle->close_start_t))))
+                : duration;
             const float raw = std::clamp(static_cast<float>(handle->phase_elapsed_ms) /
-                                             static_cast<float>(duration), 0.0F, 1.0F);
-            handle->transition_eased_t = 1.0F - (1.0F - raw) * (1.0F - raw) * (1.0F - raw);
+                                             static_cast<float>(progress_duration), 0.0F, 1.0F);
+            handle->transition_eased_t = std::lerp(handle->close_start_t, 1.0F,
+                1.0F - (1.0F - raw) * (1.0F - raw) * (1.0F - raw));
             handle->center_diffusion_t = handle->transition_eased_t;
             handle->backdrop_lens_t = handle->transition_eased_t;
             handle->open_spark_t =
                 decorations_suppressed_locked(handle) ? 0.0F : std::max(0.0F, 1.0F - raw * 1.35F);
             mark_visual_changed_locked(handle);
             if (handle->phase_elapsed_ms >= duration) {
-                handle->phase = SAO_UI_MENU_PHASE_OPEN;
-                handle->phase_elapsed_ms = 0;
+                handle->phase = handle->resume_phase;
+                handle->phase_elapsed_ms = handle->resume_phase_elapsed_ms;
+                if (is_child_phase(handle->phase) && handle->reduced_motion)
+                    advance_child_geometry_locked(handle);
                 pending = capture_event_locked(handle, SAO_UI_MENU_EV_OPENED, -1, -1, 0);
             }
             break;
         }
         case SAO_UI_MENU_PHASE_CLOSING: {
-            const int32_t duration = handle->reduced_motion ? 1 : kMenuCloseMs;
+            const int32_t duration = handle->reduced_motion ? 1 : handle->root_transition_ms;
+            const int32_t progress_duration = handle->reduced_motion ? 1 : handle->root_reversing
+                ? std::max(1, static_cast<int32_t>(std::ceil(kMenuCloseMs * handle->close_start_t)))
+                : duration;
             const float raw = std::clamp(static_cast<float>(handle->phase_elapsed_ms) /
-                                             static_cast<float>(duration), 0.0F, 1.0F);
+                                             static_cast<float>(progress_duration), 0.0F, 1.0F);
             handle->close_suction_t = raw * raw;
             handle->transition_eased_t = handle->close_start_t * (1.0F - handle->close_suction_t);
             handle->center_diffusion_t = handle->transition_eased_t;
@@ -1913,65 +2183,13 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_tick(sao_ui_menu_hand
             break;
         }
         case SAO_UI_MENU_PHASE_CHILD_OPENING:
+        case SAO_UI_MENU_PHASE_CHILD_CLOSING:
+            advance_child_geometry_locked(handle);
             advance_child_rows_locked(handle, dt_ms);
-            {
-                const float next_fade = std::clamp(
-                    handle->child_fade_t -
-                        static_cast<float>(dt_ms) / static_cast<float>(handle->child_switching ? kChildBridgeOpenMs : kChildFadeInMs),
-                    0.0F, 1.0F);
-                if (next_fade != handle->child_fade_t) {
-                    handle->child_fade_t = next_fade;
-                    mark_visual_changed_locked(handle);
-                }
-            }
-            if (handle->child_fade_t <= 0.001F) {
-                handle->phase = SAO_UI_MENU_PHASE_CHILD_OPEN;
-                handle->phase_elapsed_ms = 0;
-                handle->child_fade_t = 0.0F;
-                mark_visual_changed_locked(handle);
-                if (handle->child_transition_queued) {
-                    const std::string next_parent = handle->pending_parent_name;
-                    handle->child_transition_queued = false;
-                    begin_child_transition_locked(handle, next_parent);
-                }
-            }
             break;
         case SAO_UI_MENU_PHASE_CHILD_OPEN:
             advance_child_rows_locked(handle, dt_ms);
             handle->phase_elapsed_ms = 0;
-            break;
-        case SAO_UI_MENU_PHASE_CHILD_CLOSING:
-            advance_child_rows_locked(handle, dt_ms);
-            {
-                const float next_fade = std::clamp(
-                    handle->child_fade_t +
-                        static_cast<float>(dt_ms) / static_cast<float>(handle->child_switching ? kChildJoinMs : kChildFadeOutMs),
-                    0.0F, 1.0F);
-                if (next_fade != handle->child_fade_t) {
-                    handle->child_fade_t = next_fade;
-                    mark_visual_changed_locked(handle);
-                }
-            }
-            if (handle->child_fade_t >= 0.999F) {
-                const std::string next_parent = handle->pending_parent_name;
-                if (next_parent.empty()) {
-                    if (handle->child_switching) {
-                        handle->child_switching = false;
-                        handle->child_bridge_source.clear();
-                        handle->child_fade_t = 0.5F;
-                        handle->phase_elapsed_ms = 0;
-                    } else {
-                        clear_child_visual_locked(handle);
-                        handle->phase = SAO_UI_MENU_PHASE_OPEN;
-                        handle->phase_elapsed_ms = 0;
-                    }
-                    mark_visual_changed_locked(handle);
-                } else {
-                    if (!handle->child_switching)
-                        clear_child_visual_locked(handle);
-                    begin_child_fadein_locked(handle, next_parent);
-                }
-            }
             break;
         default:
             break;
@@ -2075,25 +2293,10 @@ extern "C" SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_menu_set_visual_budget(
     const bool cleared =
         decorations_suppressed_locked(handle) ? clear_decorations_locked(handle) : false;
     if (reduced_motion) {
-        if (handle->phase == SAO_UI_MENU_PHASE_CHILD_OPENING) {
-            auto* child_menu = find_child_menu_locked(handle, handle->displayed_parent_name);
-            if (child_menu != nullptr) {
-                std::fill(child_menu->visible_widths.begin(), child_menu->visible_widths.end(),
-                          kChildTargetRowWidth);
-            }
-            handle->child_fade_t = 0.0F;
-            handle->phase = SAO_UI_MENU_PHASE_CHILD_OPEN;
-            handle->phase_elapsed_ms = 0;
-        } else if (handle->phase == SAO_UI_MENU_PHASE_CHILD_CLOSING) {
-            const std::string next_parent = handle->pending_parent_name;
-            if (next_parent.empty()) {
-                clear_child_visual_locked(handle);
-                handle->phase = SAO_UI_MENU_PHASE_OPEN;
-                handle->phase_elapsed_ms = 0;
-            } else {
-                begin_child_fadein_locked(handle, next_parent);
-            }
-        }
+        if (handle->phase == SAO_UI_MENU_PHASE_CHILD_OPENING ||
+            handle->phase == SAO_UI_MENU_PHASE_CHILD_CLOSING)
+            advance_child_geometry_locked(handle);
+        advance_child_rows_locked(handle, 0);
     }
     if (changed || cleared)
         mark_visual_changed_locked(handle);

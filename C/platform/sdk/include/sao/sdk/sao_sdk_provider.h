@@ -232,6 +232,12 @@ SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_overlay_set(const struct SaoSd
 SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_overlay_clear(const struct SaoSdkContext* ctx,
                                                                 sao_sdk_overlay_token_t overlay);
 
+// Clears the overlay bound to `surface_id_utf8` on this context, whether it was
+// registered through sao_sdk_overlay_set() or the ui-table set_overlay slot.
+// Returns SAO_SDK_ERR_NOT_FOUND when the context has no overlay on that surface.
+SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_overlay_clear_surface(
+    const struct SaoSdkContext* ctx, const char* surface_id_utf8);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

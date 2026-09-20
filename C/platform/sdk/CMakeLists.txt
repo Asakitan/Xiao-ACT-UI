@@ -10,6 +10,7 @@ set(SAO_PLATFORM_SDK_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_event_wire.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_hotkey_wire.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_gpu_hunt_wire.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_vt_wire.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_provider.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_net_provider.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_process_provider.cpp
@@ -40,6 +41,7 @@ target_link_libraries(sao_platform_sdk
         sao::ui
         sao::net
         sao::gpu_hunt
+        sao::rt_io
         nlohmann_json::nlohmann_json
 )
 

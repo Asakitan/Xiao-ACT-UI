@@ -3,6 +3,9 @@ SamplerState fieldSampler : register(s0);
 cbuffer Backdrop : register(b0) {
     float2 resolution; float time; float openness;
     float reducedMotion; float renderPass; float darkness; float themeDirection;
+    float4 menuRectUv;
+    float4 hostUv;
+    float menuVisibility; float childActivity; float fpsPressure; float highContrast;
 };
 
 float hash21(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
@@ -24,20 +27,38 @@ float frost(float2 p) {
 float band(float value, float width) { return 1.0 - smoothstep(0.0, width, abs(value)); }
 float angularDistance(float angle) { return abs(frac(angle / 6.2831853 + 0.5) - 0.5) * 6.2831853; }
 
-float themeFront(float2 uv) {
-    float column = floor(uv.x * 48.0);
-    float start = hash21(float2(column, 13.0)) * 0.24;
-    float finish = lerp(0.68, 1.0, hash21(float2(column, 37.0)));
+float themeHash(uint column, uint salt) {
+    uint value = column * 0x9e3779b9u ^ salt * 0x85ebca6bu;
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    return float(value & 0xffffu) / 65535.0;
+}
+float2 hostPosition(float2 uv) { return hostUv.xy + uv * hostUv.zw; }
+float themeFront(float2 sceneUv) {
+    uint column = uint(clamp(floor(sceneUv.x * 48.0), 0.0, 47.0));
+    float start = themeHash(column, 13u) * 0.24;
+    float finish = 0.68 + themeHash(column, 37u) * 0.32;
     float local = saturate((darkness - start) / (finish - start));
-    float travel = pow(local, lerp(1.10, 2.30, hash21(float2(column, 71.0))));
-    float drift = noise2(float2(column * 1.73, time * 0.65 + 63.0));
-    return lerp(-0.14, 1.14, travel) +
-        (drift - 0.5) * 0.045 * (4.0 * local * (1.0 - local));
+    float travel = pow(local, 1.10 + themeHash(column, 71u) * 1.20);
+    float drift = sin(time * 0.65 + themeHash(column, 63u) * 6.2831853);
+    return -0.14 + 1.28 * travel + drift * 0.0225 * (4.0 * local * (1.0 - local));
 }
 float themeDarkness(float2 uv) {
-    float front = themeFront(uv);
-    float aa = max(1.5 / max(1.0, resolution.y), 0.0015);
-    return 1.0 - smoothstep(front - aa, front + aa, uv.y);
+    float2 sceneUv = hostPosition(uv);
+    float front = themeFront(sceneUv);
+    float aa = max(1.5 * hostUv.w / max(1.0, resolution.y), 0.0005);
+    return 1.0 - smoothstep(front - aa, front + aa, sceneUv.y);
+}
+float menuQuiet(float2 uv) {
+    if (menuVisibility <= 0.0 || menuRectUv.z <= 0.0 || menuRectUv.w <= 0.0)
+        return 0.0;
+    float aspect = resolution.x / max(1.0, resolution.y);
+    float2 center = menuRectUv.xy + menuRectUv.zw * 0.5;
+    float feather = lerp(0.08, 0.11, saturate(childActivity));
+    float2 extent = max(menuRectUv.zw * 0.5 + float2(feather / aspect, feather), float2(0.001, 0.001));
+    float2 distance = (uv - center) / extent;
+    return exp(-1.35 * dot(distance, distance)) * saturate(menuVisibility);
 }
 
 float3 procedural(float2 uv, float t) {
@@ -45,16 +66,21 @@ float3 procedural(float2 uv, float t) {
     float2 p = (uv - 0.5) * float2(aspect, 1.0);
     float r = length(p), angle = atan2(p.y, p.x);
     float localDarkness = themeDarkness(uv);
-    const float3 white = lerp(float3(0.95, 0.95, 0.96), float3(0.70, 0.75, 0.80), localDarkness);
-    const float3 silver = lerp(float3(0.75, 0.76, 0.78), float3(0.35, 0.43, 0.50), localDarkness);
-    const float3 grey = lerp(float3(0.55, 0.56, 0.58), float3(0.19, 0.25, 0.32), localDarkness);
-    const float3 amber = lerp(float3(0.83, 0.66, 0.33), float3(0.67, 0.53, 0.28), localDarkness);
-    const float3 teal = lerp(float3(0.30, 0.72, 0.72), float3(0.24, 0.50, 0.55), localDarkness);
-    const float3 centerColor = lerp(float3(0.96, 0.96, 0.97), float3(0.12, 0.135, 0.155), localDarkness);
-    const float3 edgeColor = lerp(float3(0.80, 0.81, 0.83), float3(0.055, 0.065, 0.080), localDarkness);
+    const float3 white = lerp(float3(0.96, 0.96, 0.96), float3(0.76, 0.76, 0.76), localDarkness);
+    const float3 silver = lerp(float3(0.76, 0.76, 0.76), float3(0.43, 0.43, 0.43), localDarkness);
+    const float3 grey = lerp(float3(0.56, 0.56, 0.56), float3(0.25, 0.25, 0.25), localDarkness);
+    const float3 amber = silver;
+    const float3 teal = grey;
+    const float3 centerColor = lerp(float3(0.96, 0.96, 0.96), float3(0.135, 0.135, 0.135), localDarkness);
+    const float3 edgeColor = lerp(float3(0.81, 0.81, 0.81), float3(0.065, 0.065, 0.065), localDarkness);
     float3 color = lerp(centerColor, edgeColor, saturate(r));
+    if (highContrast > 0.5) return lerp(float3(1, 1, 1), float3(0, 0, 0), localDarkness);
+    const float quiet = menuQuiet(uv);
+    const float detail = (1.0 - quiet * 0.78) * (1.0 - smoothstep(0.25, 0.85, r) * 0.55) *
+        (1.0 - saturate(fpsPressure) * 0.65) * (1.0 - saturate(reducedMotion) * 0.5);
+    const float3 surface = color + exp(-r * r * 8.0) * lerp(0.06, 0.03, localDarkness);
     color += 0.03 * (frost(uv * 6.0 + float2(t * 0.03, -t * 0.02)) - 0.5);
-    color += lerp(float3(0.06, 0.06, 0.07), float3(0.025, 0.03, 0.04), localDarkness) * exp(-r * r * 8.0);
+    color += lerp(float3(0.06, 0.06, 0.06), float3(0.03, 0.03, 0.03), localDarkness) * exp(-r * r * 8.0);
     [unroll] for (int rayIndex = 0; rayIndex < 5; ++rayIndex) {
         float a = float(rayIndex) * 1.256637 + t * 0.05;
         float ray = band(angularDistance(angle - a), 0.10) * (1.0 - smoothstep(0.04, 0.55, r));
@@ -116,16 +142,17 @@ float3 procedural(float2 uv, float t) {
     float sweep = smoothstep(0.0, 0.08, darkness) * (1.0 - smoothstep(0.92, 1.0, darkness)) *
         saturate(abs(themeDirection)) * (1.0 - saturate(reducedMotion));
     if (sweep > 0.0) {
-        float column = floor(uv.x * 48.0);
+        float2 sceneUv = hostPosition(uv);
+        float column = clamp(floor(sceneUv.x * 48.0), 0.0, 47.0);
         float columnSeed = noise2(float2(column * 3.1, t * 0.55 + 29.0));
         float detailSeed = noise2(float2(column * 2.3 + 11.0, t * 0.45 + 7.0));
         float speedSeed = hash21(float2(column, 91.0));
         float lengthSeed = hash21(float2(column, 121.0));
         float widthSeed = noise2(float2(column * 4.7 + 5.0, t * 0.28 + 17.0));
-        float distance = uv.y - themeFront(uv);
+        float distance = sceneUv.y - themeFront(sceneUv);
         float trailDistance = -distance * themeDirection;
         float laneWidth = lerp(0.10, 0.32, detailSeed);
-        float lane = 1.0 - smoothstep(laneWidth * 0.35, laneWidth, abs(frac(uv.x * 48.0) - 0.5));
+        float lane = 1.0 - smoothstep(laneWidth * 0.35, laneWidth, abs(frac(sceneUv.x * 48.0) - 0.5));
         float headWidth = max(1.0 / max(1.0, resolution.y), 0.0022) * lerp(1.0, 3.4, widthSeed);
         float head = band(distance, headWidth);
         float tailLength = lerp(0.035, 0.36, lengthSeed * lengthSeed) * lerp(0.85, 1.15, columnSeed);
@@ -134,21 +161,21 @@ float3 procedural(float2 uv, float t) {
         float rate = lerp(0.7, 1.6, hash21(float2(column, 53.0)));
         float travel = t * baseSpeed + baseSpeed * 0.30 / rate *
             sin(t * rate + hash21(float2(column, 17.0)) * 6.2831853);
-        float packetY = uv.y * lerp(56.0, 116.0, hash21(float2(column, 43.0))) - themeDirection * travel;
+        float packetY = sceneUv.y * lerp(56.0, 116.0, hash21(float2(column, 43.0))) - themeDirection * travel;
         float packetSeed = hash21(float2(floor(packetY), column));
         float packetLength = hash21(float2(floor(packetY), column + 41.0));
         float packetEnd = lerp(0.20, 0.92, packetLength * 0.8 + detailSeed * 0.2);
         float packet = smoothstep(0.18, 0.38, packetSeed + (columnSeed - 0.5) * 0.3) *
             smoothstep(0.05, 0.16, frac(packetY)) *
             (1.0 - smoothstep(packetEnd - 0.16, packetEnd, frac(packetY)));
-        float3 streamColor = lerp(float3(0.36, 0.66, 0.68), float3(0.88, 0.94, 0.98), head);
+        float3 streamColor = lerp(float3(0.60, 0.60, 0.60), float3(0.94, 0.94, 0.94), head);
         float filament = step(0.74, lengthSeed) * tail *
-            (1.0 - smoothstep(laneWidth * 0.16, laneWidth * 0.4, abs(frac(uv.x * 48.0) - 0.5)));
+            (1.0 - smoothstep(laneWidth * 0.16, laneWidth * 0.4, abs(frac(sceneUv.x * 48.0) - 0.5)));
         color = lerp(color, streamColor,
             saturate(sweep * (lane * (head * 0.75 + tail * packet * 0.48) + filament * 0.18)));
     }
     color *= 0.975 + 0.025 * sin(uv.y * resolution.y * 1.5);
-    return saturate(color * clamp(1.0 - r * 0.30, 0.72, 1.0));
+    return saturate(lerp(surface, color, detail) * clamp(1.0 - r * 0.18, 0.82, 1.0));
 }
 
 float3 lensSample(float2 uv, float split) {
@@ -159,6 +186,11 @@ float3 lensSample(float2 uv, float split) {
 float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     float t = reducedMotion > 0.5 ? 0.0 : time;
     if (renderPass < 0.5) return float4(procedural(uv, t), 1.0);
+    if (highContrast > 0.5) {
+        float alpha = saturate(openness);
+        return float4(lerp(float3(1, 1, 1), float3(0, 0, 0), themeDarkness(uv)) * alpha, alpha);
+    }
+    float quiet = menuQuiet(uv);
     float2 p = uv - 0.5;
     float r2 = dot(p, p), r = sqrt(r2);
     float edge = 1.0 - saturate(openness);
@@ -167,6 +199,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     float2 direction = p / max(r, 0.001);
     float spread = (0.0008 + r2 * 0.003) * (1.0 + edge);
     float split = 0.0015 + r2 * 0.004;
+    spread *= 1.0 - quiet * 0.85;
+    split *= 1.0 - quiet;
     uint fieldWidth, fieldHeight;
     fieldTexture.GetDimensions(fieldWidth, fieldHeight);
     float2 sampleMargin = min(float2(0.49, 0.49),
@@ -175,6 +209,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     float2 edgeUv = lerp(sampleMargin, 1.0 - sampleMargin, uv);
     float2 edgeWeight = smoothstep(float2(0.6, 0.6), float2(1.0, 1.0), abs(p) * 2.0);
     float2 warped = lerp(uv + p * strength * r2 + drift, edgeUv, edgeWeight);
+    warped = lerp(warped, clamp(uv, sampleMargin, 1.0 - sampleMargin), quiet * 0.6);
     float3 color = lensSample(warped - direction * spread * 2.0, split) * 0.10;
     color += lensSample(warped - direction * spread, split) * 0.20;
     color += lensSample(warped, split) * 0.36;
@@ -183,8 +218,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     color *= (1.0 - (0.34 + edge * 0.18)) * (1.0 - smoothstep(0.25, 0.75, r) * 0.12);
     color *= 0.985 + 0.015 * sin(uv.y * 980.0);
     float ring = band(r - lerp(0.18, 0.72, saturate(openness)), 0.0025);
-    color += lerp(float3(0.30, 0.72, 0.72), float3(0.33, 0.48, 0.60),
-                  themeDarkness(saturate(warped))) * ring * 0.06;
+    color += lerp(0.58, 0.42, themeDarkness(saturate(warped))) * ring * 0.035 *
+        (1.0 - quiet) * (1.0 - saturate(fpsPressure));
     float alpha = saturate(openness);
     return float4(saturate(color) * alpha, alpha);
 }

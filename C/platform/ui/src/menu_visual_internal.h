@@ -50,6 +50,16 @@ struct ChildMenuRowSnapshot {
     float hover_t{};
 };
 
+struct ChildTransitionState {
+    float start_anchor_slot{-1.0F};
+    float start_extension_t{};
+    float start_split_t{};
+    int32_t join_ms{};
+    int32_t move_ms{};
+    int32_t finish_ms{};
+    bool first_open{};
+};
+
 struct ChildMenuSnapshot {
     bool exists{};
     SaoUiMenuPhase phase{SAO_UI_MENU_PHASE_CLOSED};
@@ -62,6 +72,20 @@ struct ChildMenuSnapshot {
     int32_t child_hover_idx{-1};
     int32_t child_slide_elapsed_ms{};
     float child_fade_t{1.0F};
+    float child_anchor_slot{-1.0F};
+    float child_extension_t{};
+    float child_split_t{};
+    ChildTransitionState child_motion{};
+    SaoUiMenuPhase resume_phase{SAO_UI_MENU_PHASE_OPEN};
+    int32_t resume_phase_elapsed_ms{};
+    float transition_eased_t{};
+    float close_start_t{};
+    std::vector<float> close_start_rows;
+    int32_t root_transition_ms{};
+    bool root_reversing{};
+    float center_diffusion_t{};
+    float close_suction_t{};
+    float backdrop_lens_t{};
     uint64_t visual_revision{};
     std::vector<ChildMenuRowSnapshot> rows;
 };
@@ -75,6 +99,10 @@ struct Snapshot {
     int32_t child_hover_idx{-1};
     SaoUiMenuPhase phase{SAO_UI_MENU_PHASE_CLOSED};
     float fade_t{1.0F};
+    // Fractional root slot and resolved [0, 1] width/separation, not animation clocks.
+    float child_anchor_slot{-1.0F};
+    float child_extension_t{};
+    float child_split_t{};
     std::array<char, kNameCapacity> active_root_name_utf8{};
     std::array<char, kNameCapacity> displayed_parent_name_utf8{};
     std::vector<RootRowSnapshot> roots;

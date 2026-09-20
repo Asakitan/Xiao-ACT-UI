@@ -38,7 +38,9 @@
 // for the guard alone. Minor 7 added sao_ui_compositor_host_dpi().
 // Minor 14 adds asynchronous compositor file selection.
 // Minor 15 adds reusable Link Start outro; minor 16 adds tracked DC mutations.
-#define SAO_UI_ABI_VERSION_MINOR 16u
+// Minor 17 adds sao_ui_panel_find_widget (spec-node id → live widget handle)
+// plus the append-only 'canvas' spec leaf wired to the scriptable canvas.
+#define SAO_UI_ABI_VERSION_MINOR 17u
 #define SAO_UI_ABI_VERSION ((SAO_UI_ABI_VERSION_MAJOR << 16) | SAO_UI_ABI_VERSION_MINOR)
 
 #ifdef __cplusplus

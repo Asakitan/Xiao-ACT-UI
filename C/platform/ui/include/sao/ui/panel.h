@@ -135,6 +135,14 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
                                                                const uint8_t* props_json_utf8,
                                                                size_t props_len);
 
+// Minor 17: resolve a spec node id to its current widget handle.  The
+// returned handle is borrowed — it stays valid only until the next
+// set_spec / body-model rebuild destroys the widget.  
+// SAO_STATUS_ERR_NOT_FOUND when no published node carries that id.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_panel_find_widget(sao_ui_panel_handle_t handle,
+                                                             const char* widget_id_utf8,
+                                                             sao_ui_widget_handle_t* out_widget);
+
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_panel_set_visible(sao_ui_panel_handle_t handle,
                                                              bool visible);
 

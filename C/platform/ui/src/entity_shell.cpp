@@ -10,6 +10,8 @@
 #include "layer_order_internal.h"
 #include "layer_paint_internal.h"
 #include "menu_visual_internal.h"
+#include "menu_scene_internal.h"
+#include "panel_motion_internal.h"
 #include "panel_theme_internal.h"
 #include "widget_paint_internal.h"
 
@@ -119,9 +121,7 @@ constexpr int32_t kWheelDeltaPerNotch = 120;
 static_assert(kChildPhysicalCapacity == 8);
 
 bool root_labels_visible(const sao::ui::menu_visual::Snapshot& snapshot) noexcept {
-    if (snapshot.child_switching)
-        return false;
-    return snapshot.displayed_parent_idx < 0 || snapshot.rows.empty() || snapshot.fade_t > 0.001F;
+    return snapshot.displayed_parent_idx < 0 || snapshot.rows.empty() || snapshot.child_extension_t < 0.999F;
 }
 
 int32_t root_visual_center(const sao::ui::menu_visual::Snapshot&, size_t slot) noexcept {
@@ -156,11 +156,9 @@ float root_button_focus(const sao::ui::menu_visual::Snapshot& snapshot, size_t s
 }
 
 int32_t root_label_slide(const sao::ui::menu_visual::Snapshot& snapshot) noexcept {
-    if (snapshot.child_switching)
-        return kRootLabelWidth;
     if (snapshot.displayed_parent_idx < 0 || snapshot.rows.empty())
         return 0;
-    return static_cast<int32_t>(std::lround(child_stage(snapshot, 0.1875F, 0.5F) * kRootLabelWidth));
+    return static_cast<int32_t>(std::lround(std::clamp(snapshot.child_extension_t, 0.0F, 1.0F) * kRootLabelWidth));
 }
 
 int32_t root_entry_offset(const sao::ui::menu_visual::Snapshot& snapshot, size_t slot,
@@ -188,7 +186,8 @@ int32_t child_column_top(const sao::ui::menu_visual::Snapshot& snapshot, int32_t
 
 SaoUiLayerInputRect child_row_input_rect(const sao::ui::menu_visual::Snapshot& snapshot,
                                        int32_t slot, int32_t count) noexcept {
-    const bool expanded = snapshot.phase == SAO_UI_MENU_PHASE_CHILD_OPEN && snapshot.fade_t <= 0.001F;
+    const bool expanded = snapshot.phase == SAO_UI_MENU_PHASE_CHILD_OPEN &&
+        snapshot.child_extension_t >= 0.999F && snapshot.child_split_t >= 0.999F;
     return {entity_child_row_x(), child_column_top(snapshot, count) + slot * kChildRowStride,
             expanded ? kChildTargetWidth : 0, kChildRowHeight};
 }
@@ -1821,7 +1820,7 @@ std::optional<sao::ui::classic::IconId> record_semantic_icon(std::string_view to
 }
 
 sao_status_t record_nervegear_paint(sao_ui_paint_ctx_handle_t context, SaoUiNerveGearState state,
-                                    bool enabled) noexcept {
+                                    bool enabled, float hover_t, float press_t) noexcept {
     sao_status_t status = SAO_STATUS_OK;
     const bool hover = enabled && state == SAO_UI_NG_STATE_HOVER;
     const bool pressed = enabled && (state == SAO_UI_NG_STATE_PRESSED || state == SAO_UI_NG_STATE_DRAGGING);
@@ -1846,13 +1845,11 @@ sao_status_t record_nervegear_paint(sao_ui_paint_ctx_handle_t context, SaoUiNerv
         : dark ? lerp_rgb(black, white, 0.10F, 255) : lerp_rgb(white, black, 0.025F, 255);
     Color glyph = high_contrast ? panel_color(SAO_UI_TOKEN_APP_TEXT)
         : dark ? lerp_rgb(white, black, 0.04F, 255) : lerp_rgb(black, white, 0.16F, 255);
-    if (pressed) {
-        if (high_contrast)
-            std::swap(face, glyph);
-        else
-            face = lerp_rgb(face, glyph, 0.12F, 255);
-    } else if (hover && !high_contrast) {
-        face = lerp_rgb(face, dark ? white : black, dark ? 0.045F : 0.020F, 255);
+    if (high_contrast && pressed)
+        std::swap(face, glyph);
+    else if (!high_contrast) {
+        face = lerp_rgb(face, dark ? white : black, hover_t * (dark ? 0.045F : 0.020F), 255);
+        face = lerp_rgb(face, glyph, press_t * 0.12F, 255);
     }
     if (!enabled)
         glyph = high_contrast ? panel_color(SAO_UI_TOKEN_DISABLED_FG) : lerp_rgb(face, glyph, 0.4F, 255);
@@ -1868,8 +1865,14 @@ sao_status_t record_nervegear_paint(sao_ui_paint_ctx_handle_t context, SaoUiNerv
             6.0F + border, 6.0F + border, 60.0F - border * 2.0F, 60.0F - border * 2.0F,
             paint_argb(face)));
 
-    const float icon_scale = pressed ? 0.94F : hover ? 1.04F : 1.0F;
-    const float offset = pressed ? 1.0F : hover ? -0.5F : 0.0F;
+    if (!high_contrast && enabled) {
+        record_arc(context, &status, 36.0F, 36.0F, 27.5F, 3.65F, 1.9F, 1.0F,
+                   fade_color(white, (dark ? 0.16F : 0.72F) * (1.0F - 0.65F * press_t)));
+        record_arc(context, &status, 36.0F, 36.0F, 27.5F, 0.45F, 1.9F, 1.0F,
+                   fade_color(black, 0.12F + 0.12F * press_t));
+    }
+    const float icon_scale = 1.0F + 0.04F * hover_t * (1.0F - press_t) - 0.06F * press_t;
+    const float offset = press_t - 0.5F * hover_t * (1.0F - press_t);
     const auto x = [icon_scale](float value) { return 36.0F + (value - 36.0F) * icon_scale; };
     const auto y = [icon_scale, offset](float value) { return 36.0F + (value - 36.0F) * icon_scale + offset; };
     const auto icon_rect = [&](float left, float top, float width, float height, float radius, Color color) {
@@ -1932,19 +1935,12 @@ void record_menu_child_rows(sao_ui_paint_ctx_handle_t context, sao_status_t* sta
         static_cast<int32_t>(std::min(available, static_cast<size_t>(kChildPhysicalCapacity)));
     if (count <= 0 || *status != SAO_STATUS_OK)
         return;
-    const float extension = snapshot.child_switching ? 1.0F : child_stage(snapshot, 0.1875F, 0.5F);
-    const float split = snapshot.child_switching
-        ? child_stage(snapshot, snapshot.child_joining ? 0.0F : 0.4375F, 1.0F)
-        : child_stage(snapshot, 0.625F, 1.0F);
+    const float extension = std::clamp(snapshot.child_extension_t, 0.0F, 1.0F);
+    const float split = std::clamp(snapshot.child_split_t, 0.0F, 1.0F);
     const int32_t target_anchor = root_visual_center(snapshot, static_cast<size_t>(std::max(0, snapshot.displayed_parent_idx))) - kChildRowHeight / 2;
-    const int32_t source_anchor = snapshot.child_source_idx >= 0
-        ? root_visual_center(snapshot, static_cast<size_t>(snapshot.child_source_idx)) - kChildRowHeight / 2
-        : target_anchor;
-    const float bridge_t = std::clamp((1.0F - snapshot.fade_t) / 0.4375F, 0.0F, 1.0F);
-    const float bridge_motion = bridge_t * bridge_t * bridge_t * (bridge_t * (bridge_t * 6.0F - 15.0F) + 10.0F);
-    const int32_t anchor_y = snapshot.child_switching && !snapshot.child_joining
-        ? static_cast<int32_t>(std::lround(std::lerp(static_cast<float>(source_anchor), static_cast<float>(target_anchor),
-            bridge_motion))) : target_anchor;
+    const int32_t anchor_y = snapshot.child_anchor_slot >= 0.0F
+        ? static_cast<int32_t>(std::lround(kMenuPad + kMenuSlot * 0.5F +
+            snapshot.child_anchor_slot * kMenuSlot - kChildRowHeight * 0.5F)) : target_anchor;
     const int32_t target_top = child_column_top(snapshot, count);
 #ifndef NDEBUG
     static thread_local int last_stage = -1;
@@ -2064,7 +2060,13 @@ void record_menu_child_rows(sao_ui_paint_ctx_handle_t context, sao_status_t* sta
                         fade_color(panel_color(SAO_UI_TOKEN_WHITE), opacity * (pressed ? 0.18F : 0.62F)));
             record_line(context, status, left + 8.0F, visual_y + visual_height - 1.5F,
                         left + row_width - 8.0F, visual_y + visual_height - 1.5F, 1.0F,
-                        fade_color(panel_color(SAO_UI_TOKEN_BLACK), opacity * 0.12F));
+                        fade_color(panel_color(SAO_UI_TOKEN_BLACK), opacity * (pressed ? 0.22F : 0.12F)));
+            if (!snapshot.reduced_motion && !snapshot.fps_pressure && !pressed && hover > 0.001F && hover < 0.999F) {
+                const float glint_x = left + 10.0F + hover * (row_width - 52.0F);
+                record_line(context, status, glint_x, visual_y + 2.5F,
+                            glint_x + 28.0F, visual_y + 2.5F, 1.0F,
+                            fade_color(accent, std::sin(hover * 3.14159265F) * 0.36F));
+            }
             if (*status == SAO_STATUS_OK)
                 record_status(status, sao_ui_paint_ctx_fill_rounded_rect(
                     context, left + 7.0F, visual_y + 7.0F, 28.0F, 27.0F, 5.0F,
@@ -2261,8 +2263,11 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
             record_ellipse(context, status, cx + radius - 3.4F, cy + 0.8F, 1.3F, indicator);
         }
         const auto classic = record_root_icon(root);
-        record_classic_icon(context, status, classic, static_cast<float>(center_x - 12),
-                            static_cast<float>(center_y - 12), 24.0F, icon);
+        const float icon_focus = snapshot.reduced_motion || snapshot.fps_pressure || high_contrast ? 0.0F : hover;
+        const float icon_size = 24.0F * (pressed ? 0.96F : 1.0F + 0.035F * icon_focus);
+        const float icon_y = static_cast<float>(center_y) - icon_size * 0.5F + (pressed ? 0.8F : -0.6F * icon_focus);
+        record_classic_icon(context, status, classic, static_cast<float>(center_x) - icon_size * 0.5F,
+                    icon_y, icon_size, icon);
         if (!classic.has_value())
             record_text_clipped(context, status, static_cast<float>(center_x - 11),
                                 static_cast<float>(center_y - 9), 22.0F, 18.0F, root.icon, 14.0F,
@@ -2272,10 +2277,6 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
             const float label_x = static_cast<float>(label_rect.x + root_entry_offset(snapshot, slot, 18) - root_label_slide(snapshot));
             const float label_y = static_cast<float>(label_rect.y);
             const float label_width = static_cast<float>(label_rect.width);
-            if (*status != SAO_STATUS_OK)
-                return;
-            record_status(status, sao_ui_paint_ctx_push_clip(context, static_cast<float>(label_rect.x), static_cast<float>(label_rect.y),
-                static_cast<float>(label_rect.width), static_cast<float>(label_rect.height)));
             if (*status != SAO_STATUS_OK)
                 return;
             const Color label_fill =
@@ -2293,10 +2294,15 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
                 high_contrast ? (selected || hovered ? accent : rule)
                               : (selected || hovered ? fade_color(accent, 0.72)
                                                      : fade_color(rule, 0.82));
-            record_line(context, status,
-                        static_cast<float>(center_x) + diameter * 0.5F,
-                        static_cast<float>(center_y), label_x - 4.0F,
-                        static_cast<float>(center_y), 1.0F, connector);
+            const float connector_start = static_cast<float>(center_x) + diameter * 0.5F;
+            if (label_x - 4.0F > connector_start)
+                record_line(context, status, connector_start,
+                            static_cast<float>(center_y), label_x - 4.0F,
+                            static_cast<float>(center_y), 1.0F, connector);
+            record_status(status, sao_ui_paint_ctx_push_clip(context, static_cast<float>(label_rect.x), static_cast<float>(label_rect.y),
+                static_cast<float>(label_rect.width), static_cast<float>(label_rect.height)));
+            if (*status != SAO_STATUS_OK)
+                return;
             if (*status == SAO_STATUS_OK)
                 record_status(status, sao_ui_paint_ctx_fill_rounded_rect(
                                           context, label_x, label_y, label_width,
@@ -2307,6 +2313,20 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
                                           context, label_x, label_y, label_width,
                                           static_cast<float>(kRootLabelHeight), 8.0F, selected ? 1.4F : 1.0F,
                                           paint_argb(label_edge)));
+            if (!high_contrast && !disabled) {
+                record_line(context, status, label_x + 10.0F, label_y + 1.5F,
+                            label_x + label_width - 10.0F, label_y + 1.5F, 1.0F,
+                            fade_color(panel_color(SAO_UI_TOKEN_WHITE), pressed ? 0.18F : 0.54F));
+                record_line(context, status, label_x + 10.0F, label_y + kRootLabelHeight - 1.5F,
+                            label_x + label_width - 10.0F, label_y + kRootLabelHeight - 1.5F, 1.0F,
+                            fade_color(panel_color(SAO_UI_TOKEN_BLACK), pressed ? 0.20F : 0.10F));
+                if (!snapshot.reduced_motion && !snapshot.fps_pressure && !pressed && hover > 0.001F && hover < 0.999F) {
+                    const float glint_x = label_x + 10.0F + hover * (label_width - 54.0F);
+                    record_line(context, status, glint_x, label_y + 2.5F,
+                                glint_x + 30.0F, label_y + 2.5F, 1.0F,
+                                fade_color(accent, std::sin(hover * 3.14159265F) * 0.36F));
+                }
+            }
             const Color label_ink = disabled ? disabled_fg : high_contrast && selected ? active_icon : text;
             const Color number_ink = disabled ? disabled_fg : high_contrast && selected ? active_icon : selected || hovered ? accent : secondary;
             const Color number_fill = high_contrast ? label_fill : lerp_rgb(paper, selected ? accent : text, selected ? 0.13F : 0.055F, 255);
@@ -2323,10 +2343,10 @@ void record_menu_paint(sao_ui_paint_ctx_handle_t context, sao_status_t* status,
             record_text_clipped(context, status, number_x + 8.0F, label_y + 16.0F,
                                 20.0F, 16.0F, ordinal.data(), 11.0F, number_ink);
             record_text_clipped(
-                context, status, label_x + 16.0F, label_y + 5.0F, label_width - 78.0F, 24.0F,
+                context, status, label_x + 16.0F, label_y + 4.0F, label_width - 78.0F, 23.0F,
                 root.name, 15.0F, label_ink, true);
-            record_text_clipped(context, status, label_x + 16.0F, label_y + 28.0F,
-                label_width - 78.0F, 12.0F, root.id, 8.0F,
+            record_text_clipped(context, status, label_x + 16.0F, label_y + 27.0F,
+                label_width - 78.0F, 14.0F, root.id, 9.5F,
                 disabled ? disabled_fg : high_contrast && selected ? active_icon : secondary, true);
             if (!root.children.empty()) {
                 record_line(context, status, label_x + label_width - 10.0F, label_y + 19.0F,
@@ -2383,6 +2403,8 @@ struct EntityLayerInputBinding {
     bool has_cursor{};
 };
 
+static std::atomic_uint64_t g_entity_motion_scope{1};
+
 struct sao_ui_entity_shell_s {
     sao_ui_overlay_host_handle_t host{};
     sao_ui_compositor_handle_t compositor{};
@@ -2404,6 +2426,8 @@ struct sao_ui_entity_shell_s {
     int32_t nervegear_y{};
     int32_t nervegear_press_x{}, nervegear_press_y{}, nervegear_start_x{}, nervegear_start_y{};
     bool nervegear_pointer_down{}, nervegear_dragging{}, nervegear_custom_position{};
+    float nervegear_hover_t{};
+    float nervegear_press_t{};
     bool menu_close_pressed{};
     int32_t menu_x{};
     int32_t menu_rest_x{};
@@ -2416,6 +2440,7 @@ struct sao_ui_entity_shell_s {
     int32_t menu_pressed_child_index{-1};
     std::vector<OwnedRootItem> roots;
     std::string active_root_id;
+    std::array<char, sao::ui::menu_visual::kNameCapacity> displayed_child_parent_id{};
     size_t first_visible_root_index{};
     size_t first_visible_child_index{};
     int32_t displayed_child_parent_index{-1};
@@ -2448,6 +2473,7 @@ struct sao_ui_entity_shell_s {
     uint32_t callback_depth{};
     uint64_t frame_count{};
     uint64_t visual_time_ms{};
+    uint64_t motion_scope_token{g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed)};
     uint64_t action_count{};
     bool reduced_motion{};
     bool fps_pressure{};
@@ -2517,7 +2543,8 @@ void update_theme_transition_locked(sao_ui_entity_shell_s* shell) {
 }
 
 sao_status_t record_entity_theme_layer(const sao_ui_entity_shell_s* shell, uint32_t width,
-    uint32_t height, const std::function<void(sao_ui_paint_ctx_handle_t, sao_status_t*)>& paint,
+    uint32_t height, int32_t layer_x, int32_t layer_y,
+    const std::function<void(sao_ui_paint_ctx_handle_t, sao_status_t*)>& paint,
     std::shared_ptr<const sao::ui::detail::PaintDisplayList>* out) noexcept {
     using namespace sao::ui::detail;
     const auto record = [&](const PanelResolvedTheme& theme,
@@ -2534,8 +2561,16 @@ sao_status_t record_entity_theme_layer(const sao_ui_entity_shell_s* shell, uint3
     auto status = record(shell->theme_light, &light);
     if (status == SAO_STATUS_OK)
         status = record(shell->theme_dark, &dark);
-    if (status == SAO_STATUS_OK)
-        status = compose_theme_paint(std::move(light), std::move(dark), shell->theme_progress, out);
+    if (status == SAO_STATUS_OK) {
+        const ThemePaintFrame frame{
+            static_cast<float>(layer_x), static_cast<float>(layer_y),
+            static_cast<float>(shell->width), static_cast<float>(shell->height),
+            static_cast<float>(shell->visual_time_ms) / 1000.0F,
+            shell->theme_target > shell->theme_progress ? 1.0F :
+                shell->theme_target < shell->theme_progress ? -1.0F : 0.0F,
+            shell->reduced_motion, shell->fps_pressure, panel_theme_high_contrast()};
+        status = compose_theme_paint(std::move(light), std::move(dark), shell->theme_progress, out, frame);
+    }
     return status;
 }
 
@@ -2562,6 +2597,14 @@ uint64_t compute_menu_raster_signature(const sao_ui_entity_shell_s* shell,
     signature_mix(&signature, theme_generation);
     signature_mix_float(&signature, shell->theme_progress);
     signature_mix(&signature, shell->roots.size());
+    if (shell->theme_progress > 0.0F && shell->theme_progress < 1.0F) {
+        signature_mix(&signature, static_cast<uint64_t>(shell->menu_x));
+        signature_mix(&signature, static_cast<uint64_t>(shell->menu_y));
+        signature_mix(&signature, static_cast<uint64_t>(shell->width));
+        signature_mix(&signature, static_cast<uint64_t>(shell->height));
+        signature_mix(&signature, shell->visual_time_ms);
+        signature_mix(&signature, shell->fps_pressure ? 1U : 0U);
+    }
     for (const auto& root : shell->roots) {
         signature_mix_string(&signature, root.id);
         signature_mix_string(&signature, root.name);
@@ -2588,6 +2631,9 @@ uint64_t compute_menu_raster_signature(const sao_ui_entity_shell_s* shell,
     signature_mix(&signature, static_cast<uint64_t>(snapshot.displayed_parent_idx + 1));
     signature_mix(&signature, static_cast<uint64_t>(snapshot.child_hover_idx + 1));
     signature_mix_float(&signature, snapshot.fade_t);
+    signature_mix_float(&signature, snapshot.child_anchor_slot);
+    signature_mix_float(&signature, snapshot.child_extension_t);
+    signature_mix_float(&signature, snapshot.child_split_t);
     signature_mix_float(&signature, snapshot.transition_eased_t);
     signature_mix_float(&signature, snapshot.center_diffusion_t);
     signature_mix_float(&signature, snapshot.close_suction_t);
@@ -2636,6 +2682,16 @@ uint64_t compute_nervegear_raster_signature(const sao_ui_entity_shell_s* shell,
     signature_mix_float(&signature, shell->theme_progress);
     signature_mix(&signature, static_cast<uint64_t>(state));
     signature_mix(&signature, shell->nervgear_mode ? 1U : 0U);
+    signature_mix_float(&signature, shell->nervegear_hover_t);
+    signature_mix_float(&signature, shell->nervegear_press_t);
+    if (shell->theme_progress > 0.0F && shell->theme_progress < 1.0F) {
+        signature_mix(&signature, static_cast<uint64_t>(shell->nervegear_x));
+        signature_mix(&signature, static_cast<uint64_t>(shell->nervegear_y));
+        signature_mix(&signature, static_cast<uint64_t>(shell->width));
+        signature_mix(&signature, static_cast<uint64_t>(shell->height));
+        signature_mix(&signature, shell->visual_time_ms);
+        signature_mix(&signature, shell->fps_pressure ? 1U : 0U);
+    }
     return signature;
 }
 
@@ -2918,18 +2974,22 @@ sao_status_t clear_child_interaction_locked(sao_ui_entity_shell_s* shell) {
 
 sao_status_t sync_child_viewport_locked(sao_ui_entity_shell_s* shell,
                                         const sao::ui::menu_visual::Snapshot& snapshot) {
-    const bool child_visible = (is_child_phase(snapshot.phase) || snapshot.phase == SAO_UI_MENU_PHASE_CLOSING) &&
+    const bool child_visible = snapshot.phase != SAO_UI_MENU_PHASE_CLOSED &&
                                snapshot.displayed_parent_idx >= 0 && !snapshot.rows.empty();
     const int32_t next_parent = child_visible ? snapshot.displayed_parent_idx : -1;
-    const bool parent_changed = shell->displayed_child_parent_index != next_parent;
+    const auto next_parent_id = child_visible ? snapshot.displayed_parent_name_utf8
+        : std::array<char, sao::ui::menu_visual::kNameCapacity>{};
+    const bool parent_changed = shell->displayed_child_parent_id != next_parent_id;
     const size_t next_first = parent_changed
                                   ? 0U
                                   : std::min(shell->first_visible_child_index,
                                              max_first_visible_child_index(snapshot.rows.size()));
-    if (!parent_changed && next_first == shell->first_visible_child_index)
+    if (!parent_changed && next_first == shell->first_visible_child_index &&
+        shell->displayed_child_parent_index == next_parent)
         return SAO_STATUS_OK;
 
     shell->displayed_child_parent_index = next_parent;
+    shell->displayed_child_parent_id = next_parent_id;
     shell->first_visible_child_index = next_first;
     shell->visual_dirty = true;
     invalidate_menu_raster_locked(shell);
@@ -2975,6 +3035,7 @@ sao_status_t detach_and_destroy_layer(sao_ui_layer_handle_t* layer,
 
 sao_status_t destroy_members(sao_ui_entity_shell_s* shell,
                              bool force_construction_cleanup = false) {
+    sao::ui::detail::clear_menu_scene(shell->compositor, shell);
     shell->suppress_layer_input_callbacks.store(true, std::memory_order_release);
     sao_status_t status = detach_and_destroy_layer(&shell->menu_layer, force_construction_cleanup);
     status = first_failure(
@@ -3046,21 +3107,35 @@ void SAO_UI_CALL deferred_entity_destroy(void* user_data) {
 
 sao_status_t set_menu_visibility_locked(sao_ui_entity_shell_s* shell, bool visible) {
     const bool changed = shell->menu_visible != visible;
+    SaoUiMenuPhase previous_phase{};
+    (void)sao_ui_menu_get_phase(shell->menu, &previous_phase);
+    const bool resuming = visible && previous_phase == SAO_UI_MENU_PHASE_CLOSING;
     sao_status_t status = visible ? sao_ui_menu_show(shell->menu, shell->menu_rest_x + kMenuColumnCenter,
                                                      shell->menu_y + kMenuPad)
                                   : sao_ui_menu_hide(shell->menu);
     if (status != SAO_STATUS_OK)
         return status;
     shell->menu_visible = visible;
+    if (changed)
+        shell->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
 #ifndef NDEBUG
     if (changed) std::fprintf(stderr, "ENTITY_MENU_VISIBLE=%d\n", visible ? 1 : 0);
 #endif
     shell->visual_dirty = shell->visual_dirty || changed;
     if (changed)
         invalidate_menu_raster_locked(shell);
-    if (visible && changed) {
+    if (visible && changed && !resuming) {
         shell->first_visible_child_index = 0;
         shell->displayed_child_parent_index = -1;
+        shell->displayed_child_parent_id.fill('\0');
+    }
+    if (resuming) {
+        sao::ui::menu_visual::Snapshot resumed{};
+        if (sao::ui::menu_visual::get_snapshot(shell->menu, &resumed) == SAO_STATUS_OK) {
+            const int32_t logical = physical_to_logical_root_locked(shell, resumed.active_root_idx);
+            if (logical >= 0)
+                shell->active_root_id = shell->roots[static_cast<size_t>(logical)].id;
+        }
     }
     if (!visible) {
         shell->active_root_id.clear();
@@ -3250,9 +3325,12 @@ sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
         if (update_nervegear) {
             status = record_entity_theme_layer(
                 shell, SAO_UI_NERVEGEAR_SIZE, SAO_UI_NERVEGEAR_SIZE,
-                [state, enabled = shell->nervgear_mode](sao_ui_paint_ctx_handle_t context,
+                shell->nervegear_x, shell->nervegear_y,
+                [state, enabled = shell->nervgear_mode,
+                 hover = shell->nervegear_hover_t, press = shell->nervegear_press_t](sao_ui_paint_ctx_handle_t context,
                                                         sao_status_t* paint_status) {
-                    record_status(paint_status, record_nervegear_paint(context, state, enabled));
+                    record_status(paint_status, record_nervegear_paint(context, state, enabled,
+                        hover, press));
                 },
                 &next_nervegear_paint);
         }
@@ -3261,6 +3339,7 @@ sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
                 status,
                 record_entity_theme_layer(
                     shell, kMenuWidth, kMenuHeight,
+                    shell->menu_x, shell->menu_y,
                     [pressed = shell->menu_pressed_index,
                      pressed_child = shell->menu_pressed_child_index, snapshot = menu_snapshot,
                      first_child = shell->first_visible_child_index, roots = shell->roots,
@@ -3315,6 +3394,25 @@ sao_status_t raster_and_upload_locked(sao_ui_entity_shell_s* shell) {
     return SAO_STATUS_OK;
 }
 
+void publish_menu_scene_locked(sao_ui_entity_shell_s* shell) {
+    sao::ui::menu_visual::Snapshot snapshot{};
+    if (sao::ui::menu_visual::get_snapshot(shell->menu, &snapshot) != SAO_STATUS_OK) {
+        sao::ui::detail::clear_menu_scene(shell->compositor, shell);
+        return;
+    }
+    const bool active = shell->online && shell->overlay_visible && snapshot.phase != SAO_UI_MENU_PHASE_CLOSED;
+    sao::ui::detail::publish_menu_scene({shell->compositor, shell,
+        static_cast<float>(shell->menu_x), static_cast<float>(shell->menu_y),
+        static_cast<float>(kMenuWidth), static_cast<float>(kMenuHeight),
+        static_cast<float>(shell->width), static_cast<float>(shell->height),
+        shell->theme_progress,
+        shell->theme_target > shell->theme_progress ? 1.0F : shell->theme_target < shell->theme_progress ? -1.0F : 0.0F,
+        static_cast<float>(shell->visual_time_ms) / 1000.0F,
+        active ? std::clamp(snapshot.transition_eased_t, 0.0F, 1.0F) : 0.0F,
+        std::clamp(std::max(snapshot.child_extension_t, snapshot.child_split_t), 0.0F, 1.0F),
+        shell->reduced_motion, shell->fps_pressure, sao::ui::detail::panel_theme_high_contrast()});
+}
+
 sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
     struct RestoreCallbacks {
         std::atomic_bool& flag;
@@ -3333,6 +3431,7 @@ sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
     if (effects_status != SAO_STATUS_OK)
         return effects_status;
     if (!shell->visual_dirty) {
+        publish_menu_scene_locked(shell);
         if (!shell->owns_compositor || shell->host == nullptr ||
             !shell->input_region_settle_pending) {
             return SAO_STATUS_OK;
@@ -3349,6 +3448,7 @@ sao_status_t commit_visual_state_locked(sao_ui_entity_shell_s* shell) {
         shell->last_status = status;
         return status;
     }
+    publish_menu_scene_locked(shell);
     status = raster_and_upload_locked(shell);
     if (status != SAO_STATUS_OK) {
         shell->last_status = status;
@@ -3384,6 +3484,7 @@ struct RootInteractionState {
     int32_t menu_hover_child_index{-1};
     int32_t menu_pressed_child_parent{-1};
     int32_t menu_pressed_child_index{-1};
+    std::array<char, sao::ui::menu_visual::kNameCapacity> displayed_child_parent_id{};
 };
 
 RootInteractionState capture_root_interaction(const sao_ui_entity_shell_s* shell) {
@@ -3392,7 +3493,7 @@ RootInteractionState capture_root_interaction(const sao_ui_entity_shell_s* shell
         shell->displayed_child_parent_index, shell->menu_hover_index,
         shell->menu_pressed_index,           shell->menu_hover_child_parent,
         shell->menu_hover_child_index,       shell->menu_pressed_child_parent,
-        shell->menu_pressed_child_index,
+        shell->menu_pressed_child_index, shell->displayed_child_parent_id,
     };
 }
 
@@ -3406,6 +3507,7 @@ void restore_root_interaction(sao_ui_entity_shell_s* shell, const RootInteractio
     shell->menu_hover_child_index = state.menu_hover_child_index;
     shell->menu_pressed_child_parent = state.menu_pressed_child_parent;
     shell->menu_pressed_child_index = state.menu_pressed_child_index;
+    shell->displayed_child_parent_id = state.displayed_child_parent_id;
 }
 
 sao_status_t replace_roots_locked(sao_ui_entity_shell_s* shell,
@@ -3425,14 +3527,17 @@ sao_status_t replace_roots_locked(sao_ui_entity_shell_s* shell,
         const RootInteractionState previous_interaction = capture_root_interaction(shell);
         sao::ui::menu_visual::ChildMenuSnapshot previous_active_menu{};
         bool previous_active_menu_captured = false;
-        if (!previous_active_id.empty()) {
-            const int32_t logical_index = find_root_by_id(previous_roots, previous_active_id);
+        const std::string previous_menu_root = shell->displayed_child_parent_id[0] != '\0'
+            ? shell->displayed_child_parent_id.data() : !previous_active_id.empty() ? previous_active_id
+            : visible_root_count(shell) > 0 ? previous_roots[shell->first_visible_root_index].id : "";
+        if (!previous_menu_root.empty()) {
+            const int32_t logical_index = find_root_by_id(previous_roots, previous_menu_root);
             if (logical_index >= 0 &&
                 static_cast<size_t>(logical_index) >= shell->first_visible_root_index &&
                 static_cast<size_t>(logical_index) <
                     shell->first_visible_root_index + visible_root_count(shell)) {
                 previous_active_menu_captured = sao::ui::menu_visual::get_child_menu_snapshot(
-                                                    shell->menu, previous_active_id.c_str(),
+                                                    shell->menu, previous_menu_root.c_str(),
                                                     &previous_active_menu) == SAO_STATUS_OK;
             }
         }
@@ -3476,7 +3581,7 @@ sao_status_t replace_roots_locked(sao_ui_entity_shell_s* shell,
         (void)apply_visible_roots_locked(shell);
         if (previous_active_menu_captured) {
             (void)sao::ui::menu_visual::restore_child_menu_snapshot(
-                shell->menu, previous_active_id.c_str(), previous_active_menu);
+                shell->menu, previous_menu_root.c_str(), previous_active_menu);
         }
         (void)sao_ui_menu_set_hover(shell->menu, previous_interaction.menu_hover_index);
         (void)sao::ui::menu_visual::set_child_hover(shell->menu,
@@ -3495,7 +3600,8 @@ sao_status_t replace_roots_locked(sao_ui_entity_shell_s* shell,
 sao_status_t sync_frame_locked(sao_ui_entity_shell_s* shell, uint32_t elapsed_ms) {
     shell->visual_time_ms += std::min<uint32_t>(elapsed_ms, 1000U);
     const bool next_fps_pressure = elapsed_ms > 34U;
-    const bool next_reduced_motion = windows_reduced_motion();
+    const bool next_reduced_motion = windows_reduced_motion() ||
+        sao::ui::detail::panel_theme_high_contrast();
     const bool visual_budget_changed =
         shell->fps_pressure != next_fps_pressure || shell->reduced_motion != next_reduced_motion;
     shell->fps_pressure = next_fps_pressure;
@@ -3529,7 +3635,24 @@ sao_status_t sync_frame_locked(sao_ui_entity_shell_s* shell, uint32_t elapsed_ms
         status, sao_ui_menu_get_transition_progress(shell->menu, &current_menu_progress));
     status = first_failure(status,
                            sao::ui::menu_visual::get_snapshot(shell->menu, &current_menu_visual));
-    const bool nervegear_changed = previous_state != current_state;
+    const float previous_hover = shell->nervegear_hover_t;
+    const float previous_press = shell->nervegear_press_t;
+    const bool motion_disabled = shell->reduced_motion || sao::ui::detail::panel_theme_high_contrast();
+    const auto approach = [elapsed_ms, motion_disabled](float current, float target, float tau_ms) {
+        if (motion_disabled)
+            return target;
+        const float next = target + (current - target) * std::exp(-static_cast<float>(elapsed_ms) / tau_ms);
+        return std::abs(next - target) < 0.001F ? target : next;
+    };
+    const bool ng_pressed = shell->nervgear_mode &&
+        (current_state == SAO_UI_NG_STATE_PRESSED || current_state == SAO_UI_NG_STATE_DRAGGING);
+    const bool ng_hovered = shell->nervgear_mode &&
+        (current_state == SAO_UI_NG_STATE_HOVER || ng_pressed);
+    shell->nervegear_hover_t = approach(previous_hover, ng_hovered ? 1.0F : 0.0F, 42.0F);
+    shell->nervegear_press_t = approach(previous_press, ng_pressed ? 1.0F : 0.0F,
+                                       ng_pressed ? 28.0F : 48.0F);
+    const bool nervegear_changed = previous_state != current_state ||
+        previous_hover != shell->nervegear_hover_t || previous_press != shell->nervegear_press_t;
 #ifndef NDEBUG
     if (previous_menu_phase != current_menu_phase)
         std::fprintf(stderr, "ENTITY_MENU_PHASE=%d\n", static_cast<int>(current_menu_phase));
@@ -3564,7 +3687,25 @@ struct PendingEntityAction {
     sao_ui_entity_action_fn_t callback{};
     void* user_data{};
     SaoUiEntityAction action{SAO_UI_ENTITY_ACTION_OPEN_ABOUT};
+    sao_ui_compositor_handle_t compositor{};
+    int32_t origin_x{}, origin_y{};
+    uint64_t scope_token{};
+    std::array<char, SAO_UI_ENTITY_ROOT_ID_CAPACITY> source_id{};
 };
+
+void capture_action_origin_locked(sao_ui_entity_shell_s* shell, PendingEntityAction& pending,
+                                  int32_t root_slot, int32_t x, int32_t y) noexcept {
+    pending.compositor = shell->compositor;
+    pending.origin_x = x;
+    pending.origin_y = y;
+    pending.scope_token = shell->motion_scope_token =
+        g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
+    const int32_t logical = physical_to_logical_root_locked(shell, root_slot);
+    if (logical >= 0) {
+        const auto& id = shell->roots[static_cast<size_t>(logical)].id;
+        std::memcpy(pending.source_id.data(), id.data(), std::min(id.size(), pending.source_id.size() - 1));
+    }
+}
 
 bool child_viewport_hit_locked(sao_ui_entity_shell_s* shell,
                                const sao::ui::menu_visual::Snapshot& snapshot, int32_t screen_x,
@@ -3701,6 +3842,8 @@ sao_status_t dispatch_entity_action(sao_ui_entity_shell_s* shell,
                                     const PendingEntityAction& pending) {
     sao_status_t action_status = SAO_STATUS_ERR_UNKNOWN;
     try {
+        sao::ui::detail::ScopedPanelMotionOrigin origin(pending.compositor,
+            pending.origin_x, pending.origin_y, pending.source_id.data(), pending.scope_token);
         action_status = pending.callback(pending.action, pending.user_data);
     } catch (...) {
         action_status = SAO_STATUS_ERR_UNKNOWN;
@@ -4258,10 +4401,49 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_tick(sao_ui_entity_shell
     if (std::this_thread::get_id() != handle->owner_thread) {
         return SAO_STATUS_ERR_ACCESS_DENIED;
     }
-    std::lock_guard<std::mutex> lock(handle->mutex);
-    if (!handle->online)
-        return SAO_STATUS_ERR_NOT_INITIALIZED;
-    return sync_frame_locked(handle, elapsed_ms);
+    sao_ui_compositor_handle_t compositor{};
+    uint64_t scope_token{};
+    {
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        if (!handle->online)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        compositor = handle->compositor;
+        if (handle->destroy_pending)
+            return SAO_STATUS_ERR_CANCELLED;
+        scope_token = handle->motion_scope_token;
+        ++handle->callback_depth;
+    }
+    sao_status_t status = sao::ui::detail::tick_panel_motion(compositor, elapsed_ms);
+    sao::ui::detail::PanelMotionReturnFocus cue;
+    const bool returned = sao::ui::detail::take_panel_motion_return_focus(compositor, scope_token, &cue);
+    bool destroy = false;
+    {
+        std::lock_guard<std::mutex> lock(handle->mutex);
+        --handle->callback_depth;
+        destroy = handle->destroy_pending && handle->callback_depth == 0;
+        if (!destroy && handle->online) {
+            if (returned && handle->overlay_visible && handle->motion_scope_token == scope_token) {
+                const auto it = std::find_if(handle->roots.begin(), handle->roots.end(),
+                    [&](const OwnedRootItem& root) { return root.id == cue.source_id && root.can_activate; });
+                if (it != handle->roots.end()) {
+                    const size_t index = static_cast<size_t>(it - handle->roots.begin());
+                    if (index >= handle->first_visible_root_index &&
+                        index < handle->first_visible_root_index + visible_root_count(handle)) {
+                        bool behind = false;
+                        status = first_failure(status, sao::ui::detail::raise_navigation_layers(handle->menu_layer, &behind));
+                        status = first_failure(status, set_menu_visibility_locked(handle, true));
+                        handle->menu_hover_index = static_cast<int32_t>(index - handle->first_visible_root_index);
+                        status = first_failure(status, sao_ui_menu_set_hover(handle->menu, handle->menu_hover_index));
+                        handle->visual_dirty = true;
+                    }
+                }
+            }
+            status = first_failure(status, sync_frame_locked(handle, elapsed_ms));
+        }
+    }
+    if (destroy)
+        (void)sao_ui_entity_shell_try_destroy(handle);
+    return status;
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
@@ -4287,8 +4469,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
                 status = scroll_child_viewport_locked(handle, screen_x, screen_y, wheel_delta,
                                                       &viewport_changed);
             }
-            if (status == SAO_STATUS_OK && viewport_changed)
+            if (status == SAO_STATUS_OK && viewport_changed) {
+                handle->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
                 status = commit_visual_state_locked(handle);
+            }
             handle->last_status = status;
             return status;
         }
@@ -4311,6 +4495,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
             const int64_t threshold = std::max<int64_t>(6, dpi * 6 / 96);
             if (handle->nervegear_dragging || std::abs(dx) >= threshold || std::abs(dy) >= threshold) {
                 handle->nervegear_dragging = true;
+                handle->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
                 handle->nervegear_custom_position = true;
                 if (handle->menu_visible) status = set_menu_visibility_locked(handle, false);
                 handle->nervegear_x = static_cast<int32_t>(std::clamp<int64_t>(
@@ -4415,6 +4600,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
                     const auto& root = handle->roots[static_cast<size_t>(logical_index)];
                     status = sao_ui_menu_activate(handle->menu, menu_index);
                     if (status == SAO_STATUS_OK && root.can_activate) {
+                        handle->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
                         sao::ui::menu_visual::Snapshot menu_snapshot{};
                         status = sao::ui::menu_visual::get_snapshot(handle->menu, &menu_snapshot);
                         if (status == SAO_STATUS_OK) {
@@ -4464,6 +4650,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
         if (previous_menu_visible != handle->menu_visible)
             status = first_failure(status, apply_layer_state_locked(handle));
         if (status == SAO_STATUS_OK && pending_action.callback != nullptr) {
+            capture_action_origin_locked(handle, pending_action, menu_hit.parent,
+                screen_x - handle->origin_x, screen_y - handle->origin_y);
             ++handle->action_count;
             ++handle->callback_depth;
         }
@@ -4487,7 +4675,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_key(
     sao_status_t status = SAO_STATUS_OK;
     {
         std::lock_guard<std::mutex> lock(handle->mutex);
-        if (!handle->online || !handle->overlay_visible) {
+        if (!handle->online || !handle->overlay_visible || !handle->menu_visible) {
             return SAO_STATUS_OK;
         }
         const int32_t count = static_cast<int32_t>(visible_root_count(handle));
@@ -4503,6 +4691,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_key(
                 target = count - 1;
             handle->menu_hover_index = target;
             status = sao_ui_menu_set_hover(handle->menu, target);
+            if (status == SAO_STATUS_OK)
+                handle->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
             break;
         }
         case 0x27U:   // Right — next root
@@ -4514,6 +4704,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_key(
                 target = 0;
             handle->menu_hover_index = target;
             status = sao_ui_menu_set_hover(handle->menu, target);
+            if (status == SAO_STATUS_OK)
+                handle->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
             break;
         }
         case 0x0dU:   // Enter
@@ -4526,6 +4718,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_key(
                 const auto& root = handle->roots[static_cast<size_t>(logical_index)];
                 status = sao_ui_menu_activate(handle->menu, menu_index);
                 if (status == SAO_STATUS_OK && root.can_activate) {
+                    handle->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
                     sao::ui::menu_visual::Snapshot menu_snapshot{};
                     status = sao::ui::menu_visual::get_snapshot(handle->menu, &menu_snapshot);
                     if (status == SAO_STATUS_OK)
@@ -4542,6 +4735,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_key(
                         pending_action.callback = handle->config.action_fn;
                         pending_action.user_data = handle->config.action_user_data;
                         pending_action.action = action;
+                        capture_action_origin_locked(handle, pending_action, menu_index,
+                            handle->menu_x + kMenuColumnCenter,
+                            handle->menu_y + kMenuPad + kMenuSlot / 2 + menu_index * kMenuSlot);
                     }
                 }
             }
@@ -4601,6 +4797,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_entity_shell_home(sao_ui_entity_shell
     bool was_behind = false;
     sao_status_t status = sao::ui::detail::raise_navigation_layers(handle->menu_layer, &was_behind);
     if (status == SAO_STATUS_OK)
+        handle->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
+    if (status == SAO_STATUS_OK)
         status = set_menu_visibility_locked(handle, was_behind || !handle->menu_visible);
     status = first_failure(status, commit_visual_state_locked(handle));
     handle->last_status = status;
@@ -4618,6 +4816,7 @@ sao_ui_entity_shell_insert(sao_ui_entity_shell_handle_t handle) {
     if (!handle->online)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     handle->overlay_visible = !handle->overlay_visible;
+    handle->motion_scope_token = g_entity_motion_scope.fetch_add(1, std::memory_order_relaxed);
     handle->visual_dirty = true;
     invalidate_rasters_locked(handle);
     sao_status_t status = commit_visual_state_locked(handle);

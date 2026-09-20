@@ -89,8 +89,12 @@ typedef sao_status_t(SAO_UI_CALL* sao_ui_overlay_protection_provider_fn_t)(
 // depend on defaults that differ between debug / release / test builds.
 // Mirrors OverlayHost.__init__ in Python (width/height/dc_mutations).
 struct SaoOverlayHostConfig {
-    // 0 → GetSystemMetrics(SM_CX/CYSCREEN) at create time.  Non-zero
-    // → explicit override (test rigs / secondary monitor).
+    // 0 → GetSystemMetrics(SM_CX/CYSCREEN) at create time — the primary
+    // monitor only, never the multi-monitor virtual screen.  origin_x/
+    // origin_y are honored only together with non-zero width/height
+    // (the default surface is the primary monitor at virtual-screen
+    // origin (0,0)).  Non-zero → explicit override (test rigs /
+    // secondary monitor).
     int32_t width;
     int32_t height;
     int32_t origin_x;

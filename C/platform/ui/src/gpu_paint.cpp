@@ -302,7 +302,7 @@ sao_ui_paint_ctx_s* allocate_context(std::unique_ptr<GpuPaintState> state) noexc
 
 namespace sao::ui::detail {
 sao_status_t push_gpu_theme_mask(sao_ui_paint_ctx_handle_t context, float progress,
-                                 bool dark) noexcept {
+                                 bool dark, ThemePaintFrame frame) noexcept {
     if (!context || context->gpu_dispatch != &kDispatch || !std::isfinite(progress))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     auto* state = static_cast<GpuPaintState*>(context->gpu_state);
@@ -317,10 +317,13 @@ sao_status_t push_gpu_theme_mask(sao_ui_paint_ctx_handle_t context, float progre
         return map_hresult(hr);
     const float width = static_cast<float>(state->width);
     const float height = static_cast<float>(state->height);
+    const bool coordinated = valid_theme_paint_frame(frame);
     sink->SetFillMode(D2D1_FILL_MODE_ALTERNATE);
     const auto rectangle = [&](float left, float top, float right, float bottom) {
         left = std::clamp(left, 0.0F, width);
         right = std::clamp(right, 0.0F, width);
+        top = std::clamp(top, 0.0F, height);
+        bottom = std::clamp(bottom, 0.0F, height);
         if (right <= left || bottom <= top)
             return;
         sink->BeginFigure(D2D1::Point2F(left, top), D2D1_FIGURE_BEGIN_FILLED);
@@ -330,54 +333,92 @@ sao_status_t push_gpu_theme_mask(sao_ui_paint_ctx_handle_t context, float progre
         sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     };
     if (!dark) {
-        state->theme_noise_ms = GetTickCount64();
+        if (!coordinated)
+            state->theme_noise_ms = GetTickCount64();
         rectangle(0.0F, 0.0F, width, height);
     }
-    const uint32_t epoch = static_cast<uint32_t>(state->theme_noise_ms / 480u);
-    float noise_blend = static_cast<float>(state->theme_noise_ms % 480u) / 480.0F;
-    noise_blend = noise_blend * noise_blend * (3.0F - 2.0F * noise_blend);
-    const auto mix_seed = [](uint32_t value) {
-        value ^= value >> 16u;
-        value *= 0x85ebca6bu;
-        value ^= value >> 13u;
-        return value;
-    };
-    const uint32_t rows = std::clamp(state->height / 5u, 12u, 160u);
-    const float reach = std::clamp(width * 0.14F, 12.0F, 72.0F);
-    const float margin = reach * 2.0F + 80.0F;
-    const float phase = std::clamp(progress, 0.0F, 1.0F);
-    for (uint32_t row = 0; row < rows; ++row) {
-        const uint32_t seed = mix_seed((row + 1u) * 0x9e3779b9u);
-        const uint32_t first = mix_seed(seed + epoch * 0x9e3779b9u);
-        const uint32_t next = mix_seed(seed + (epoch + 1u) * 0x9e3779b9u);
-        const auto sample = [&](uint32_t shift, uint32_t mask) {
-            const float a = static_cast<float>((first >> shift) & mask);
-            const float b = static_cast<float>((next >> shift) & mask);
-            return a + (b - a) * noise_blend;
+    float phase = std::clamp(progress, 0.0F, 1.0F);
+    if (coordinated && (frame.reduced_motion || frame.high_contrast))
+        phase = frame.theme_direction > 0.0F ? 1.0F : frame.theme_direction < 0.0F ? 0.0F
+            : (phase >= 0.5F ? 1.0F : 0.0F);
+    if (coordinated) {
+        const float noise_time = frame.seconds / 0.48F;
+        const float epoch = std::floor(noise_time);
+        const uint32_t noise_epoch = static_cast<uint32_t>(std::fmod(epoch, 65536.0F));
+        float blend = noise_time - epoch;
+        blend = blend * blend * (3.0F - 2.0F * blend);
+        for (uint32_t column = 0; column < 48u; ++column) {
+            const float left = std::round(frame.viewport_width * static_cast<float>(column) / 48.0F) - frame.origin_x;
+            const float right = std::round(frame.viewport_width * static_cast<float>(column + 1u) / 48.0F) - frame.origin_x;
+            if (right <= 0.0F || left >= width)
+                continue;
+            const float front = std::round(menu_theme_front(column, phase, frame.seconds) *
+                                            frame.viewport_height) - frame.origin_y;
+            rectangle(left, 0.0F, right, front);
+            if (frame.reduced_motion || frame.high_contrast || frame.fps_pressure)
+                continue;
+            const auto sample = [&](uint32_t salt) {
+                const float a = menu_theme_hash(column, salt + noise_epoch * 131u);
+                const float b = menu_theme_hash(column, salt + (noise_epoch + 1u) * 131u);
+                return a + (b - a) * blend;
+            };
+            const float envelope = 4.0F * phase * (1.0F - phase);
+            const float gap = std::round((2.0F + sample(7u) * 3.0F) * envelope);
+            const float chip = std::round((2.0F + sample(19u) * 6.0F) * envelope);
+            const float notch = std::round((1.0F + sample(31u) * 4.0F) * envelope);
+            const float split = std::floor((left + right) * 0.5F);
+            rectangle(left, front - gap - notch, split, front - gap);
+            rectangle(left, front + gap, right, front + gap + chip);
+            const float shard = front + gap * 2.0F + chip;
+            const float echo = std::round((1.0F + sample(43u) * 3.0F) * envelope);
+            rectangle(split, shard, right, shard + echo);
+        }
+    } else {
+        const uint32_t epoch = static_cast<uint32_t>(state->theme_noise_ms / 480u);
+        float noise_blend = static_cast<float>(state->theme_noise_ms % 480u) / 480.0F;
+        noise_blend = noise_blend * noise_blend * (3.0F - 2.0F * noise_blend);
+        const auto mix_seed = [](uint32_t value) {
+            value ^= value >> 16u;
+            value *= 0x85ebca6bu;
+            value ^= value >> 13u;
+            return value;
         };
-        const float start = static_cast<float>(seed & 255u) / 255.0F * 0.24F;
-        const float finish = 0.68F + static_cast<float>((seed >> 8u) & 255u) / 255.0F * 0.32F;
-        const float local = std::clamp((phase - start) / (finish - start), 0.0F, 1.0F);
-        const float curve = 1.10F + static_cast<float>((seed >> 16u) & 255u) / 255.0F * 1.20F;
-        const float eased = std::pow(local, curve);
-        const float x = std::round(-margin + (width + 2.0F * margin) * eased);
-        const float top = std::floor(height * static_cast<float>(row) / static_cast<float>(rows));
-        const float bottom = std::floor(height * static_cast<float>(row + 1u) / static_cast<float>(rows));
-        const float gap = std::round(3.0F + sample(8u, 15u));
-        const float lengthScale = 0.45F + sample(19u, 15u) * 0.11F;
-        const float chip = std::round(std::clamp(
-            (3.0F + reach * (0.04F + sample(11u, 15u) * 0.022F)) * lengthScale,
-            2.0F, reach * 0.70F + 10.0F));
-        const float notch = std::round(2.0F + reach * 0.30F * sample(0u, 255u) / 255.0F);
-        const float split = std::floor((top + bottom) * 0.5F);
-        rectangle(0.0F, top, x, bottom);
-        rectangle(x - gap - notch, top, x - gap, split);
-        rectangle(x + gap, top, x + gap + chip, bottom);
-        const float shard = x + gap * 2.0F + chip;
-        const float echo = std::round(2.0F + (reach * 0.45F + 4.0F) * sample(20u, 15u) / 15.0F);
-        rectangle(shard, split, shard + echo, bottom);
-        const float fleck = std::round(sample(16u, 7u) / 7.0F * (1.0F + 7.0F * sample(21u, 15u) / 15.0F));
-        rectangle(shard + echo + gap, top, shard + echo + gap + fleck, split);
+        const uint32_t rows = std::clamp(state->height / 5u, 12u, 160u);
+        const float reach = std::clamp(width * 0.08F, 8.0F, 36.0F);
+        const float margin = reach * 2.0F + 80.0F;
+        for (uint32_t row = 0; row < rows; ++row) {
+            const uint32_t seed = mix_seed((row + 1u) * 0x9e3779b9u);
+            const uint32_t first = mix_seed(seed + epoch * 0x9e3779b9u);
+            const uint32_t next = mix_seed(seed + (epoch + 1u) * 0x9e3779b9u);
+            const auto sample = [&](uint32_t shift, uint32_t mask) {
+                const float a = static_cast<float>((first >> shift) & mask);
+                const float b = static_cast<float>((next >> shift) & mask);
+                return a + (b - a) * noise_blend;
+            };
+            const float start = static_cast<float>(seed & 255u) / 255.0F * 0.24F;
+            const float finish = 0.68F + static_cast<float>((seed >> 8u) & 255u) / 255.0F * 0.32F;
+            const float local = std::clamp((phase - start) / (finish - start), 0.0F, 1.0F);
+            const float curve = 1.10F + static_cast<float>((seed >> 16u) & 255u) / 255.0F * 1.20F;
+            const float eased = std::pow(local, curve);
+            const float x = std::round(-margin + (width + 2.0F * margin) * eased);
+            const float top = std::floor(height * static_cast<float>(row) / static_cast<float>(rows));
+            const float bottom = std::floor(height * static_cast<float>(row + 1u) / static_cast<float>(rows));
+            const float gap = std::round(2.0F + sample(8u, 15u) * 0.4F);
+            const float lengthScale = 0.45F + sample(19u, 15u) * 0.11F;
+            const float chip = std::round(std::clamp(
+                (3.0F + reach * (0.04F + sample(11u, 15u) * 0.022F)) * lengthScale,
+                2.0F, reach * 0.70F + 10.0F));
+            const float notch = std::round(2.0F + reach * 0.30F * sample(0u, 255u) / 255.0F);
+            const float split = std::floor((top + bottom) * 0.5F);
+            rectangle(0.0F, top, x, bottom);
+            rectangle(x - gap - notch, top, x - gap, split);
+            rectangle(x + gap, top, x + gap + chip, bottom);
+            const float shard = x + gap * 2.0F + chip;
+            const float echo = std::round(2.0F + (reach * 0.45F + 4.0F) * sample(20u, 15u) / 15.0F);
+            rectangle(shard, split, shard + echo, bottom);
+            const float fleck = std::round(sample(16u, 7u) / 7.0F * (1.0F + 7.0F * sample(21u, 15u) / 15.0F));
+            rectangle(shard + echo + gap, top, shard + echo + gap + fleck, split);
+        }
     }
     hr = sink->Close();
     if (FAILED(hr))
@@ -494,7 +535,7 @@ sao_status_t create_borrowed_d2d_paint_context(void* raw_target, void* raw_dwrit
 
 #else
 namespace sao::ui::detail {
-sao_status_t push_gpu_theme_mask(sao_ui_paint_ctx_handle_t, float, bool) noexcept {
+sao_status_t push_gpu_theme_mask(sao_ui_paint_ctx_handle_t, float, bool, ThemePaintFrame) noexcept {
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 }
 sao_status_t pop_gpu_theme_mask(sao_ui_paint_ctx_handle_t) noexcept {

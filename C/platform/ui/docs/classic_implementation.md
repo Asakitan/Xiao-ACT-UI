@@ -1,5 +1,39 @@
 # Classic SAO implementation and acceptance
 
+## SaoMenu motion — September 19, 2026
+
+Root 450/300ms opening/closing preserves positions on reversal. First child opening
+is 480ms; a full switch uses 120ms join, 180ms move and 180ms split, shortened from
+partial states. Latest selection retargets immediately; moving rows remain noninteractive
+until settled. Entity consumes resolved anchor/extension/split rather than deriving a
+second trajectory. Continuous NerveGear/icon feedback, thin card edges, readable secondary
+labels and short hover glints preserve the neutral SAO style.
+
+Private compositor-keyed numeric scene values coordinate the foreground and backdrop
+1000ms theme transition, 48-column front and menu-local quiet region. The shader buffer
+is 80 bytes, without public ABI changes or another blur pass. Generic panels opened by
+synchronous menu actions use bounded 220/160ms connected motion; logical hide and input
+withdrawal remain immediate. Owner ticks run outside Entity's mutex. Fresh scope tokens
+and stable root IDs gate focus return; async/WebView surfaces do not inherit stale origins.
+
+Preview `--offline --page root --menu-motion --frame-out PATH --frame-ms N` exports
+interaction points, including quick retargets, theme reversal and Settings round-trip;
+streamed export uses `--frame-out - --frame-count N`; explicit backend options are rejected.
+Initial Debug UI/Preview build and 420-frame export passed before final refinements.
+Static review repaired child-page identity across reversal/reorder, independent root
+opening during selection, root-trajectory rollback, navigation scope invalidation,
+theme-frame geometry/time cache inputs, high-contrast short-circuiting, same-thread
+panel retirement and SDK-opacity multiplication. The revised timeline uses compositor
+mouse routing and Settings titlebar close with logical-visibility checks.
+Final Debug UI/Preview rebuild passed. Revised compositor-input export/encoder both exit0:
+15 events,420frames,7.000s,1264x822; Settings titlebar logical close and navigation return
+confirmed in the log. Final light/dark captures were inspected; the quiet region attenuates
+detail without a bright plate. Runtime memory is synchronized. Video:
+`sao_auto/.sao/ui-preview/menu-polished-20260919.mp4` (workspace-relative), SHA256
+`d00e300ce3342baa46dd26116c5edf5ad2d0f6e9337b42fdcd360033f8bbeaef`.
+Full DPI/accessibility/retirement fault injection remains source-reviewed only.
+Historical timings below are superseded by this section for the modified menu paths.
+
 ## Process monitoring and Preview shutdown continuation
 
 The version-1 panel specification accepts a noninteractive `sparkline` leaf with
@@ -27,12 +61,16 @@ first-party UI DLL is shipped. Complete Debug and both release acceptance target
 pass. All 38-PE/91-file and named-UI-DLL timestamps below are explicitly
 pre-bootstrap UI evidence, not the current artifact inventory.
 
-The current Debug, RelWithDebInfo, and Hardened build-tree DLLs export UI ABI 1.16
-(`65552`) and AI Editor ABI 1.2 (`65538`); each ship carries those inputs only in
+The current Debug, RelWithDebInfo, and Hardened build-tree DLLs export UI ABI 1.17
+(`65553`) and AI Editor ABI 1.2 (`65538`); each ship carries those inputs only in
 the authenticated bundle. UI minor 16 append-only adds tracked DC-mutation
 submit/wait/destroy while retaining the minor-15 Link End surface and all prior
-structure sizes. Tracked submissions use unique internal sequence keys and bypass
-ordinary coalescing so each wait observes its own executor result.
+structure sizes. UI minor 17 append-only adds `sao_ui_panel_find_widget`
+(spec-node id → live widget handle) plus the `canvas` spec leaf wired to the
+scriptable canvas; the leaf is non-interactive like `sparkline` (no hit-test,
+no interaction-state migration, no `set_enabled`). Tracked submissions use
+unique internal sequence keys and bypass ordinary coalescing so each wait
+observes its own executor result.
 
 The developer `sao_ui_preview` target now participates in the default build.
 This prevents a stale preview executable from retaining descriptive pre-rename
@@ -328,7 +366,7 @@ https://tenor.com/view/link-start-sao-gif-24757565
 ## Reusable native Link End outro
 
 - UI minor 15 appended `sao_ui_linkstart_show_outro(handle)` and completion reason
-	`SAO_UI_LINKSTART_COMPLETION_OUTRO = 8`; current ABI1.16 retains both, and config24/GPU Constants112/Instance52 bytes remain unchanged.
+	`SAO_UI_LINKSTART_COMPLETION_OUTRO = 8`; current ABI1.17 retains both, and config24/GPU Constants112/Instance52 bytes remain unchanged.
 - The opaque handle owns the mode. Startup `show` restores startup mode and its existing
 	NATURAL completion. Outro entry cancels the current startup playback/group, clears hold,
 	telemetry and pending completion, and creates no sound group or playback.

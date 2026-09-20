@@ -12,6 +12,8 @@ extern "C" {
 static inline sao_sdk_status_t sao_sdk_banner_show(
     const struct SaoSdkContext* ctx, const char* text_utf8,
     uint32_t duration_ms, uint32_t argb_color) {
+    if (ctx == NULL || ctx->banner == NULL || ctx->banner->show == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->banner->show(ctx->ctx_impl, text_utf8, duration_ms, argb_color);
 }
 

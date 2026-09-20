@@ -482,6 +482,7 @@ const SaoSdkConfigTable* make_config_table();
 const SaoSdkTtsTable* make_tts_table();
 const SaoSdkBannerTable* make_banner_table();
 const SaoSdkGpuHuntTable* make_gpu_hunt_table();
+const SaoSdkVtTable* make_vt_table();
 sao_sdk_status_t sdk_gpu_hunt_sweep_owner(ContextState* owner);
 bool gpu_callback_reentered(ContextState* owner) noexcept;
 
@@ -569,6 +570,9 @@ sao_sdk_status_t provider_hotkey_unregister(ContextState* state, sao_sdk_hotkey_
 sao_sdk_status_t provider_overlay_set(ContextState* state, const SaoSdkOverlaySpec* spec,
                                       sao_sdk_overlay_token_t* out_overlay);
 sao_sdk_status_t provider_overlay_clear(ContextState* state, sao_sdk_overlay_token_t overlay);
+
+sao_sdk_status_t provider_overlay_clear_surface(ContextState* state,
+                                                const char* surface_id_utf8);
 sao_sdk_status_t retain_gpu_provider(ContextState* state, SaoSdkProviderVTable* out_provider,
                                      std::string* out_plugin_id);
 

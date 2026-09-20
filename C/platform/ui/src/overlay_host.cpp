@@ -262,10 +262,6 @@ class HostCallbackLease {
 constexpr wchar_t kSingleInstanceMutexName[] =
     L"Local\\{7F3E2A91-4C8B-4D6E-9A15-8B2F0C4E3D7A}";
 #endif
-constexpr SaoUiDcMutationRect kPhysicalRectScrub{0, 0, 1, 1};
-constexpr uint32_t kPhysicalRectScrubSettleMs = 40;
-constexpr uint32_t kPhysicalRectScrubTimeoutMs = 2000;
-
 using OverlayHostWin32Api = sao::ui::overlay_host_detail::Win32Api;
 
 const OverlayHostWin32Api& system_win32_api() {
@@ -390,15 +386,6 @@ void mark_input_partial(sao_ui_overlay_host_s* host) {
 sao_status_t last_win32_status() {
     return ::GetLastError() == ERROR_ACCESS_DENIED ? SAO_STATUS_ERR_ACCESS_DENIED
                                                    : SAO_STATUS_ERR_OS_CALL_FAILED;
-}
-
-sao_status_t submit_physical_rect_scrub(sao_ui_overlay_host_s* host) {
-    if (host->dc_mutation == nullptr)
-        return SAO_STATUS_OK;
-    const sao_status_t status = sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
-        host->dc_mutation, host->hwnd, &kPhysicalRectScrub, kPhysicalRectScrubSettleMs,
-        kPhysicalRectScrubTimeoutMs);
-    return status == SAO_STATUS_ERR_NOT_INITIALIZED ? SAO_STATUS_OK : status;
 }
 
 void publish_real_geometry(sao_ui_overlay_host_s* host, const SaoOverlayHostClientRect& geometry) {
@@ -994,7 +981,6 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
             ++host->wm_counters.dpichanged_events;
         }
         (void)::DwmFlush();
-        (void)submit_physical_rect_scrub(host);
         if (callback != nullptr) {
             try {
                 callback(new_dpi, x, y, width, height, callback_user);
@@ -1259,12 +1245,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     if (host->class_atom == 0)
         return create_guard.fail(SAO_STATUS_ERR_OS_CALL_FAILED, out_handle);
 
+    // Default surface is the primary monitor only. The primary monitor
+    // always sits at virtual-screen origin (0,0), so the default bounds
+    // are SM_CX/CYSCREEN at (0,0). Spanning SM_*VIRTUALSCREEN instead
+    // made the hRender window cover every attached monitor and UI
+    // rendered on secondary screens; the SaoOverlayHostConfig contract
+    // (see overlay_host.h) pins the default to the primary screen, and
+    // a secondary-monitor surface must be requested via explicit
+    // width/height/origin.
     const bool explicit_bounds = config != nullptr && config->width > 0 && config->height > 0;
-    const int32_t width = explicit_bounds ? config->width : ::GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int32_t width = explicit_bounds ? config->width : ::GetSystemMetrics(SM_CXSCREEN);
     const int32_t height =
-        explicit_bounds ? config->height : ::GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    const int32_t x = explicit_bounds ? config->origin_x : ::GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const int32_t y = explicit_bounds ? config->origin_y : ::GetSystemMetrics(SM_YVIRTUALSCREEN);
+        explicit_bounds ? config->height : ::GetSystemMetrics(SM_CYSCREEN);
+    const int32_t x = explicit_bounds ? config->origin_x : 0;
+    const int32_t y = explicit_bounds ? config->origin_y : 0;
     const wchar_t* title =
         config != nullptr && config->title_utf16 != nullptr ? config->title_utf16 : L"";
 
@@ -1558,7 +1552,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_bounds(
         handle->current_dpi = query_window_dpi(handle->hwnd);
     }
     (void)::DwmFlush();
-    return submit_physical_rect_scrub(handle);
+    return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -1613,7 +1607,7 @@ sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visibl
     if (!visible)
         return SAO_STATUS_OK;
     (void)::DwmFlush();
-    return submit_physical_rect_scrub(handle);
+    return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
     }

@@ -658,6 +658,10 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_snapshot_bgra(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_enforce_z_order(
     sao_ui_compositor_handle_t compositor);
 
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_set_topmost(
+    sao_ui_compositor_handle_t compositor,
+    bool enabled);
+
 // Attach the game window the z-order pulse anchors above (Python authority:
 // `overlay_compositor.py::set_game_hwnd`).  Any thread; consumed by the
 // render-thread enforce path.  0 detaches.  A destroyed game HWND is

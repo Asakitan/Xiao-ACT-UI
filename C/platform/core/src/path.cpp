@@ -64,15 +64,23 @@ fs::path executable_directory() {
 }
 
 fs::path environment_base_dir() {
-    const DWORD required = GetEnvironmentVariableW(L"SAO_BASE_DIR", nullptr, 0);
-    if (required == 0) {
-        return {};
+    // Measure-and-fill with a retry loop: if SAO_BASE_DIR grows between the
+    // two calls, the fill returns the NEW required length (> capacity) and
+    // leaves a truncated, non-NUL-terminated buffer — sizing the second call
+    // to its own returned requirement closes that race.
+    std::vector<wchar_t> buffer(256);
+    for (;;) {
+        const DWORD written = GetEnvironmentVariableW(
+            L"SAO_BASE_DIR", buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (written == 0) {
+            return {};
+        }
+        if (written < buffer.size()) {
+            return fs::path(std::wstring(buffer.data(), written));
+        }
+        // `written` is the required capacity INCLUDING the NUL.
+        buffer.resize(written);
     }
-    std::vector<wchar_t> buffer(required);
-    if (GetEnvironmentVariableW(L"SAO_BASE_DIR", buffer.data(), required) == 0) {
-        return {};
-    }
-    return fs::path(buffer.data());
 }
 
 BaseDirResult resolve_base_dir() {

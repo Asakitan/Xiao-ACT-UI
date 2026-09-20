@@ -27,6 +27,7 @@
 #include "sao/sdk/sao_sdk_tts.h"
 #include "sao/sdk/sao_sdk_ui.h"
 #include "sao/sdk/sao_sdk_version.h"
+#include "sao/sdk/sao_sdk_vt.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,6 +57,10 @@ SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_create(const char* bas
                                                                  const char* plugin_id_utf8,
                                                                  struct SaoSdkContext** out_ctx);
 
+// Best-effort teardown. Internally this is sao_sdk_context_try_destroy plus a
+// quarantine path on failure: the status is not observable by the caller.
+// Callers that need teardown feedback or a retry must call
+// sao_sdk_context_try_destroy directly.
 SAO_SDK_API void SAO_SDK_CALL sao_sdk_context_destroy(struct SaoSdkContext* ctx);
 
 // Observable teardown. On failure the context and provider session remain

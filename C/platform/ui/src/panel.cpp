@@ -1,8 +1,10 @@
 // SAO Auto — generic spec-driven panel backed by a compositor layer.
 
 #include "sao/ui/panel.h"
+#include "sao/ui/panel_sdk.h"
 
 #include "sao/engine/ui_spec.h"
+#include "sao/ui/sao_ui_scriptable_canvas.h"
 #include "sao/ui/sound.h"
 #include "sao/ui/theme.h"
 #include "sao/ui/widget_chart.h"
@@ -12,6 +14,7 @@
 #include "classic_text_roles.h"
 #include "layer_paint_internal.h"
 #include "native_text_edit.h"
+#include "panel_motion_internal.h"
 #include "panel_theme_internal.h"
 #include "panel_viewport_internal.h"
 #include "widget_paint_internal.h"
@@ -20,6 +23,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
@@ -31,6 +35,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -62,6 +67,50 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_runtime_enumerate_(
     size_t* out_written);
 extern "C" void SAO_UI_CALL sao_ui_panel_runtime_destroy_(sao_ui_panel_handle_t panel);
 extern "C" void SAO_UI_CALL sao_ui_panel_destroy_through_sdk_(sao_ui_panel_handle_t panel);
+
+namespace sao::ui::detail {
+
+static thread_local ScopedPanelMotionOrigin* active_panel_motion_origin{};
+
+ScopedPanelMotionOrigin::ScopedPanelMotionOrigin(sao_ui_compositor_handle_t compositor,
+                                                int32_t host_x, int32_t host_y,
+                                                std::string_view source_id,
+                                                uint64_t scope_token) noexcept
+    : compositor_(compositor), previous_(active_panel_motion_origin) {
+    source_.origin_x = host_x;
+    source_.origin_y = host_y;
+    source_.scope_token = scope_token;
+    try {
+        source_.source_id.assign(source_id);
+    } catch (...) {
+        consumed_ = true;
+    }
+    active_panel_motion_origin = this;
+}
+
+ScopedPanelMotionOrigin::~ScopedPanelMotionOrigin() {
+    active_panel_motion_origin = previous_;
+}
+
+struct PanelMotionOriginAccess {
+    static ScopedPanelMotionOrigin* current(sao_ui_compositor_handle_t compositor) noexcept {
+        auto* origin = active_panel_motion_origin;
+        return origin != nullptr && !origin->consumed_ && origin->compositor_ == compositor
+                   ? origin
+                   : nullptr;
+    }
+
+    static std::shared_ptr<const PanelMotionReturnFocus> copy(ScopedPanelMotionOrigin* origin) {
+        return std::make_shared<const PanelMotionReturnFocus>(origin->source_);
+    }
+
+    static void consume(ScopedPanelMotionOrigin* origin) noexcept {
+        if (origin != nullptr)
+            origin->consumed_ = true;
+    }
+};
+
+} // namespace sao::ui::detail
 
 namespace {
 
@@ -609,6 +658,8 @@ sao_status_t apply_owned_widget_props(OwnedWidget* widget) {
         }
         return sao_ui_sparkline_set_values(widget->handle, samples.data(), samples.size());
     }
+    if (widget->type == "canvas")
+        return SAO_STATUS_OK;  // canvas state flows through ops, not props
     const std::string props = widget->props.dump();
     return sao_ui_widget_apply_props(widget->handle, reinterpret_cast<const uint8_t*>(props.data()),
                                      props.size());
@@ -668,6 +719,23 @@ struct PanelFrame {
     uint32_t height{};
 };
 
+struct PanelMotion {
+    std::shared_ptr<const sao::ui::detail::PanelMotionReturnFocus> source;
+    int32_t dx{};
+    int32_t dy{};
+    float alpha{1.0F};
+    int32_t from_dx{};
+    int32_t from_dy{};
+    float from_alpha{1.0F};
+    int32_t target_dx{};
+    int32_t target_dy{};
+    uint32_t elapsed_ms{};
+    uint32_t duration_ms{};
+    bool active{};
+    bool return_focus_pending{};
+    std::chrono::steady_clock::time_point return_focus_deadline{};
+};
+
 constexpr size_t kPanelCallbackKindCount = 4U;
 
 struct ActiveTextEditAnchor {
@@ -692,6 +760,9 @@ ActiveTextEditAnchor& text_edit_anchor() {
 struct sao_ui_panel_s {
     sao_ui_compositor_handle_t compositor{};
     sao_ui_layer_handle_t layer{};
+    const std::thread::id owner_thread{std::this_thread::get_id()};
+    PanelMotion motion;
+    bool motion_mutating{};
     std::string id;
     std::string title;
     std::string theme_page;
@@ -909,6 +980,13 @@ void finalize_if_ready(sao_ui_panel_s* panel) noexcept {
 
 void retry_dirty_theme(sao_ui_panel_s* panel) noexcept;
 
+struct ActivePanelOperation {
+    sao_ui_panel_s* panel{};
+    ActivePanelOperation* previous{};
+};
+
+thread_local ActivePanelOperation* active_panel_operation = nullptr;
+
 class PanelOperation {
   public:
     explicit PanelOperation(sao_ui_panel_s* panel) : panel_(panel) {
@@ -921,6 +999,8 @@ class PanelOperation {
             if (!panel_->accepting_operations)
                 return;
             ++panel_->operations_in_flight;
+            active_marker_ = {panel_, active_panel_operation};
+            active_panel_operation = &active_marker_;
             acquired_ = true;
         } catch (...) {
         }
@@ -933,6 +1013,7 @@ class PanelOperation {
         if (!acquired_)
             return;
         retry_dirty_theme(panel_);
+        active_panel_operation = active_marker_.previous;
         {
             std::lock_guard lock(panel_->lifecycle_mutex);
             --panel_->operations_in_flight;
@@ -947,8 +1028,138 @@ class PanelOperation {
 
   private:
     sao_ui_panel_s* panel_{};
+    ActivePanelOperation active_marker_{};
     bool acquired_{};
 };
+
+class PanelMotionMutation {
+  public:
+    explicit PanelMotionMutation(sao_ui_panel_s* panel) : panel_(panel) {
+        std::lock_guard lock(panel_->mutex);
+        if (!panel_->stopping && !panel_->motion_mutating) {
+            panel_->motion_mutating = true;
+            acquired_ = true;
+        }
+    }
+
+    ~PanelMotionMutation() {
+        release();
+    }
+
+    explicit operator bool() const noexcept {
+        return acquired_;
+    }
+
+    void release() {
+        if (acquired_) {
+            std::lock_guard lock(panel_->mutex);
+            panel_->motion_mutating = false;
+            acquired_ = false;
+        }
+    }
+
+    PanelMotionMutation(const PanelMotionMutation&) = delete;
+    PanelMotionMutation& operator=(const PanelMotionMutation&) = delete;
+
+  private:
+    sao_ui_panel_s* panel_{};
+    bool acquired_{};
+};
+
+bool panel_motion_permitted() noexcept {
+    if (sao::ui::detail::resolve_process_theme().high_contrast)
+        return false;
+#if defined(_WIN32)
+    BOOL animations = FALSE;
+    HIGHCONTRASTW contrast{};
+    contrast.cbSize = sizeof(contrast);
+    if (!SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0) || !animations ||
+        !SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) ||
+        (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0)
+        return false;
+#endif
+    return true;
+}
+
+std::pair<int32_t, int32_t> panel_motion_offset(
+    const SaoPanelState& state, const sao::ui::detail::PanelMotionReturnFocus& source) noexcept {
+    const double dx = static_cast<double>(source.origin_x) - state.x - state.width * 0.5;
+    const double dy = static_cast<double>(source.origin_y) - state.y - state.height * 0.5;
+    const double distance = std::hypot(dx, dy);
+    const double factor = distance > 18.0 ? 18.0 / distance : 1.0;
+    return {static_cast<int32_t>(std::round(dx * factor)),
+            static_cast<int32_t>(std::round(dy * factor))};
+}
+
+sao_status_t apply_panel_motion_frame(sao_ui_panel_s* panel, const SaoPanelState& state,
+                                      const PanelMotion& motion, bool layer_visible,
+                                      bool update_visual = true) {
+    if (panel->layer == nullptr)
+        return SAO_STATUS_OK;
+    sao_status_t status = SAO_STATUS_OK;
+    if (!state.visible)
+        status = sao_ui_layer_set_input_enabled(panel->layer, false);
+    if (status == SAO_STATUS_OK && !layer_visible)
+        status = sao_ui_layer_set_visible(panel->layer, false);
+    if (status == SAO_STATUS_OK && update_visual) {
+        status = sao_ui_layer_set_position(
+            panel->layer, clamp_i64_to_i32(static_cast<int64_t>(state.x) + motion.dx),
+            clamp_i64_to_i32(static_cast<int64_t>(state.y) + motion.dy));
+        if (status == SAO_STATUS_OK) {
+            SaoPanelDescriptor descriptor{};
+            const float owner_alpha = sao_ui_panel_get_descriptor(panel, &descriptor) == SAO_STATUS_OK
+                ? std::clamp(descriptor.initial_opacity, 0.0F, 1.0F) : 1.0F;
+            status = sao_ui_layer_set_alpha(panel->layer, owner_alpha * motion.alpha);
+        }
+    }
+    if (status == SAO_STATUS_OK && layer_visible)
+        status = sao_ui_layer_set_visible(panel->layer, true);
+    if (status == SAO_STATUS_OK && state.visible)
+        status = sao_ui_layer_set_input_enabled(panel->layer, true);
+    return status;
+}
+
+sao_status_t restore_panel_motion_frame(sao_ui_panel_s* panel, const SaoPanelState& state,
+                                        const PanelMotion& motion, sao_status_t failure,
+                                        bool update_visual = true) {
+    const sao_status_t rollback = apply_panel_motion_frame(
+        panel, state, motion, state.visible || motion.active, update_visual);
+    return rollback == SAO_STATUS_OK ? failure : rollback;
+}
+
+void finish_panel_motion(PanelMotion& motion, bool visible) noexcept {
+    motion.active = false;
+    motion.dx = 0;
+    motion.dy = 0;
+    motion.alpha = 1.0F;
+    if (!visible && motion.source != nullptr && !motion.source->source_id.empty()) {
+        motion.return_focus_pending = true;
+        motion.return_focus_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    }
+}
+
+// The caller owns a PanelOperation and PanelMotionMutation, never the storage lock.
+sao_status_t cancel_panel_motion(sao_ui_panel_s* panel) {
+    SaoPanelState state{};
+    PanelMotion previous;
+    {
+        std::lock_guard lock(panel->mutex);
+        state = panel->state;
+        previous = panel->motion;
+    }
+    if (!previous.active)
+        return SAO_STATUS_OK;
+    PanelMotion next = previous;
+    finish_panel_motion(next, state.visible);
+    const sao_status_t status = apply_panel_motion_frame(panel, state, next, state.visible);
+    if (status != SAO_STATUS_OK)
+        return restore_panel_motion_frame(panel, state, previous, status);
+    std::lock_guard lock(panel->mutex);
+    if (panel->stopping)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    panel->motion = std::move(next);
+    return SAO_STATUS_OK;
+}
 
 class PanelCallbackLease {
   public:
@@ -1375,6 +1586,8 @@ int32_t widget_kind(const std::string& type) {
         return SAO_UI_WIDGET_TABLE;
     if (type == "sparkline")
         return SAO_UI_WIDGET_SPARKLINE;
+    if (type == "canvas")
+        return SAO_UI_WIDGET_SCRIPTABLE_CANVAS;
     return SAO_UI_WIDGET_TEXT;
 }
 
@@ -1668,6 +1881,22 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
             sparkline.max_points = 120U;
             sparkline.line_width_px = 2.0F;
             status = sao_ui_sparkline_create(nullptr, &sparkline, &owned->handle);
+        } else if (type == "canvas") {
+            // Scriptable canvas leaf (UI ABI minor 17).  Draw state arrives
+            // later via the owner's own op submission; the spec only fixes
+            // geometry and the canvas spec.  Width/height are advisory — the
+            // layout node still controls painted bounds via fixed_width/height.
+            SaoUiScriptCanvasSpec canvas_spec{};
+            canvas_spec.width_px = std::max(1, node.value("width", 320));
+            canvas_spec.height_px = std::max(1, node.value("height", 160));
+            canvas_spec.bg_argb = 0x00000000u;
+            canvas_spec.draggable_owns_pointer = false;
+            canvas_spec.antialias = true;
+            canvas_spec.retain_ops_between_frames = true;
+            canvas_spec.max_ops_per_frame = 4000;
+            sao_ui_script_canvas_handle_t canvas_handle = nullptr;
+            status = sao_ui_script_canvas_create(nullptr, &canvas_spec, &owned->handle,
+                                                 &canvas_handle);
         } else {
             status = sao_ui_widget_create(owned->kind, nullptr, &owned->handle);
         }
@@ -1676,7 +1905,7 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
         status = apply_owned_widget_props(owned.get());
         if (status != SAO_STATUS_OK)
             return status;
-        if (type != "sparkline") {
+        if (type != "sparkline" && type != "canvas") {
             status = sao_ui_widget_set_enabled(owned->handle, owned->enabled);
             if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_NOT_IMPLEMENTED)
                 return status;
@@ -1892,7 +2121,7 @@ sao_status_t migrate_responsive_content_state(sao_ui_panel_s* panel,
         sao_status_t status = apply_owned_widget_props(replacement_entry.get());
         if (status != SAO_STATUS_OK)
             return status;
-        if (replacement_entry->type == "sparkline")
+        if (replacement_entry->type == "sparkline" || replacement_entry->type == "canvas")
             continue;
         status = sao_ui_widget_set_enabled(replacement_entry->handle, replacement_entry->enabled);
         if (status != SAO_STATUS_OK)
@@ -2863,7 +3092,8 @@ sao_status_t widget_at(sao_ui_panel_s* panel, int32_t x, int32_t y,
         return SAO_STATUS_OK;
     const auto found = content->by_handle.find(hit.widget);
     if (found != content->by_handle.end() &&
-        (!found->second->enabled || found->second->type == "sparkline"))
+        (!found->second->enabled || found->second->type == "sparkline" ||
+         found->second->type == "canvas"))
         return SAO_STATUS_OK;
     *out_widget = hit.widget;
     return SAO_STATUS_OK;
@@ -2977,6 +3207,8 @@ sao_status_t dispatch_owned_action(sao_ui_panel_s* panel, sao_ui_widget_handle_t
     std::shared_ptr<PanelContent> content;
     {
         std::lock_guard lock(panel->mutex);
+        if (!panel->state.visible || panel->motion_mutating)
+            return SAO_STATUS_ERR_NOT_FOUND;
         content = panel->content;
     }
     if (content == nullptr)
@@ -3113,6 +3345,8 @@ sao_status_t panel_cursor_pos(sao_ui_panel_s* panel, int32_t ix, int32_t iy) {
     SaoPanelState current_state{};
     {
         std::scoped_lock lock(panel->mutex);
+        if (!panel->state.visible || panel->motion_mutating)
+            return SAO_STATUS_OK;
         mode = panel->interaction_mode;
         movable = panel->movable;
         resizable = panel->resizable;
@@ -3305,13 +3539,19 @@ sao_status_t panel_scroll(sao_ui_panel_s* panel, float dx, float dy) {
     int32_t pointer_x = 0;
     int32_t pointer_y = 0;
     SaoPanelState panel_state{};
+    [[maybe_unused]] int32_t motion_dx = 0;
+    [[maybe_unused]] int32_t motion_dy = 0;
     sao_ui_compositor_handle_t compositor = nullptr;
     {
         std::lock_guard lock(panel->mutex);
+        if (!panel->state.visible || panel->motion_mutating)
+            return SAO_STATUS_OK;
         content = panel->content;
         pointer_x = panel->pointer_x;
         pointer_y = panel->pointer_y;
         panel_state = panel->state;
+        motion_dx = panel->motion.dx;
+        motion_dy = panel->motion.dy;
         compositor = panel->compositor;
     }
     if (content == nullptr) {
@@ -3328,8 +3568,8 @@ sao_status_t panel_scroll(sao_ui_panel_s* panel, float dx, float dy) {
     POINT live_pointer{};
     if (host != nullptr && ::GetCursorPos(&live_pointer) != FALSE &&
         ::ScreenToClient(host, &live_pointer) != FALSE) {
-        pointer_x = clamp_i64_to_i32(static_cast<int64_t>(live_pointer.x) - panel_state.x);
-        pointer_y = clamp_i64_to_i32(static_cast<int64_t>(live_pointer.y) - panel_state.y);
+        pointer_x = clamp_i64_to_i32(static_cast<int64_t>(live_pointer.x) - panel_state.x - motion_dx);
+        pointer_y = clamp_i64_to_i32(static_cast<int64_t>(live_pointer.y) - panel_state.y - motion_dy);
         std::lock_guard lock(panel->mutex);
         panel->pointer_x = pointer_x;
         panel->pointer_y = pointer_y;
@@ -3377,6 +3617,22 @@ void SAO_UI_CALL layer_scroll_callback(float dx, float dy, void* user_data) {
 sao_status_t notify(sao_ui_panel_s* panel, int32_t event);
 
 sao_status_t begin_text_edit(sao_ui_panel_s* panel, sao_ui_widget_handle_t widget) {
+    PanelOperation edit_operation(panel);
+    if (!edit_operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    {
+        PanelMotionMutation mutation(panel);
+        if (!mutation)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        {
+            std::lock_guard lock(panel->mutex);
+            if (!panel->state.visible)
+                return SAO_STATUS_ERR_NOT_FOUND;
+        }
+        const sao_status_t cancel_status = cancel_panel_motion(panel);
+        if (cancel_status != SAO_STATUS_OK)
+            return cancel_status;
+    }
     std::shared_ptr<PanelContent> content;
     SaoPanelState state{};
     {
@@ -3527,6 +3783,31 @@ sao_status_t panel_button(sao_ui_panel_s* panel, int32_t button, int32_t action,
         return SAO_STATUS_ERR_HANDLE_INVALID;
     if (button != 0)
         return SAO_STATUS_OK;
+    {
+        std::lock_guard lock(panel->mutex);
+        if (!panel->state.visible || panel->motion_mutating)
+            return SAO_STATUS_OK;
+    }
+    if (action == 1) {
+        PanelMotionMutation mutation(panel);
+        if (!mutation)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        int32_t dx = 0;
+        int32_t dy = 0;
+        {
+            std::lock_guard lock(panel->mutex);
+            dx = panel->motion.dx;
+            dy = panel->motion.dy;
+        }
+        const sao_status_t cancel_status = cancel_panel_motion(panel);
+        if (cancel_status != SAO_STATUS_OK)
+            return cancel_status;
+        ix = clamp_i64_to_i32(static_cast<int64_t>(ix) + dx);
+        iy = clamp_i64_to_i32(static_cast<int64_t>(iy) + dy);
+        std::lock_guard lock(panel->mutex);
+        panel->pointer_x = ix;
+        panel->pointer_y = iy;
+    }
     const auto theme = resolve_panel_theme(panel);
     SaoPanelState state{};
     bool titlebar = false;
@@ -3541,6 +3822,8 @@ sao_status_t panel_button(sao_ui_panel_s* panel, int32_t button, int32_t action,
         movable = panel->movable;
         resizable = panel->resizable;
     }
+    if (action == 1 && !point_in_rect(ix, iy, 0, 0, state.width, state.height))
+        return SAO_STATUS_OK;
     const int32_t top = titlebar ? titlebar_height(theme) : 0;
     sao_status_t status = SAO_STATUS_OK;
     if (action == 1) {
@@ -3914,6 +4197,119 @@ void SAO_UI_CALL active_theme_changed(SaoUiThemeId, void* user_data) {
 
 } // namespace
 
+namespace sao::ui::detail {
+
+sao_status_t tick_panel_motion(sao_ui_compositor_handle_t compositor, uint32_t dt_ms) noexcept {
+    try {
+        const auto owner = std::this_thread::get_id();
+        std::vector<sao_ui_panel_s*> panels;
+        {
+            std::lock_guard storage_lock(panel_storage_mutex());
+            for (const auto& panel : panel_storage()) {
+                std::lock_guard lock(panel->mutex);
+                if (panel->compositor == compositor && panel->owner_thread == owner &&
+                    !panel->stopping && panel->motion.active)
+                    panels.push_back(panel.get());
+            }
+        }
+        const bool animate = panels.empty() || panel_motion_permitted();
+        sao_status_t first_status = SAO_STATUS_OK;
+        for (auto* panel : panels) {
+            std::unique_lock storage_lock(panel_storage_mutex());
+            if (std::ranges::find_if(panel_storage(), [panel](const auto& stored) {
+                    return stored.get() == panel;
+                }) == panel_storage().end())
+                continue;
+            PanelOperation operation(panel);
+            storage_lock.unlock();
+            if (!operation)
+                continue;
+            PanelMotionMutation mutation(panel);
+            if (!mutation)
+                continue;
+            SaoPanelState state{};
+            PanelMotion previous;
+            {
+                std::lock_guard lock(panel->mutex);
+                if (panel->compositor != compositor || panel->owner_thread != owner ||
+                    panel->stopping || !panel->motion.active)
+                    continue;
+                state = panel->state;
+                previous = panel->motion;
+            }
+            PanelMotion next = previous;
+            next.elapsed_ms += std::min(dt_ms, next.duration_ms - next.elapsed_ms);
+            const bool finished = !animate || next.elapsed_ms == next.duration_ms;
+            if (finished) {
+                finish_panel_motion(next, state.visible);
+            } else {
+                const double t = static_cast<double>(next.elapsed_ms) / next.duration_ms;
+                const double eased = t * t * (3.0 - 2.0 * t);
+                next.dx = static_cast<int32_t>(std::round(
+                    next.from_dx + (next.target_dx - next.from_dx) * eased));
+                next.dy = static_cast<int32_t>(std::round(
+                    next.from_dy + (next.target_dy - next.from_dy) * eased));
+                const double distance = std::hypot(next.dx, next.dy);
+                if (distance > 20.0) {
+                    next.dx = static_cast<int32_t>(next.dx * (20.0 / distance));
+                    next.dy = static_cast<int32_t>(next.dy * (20.0 / distance));
+                }
+                const float target_alpha = state.visible ? 1.0F : 0.0F;
+                next.alpha = std::clamp(
+                    static_cast<float>(next.from_alpha + (target_alpha - next.from_alpha) * eased),
+                    0.0F, 1.0F);
+            }
+            sao_status_t status = apply_panel_motion_frame(
+                panel, state, next, state.visible || next.active);
+            if (status != SAO_STATUS_OK) {
+                status = restore_panel_motion_frame(panel, state, previous, status);
+                if (first_status == SAO_STATUS_OK)
+                    first_status = status;
+                continue;
+            }
+            std::lock_guard lock(panel->mutex);
+            if (!panel->stopping)
+                panel->motion = std::move(next);
+        }
+        return first_status;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
+}
+
+bool take_panel_motion_return_focus(sao_ui_compositor_handle_t compositor, uint64_t scope_token,
+                                   PanelMotionReturnFocus* out_cue) noexcept {
+    if (out_cue == nullptr)
+        return false;
+    try {
+        const auto owner = std::this_thread::get_id();
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard storage_lock(panel_storage_mutex());
+        for (const auto& panel : panel_storage()) {
+            std::lock_guard lock(panel->mutex);
+            auto& motion = panel->motion;
+            if (panel->compositor != compositor || panel->owner_thread != owner ||
+                panel->stopping || !motion.return_focus_pending)
+                continue;
+            if (now > motion.return_focus_deadline) {
+                motion.return_focus_pending = false;
+                continue;
+            }
+            if (panel->state.visible || motion.active || motion.source == nullptr ||
+                motion.source->scope_token != scope_token)
+                continue;
+            PanelMotionReturnFocus cue = *motion.source;
+            *out_cue = std::move(cue);
+            motion.return_focus_pending = false;
+            return true;
+        }
+    } catch (...) {
+    }
+    return false;
+}
+
+} // namespace sao::ui::detail
+
 extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_input_hit_test_(
     sao_ui_panel_handle_t panel, int32_t x, int32_t y, sao_ui_widget_handle_t* out_widget) {
     if (panel == nullptr || out_widget == nullptr)
@@ -3923,6 +4319,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_input_hit_test_(
     if (!operation)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     try {
+        {
+            std::lock_guard lock(panel->mutex);
+            if (!panel->state.visible || panel->motion_mutating)
+                return SAO_STATUS_ERR_NOT_FOUND;
+        }
         return widget_at(panel, x, y, out_widget);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -3961,6 +4362,8 @@ sao_ui_panel_input_activate_widget_(sao_ui_widget_handle_t widget) {
             std::string args;
             {
                 std::lock_guard panel_lock(panel->mutex);
+                if (!panel->state.visible || panel->motion_mutating)
+                    return SAO_STATUS_ERR_NOT_FOUND;
                 content = panel->content;
             }
             if (content == nullptr)
@@ -4055,7 +4458,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_input_current_focus_(
         if (stored->compositor != compositor)
             continue;
         std::lock_guard panel_lock(stored->mutex);
-        if (stored->state.visible && stored->focused_widget != nullptr) {
+        if (stored->state.visible && !stored->motion_mutating && stored->focused_widget != nullptr) {
             *out_widget = stored->focused_widget;
             return SAO_STATUS_OK;
         }
@@ -4073,6 +4476,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_input_focus_adjacent_(
         std::shared_ptr<PanelContent> content;
         {
             std::lock_guard panel_lock(stored->mutex);
+            if (!stored->state.visible || stored->motion_mutating)
+                continue;
             content = stored->content;
         }
         if (content == nullptr)
@@ -4114,6 +4519,8 @@ sao_ui_panel_input_accept_keyboard_focus_(sao_ui_widget_handle_t widget) {
         std::shared_ptr<PanelContent> content;
         {
             std::lock_guard panel_lock(stored->mutex);
+            if (!stored->state.visible || stored->motion_mutating)
+                continue;
             content = stored->content;
         }
         if (content == nullptr)
@@ -4404,10 +4811,18 @@ extern "C" void SAO_UI_CALL sao_ui_panel_runtime_destroy_(sao_ui_panel_handle_t 
         {
             std::lock_guard lock(panel->mutex);
             panel->stopping = true;
+            panel->motion = {};
         }
         finalize_if_ready(panel);
         bool self_callback = false;
         for (const ActiveCallback* active = active_callback; active != nullptr;
+             active = active->previous) {
+            if (active->panel == panel) {
+                self_callback = true;
+                break;
+            }
+        }
+        for (const ActivePanelOperation* active = active_panel_operation; active != nullptr;
              active = active->previous) {
             if (active->panel == panel) {
                 self_callback = true;
@@ -4661,7 +5076,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
                 widget->props["enabled"] = widget->enabled;
             }
             sao_status_t status = apply_owned_widget_props(widget);
-            if (status == SAO_STATUS_OK && widget->type != "sparkline")
+            if (status == SAO_STATUS_OK && widget->type != "sparkline" &&
+                widget->type != "canvas")
                 status = sao_ui_widget_set_enabled(widget->handle, widget->enabled);
             if (status != SAO_STATUS_OK) {
                 widget->props = std::move(previous_props);
@@ -4684,12 +5100,45 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
             widget->action_args = std::move(previous_args);
             widget->enabled = previous_enabled;
             (void)apply_owned_widget_props(widget);
-            if (widget->type != "sparkline")
+            if (widget->type != "sparkline" && widget->type != "canvas")
                 (void)sao_ui_widget_set_enabled(widget->handle, widget->enabled);
         }
         return status;
     } catch (...) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_find_widget(sao_ui_panel_handle_t panel,
+                                                             const char* widget_id_utf8,
+                                                             sao_ui_widget_handle_t* out_widget) {
+    if (out_widget != nullptr)
+        *out_widget = nullptr;
+    if (panel == nullptr || widget_id_utf8 == nullptr || widget_id_utf8[0] == '\0' ||
+        out_widget == nullptr) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    PanelOperation operation(panel);
+    if (!operation)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    try {
+        std::shared_ptr<PanelContent> content;
+        {
+            std::scoped_lock lock(panel->mutex);
+            content = panel->content;
+        }
+        if (content == nullptr)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        std::scoped_lock lock(content->mutex);
+        const auto found = content->by_id.find(widget_id_utf8);
+        if (found == content->by_id.end() || found->second == nullptr ||
+            found->second->handle == nullptr) {
+            return SAO_STATUS_ERR_NOT_FOUND;
+        }
+        *out_widget = found->second->handle;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
 }
 
@@ -4901,24 +5350,68 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_visible(sao_ui_panel_handle
     try {
         if (!visible)
             end_panel_text_edit(panel, true);
-        bool changed = false;
+        PanelMotionMutation mutation(panel);
+        if (!mutation)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        SaoPanelState previous_state{};
+        PanelMotion previous;
         {
             std::scoped_lock lock(panel->mutex);
-            changed = panel->state.visible != visible;
+            previous_state = panel->state;
+            previous = panel->motion;
         }
-        if (panel->layer != nullptr) {
-            sao_status_t status = sao_ui_layer_set_visible(panel->layer, visible);
-            if (status == SAO_STATUS_OK)
-                status = sao_ui_layer_set_input_enabled(panel->layer, visible);
-            if (status != SAO_STATUS_OK) {
-                (void)sao_ui_layer_set_visible(panel->layer, !visible);
-                return status;
+        const bool changed = previous_state.visible != visible;
+        SaoPanelState next_state = previous_state;
+        next_state.visible = visible;
+        PanelMotion next = previous;
+        sao::ui::detail::ScopedPanelMotionOrigin* origin = nullptr;
+        if (changed) {
+            next.return_focus_pending = false;
+            if (visible) {
+                if (panel->owner_thread == std::this_thread::get_id())
+                    origin = sao::ui::detail::PanelMotionOriginAccess::current(panel->compositor);
+                if (origin != nullptr)
+                    next.source = sao::ui::detail::PanelMotionOriginAccess::copy(origin);
+                else if (!previous.active)
+                    next.source.reset();
+            }
+            const bool animate = next.source != nullptr && panel->layer != nullptr &&
+                                 panel->owner_thread == std::this_thread::get_id() &&
+                                 panel_motion_permitted();
+            if (animate) {
+                const auto [dx, dy] = panel_motion_offset(next_state, *next.source);
+                if (visible && !previous.active) {
+                    next.dx = dx;
+                    next.dy = dy;
+                    next.alpha = 0.0F;
+                }
+                next.from_dx = next.dx;
+                next.from_dy = next.dy;
+                next.from_alpha = next.alpha;
+                next.target_dx = visible ? 0 : dx;
+                next.target_dy = visible ? 0 : dy;
+                next.elapsed_ms = 0;
+                next.duration_ms = visible ? 220U : 160U;
+                next.active = true;
+            } else {
+                finish_panel_motion(next, visible);
             }
         }
+        const bool update_visual = previous.active || next.active;
+        const sao_status_t status = apply_panel_motion_frame(
+            panel, next_state, next, visible || next.active, update_visual);
+        if (status != SAO_STATUS_OK)
+            return restore_panel_motion_frame(panel, previous_state, previous, status,
+                                               update_visual);
         {
             std::scoped_lock lock(panel->mutex);
+            if (panel->stopping)
+                return SAO_STATUS_ERR_HANDLE_INVALID;
             panel->state.visible = visible;
+            panel->motion = std::move(next);
         }
+        sao::ui::detail::PanelMotionOriginAccess::consume(origin);
+        mutation.release();
         if (changed && visible)
             (void)sao_ui_sound_play(SAO_UI_SOUND_PANEL, 70);
         if (changed)
@@ -4937,6 +5430,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_position(sao_ui_panel_handl
     if (!operation)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     try {
+        PanelMotionMutation mutation(panel);
+        if (!mutation)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        const sao_status_t cancel_status = cancel_panel_motion(panel);
+        if (cancel_status != SAO_STATUS_OK)
+            return cancel_status;
         if (panel->layer != nullptr) {
             const sao_status_t status = sao_ui_layer_set_position(panel->layer, x, y);
             if (status != SAO_STATUS_OK)
@@ -4947,6 +5446,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_position(sao_ui_panel_handl
             panel->state.x = x;
             panel->state.y = y;
         }
+        mutation.release();
         return notify(panel, SAO_UI_PANEL_EVENT_MOVE);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -4962,6 +5462,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_geometry(sao_ui_panel_handl
     if (!operation)
         return SAO_STATUS_ERR_HANDLE_INVALID;
     try {
+        PanelMotionMutation mutation(panel);
+        if (!mutation)
+            return SAO_UI_PANEL_STATUS_ERR_BUSY;
+        const sao_status_t cancel_status = cancel_panel_motion(panel);
+        if (cancel_status != SAO_STATUS_OK)
+            return cancel_status;
         std::lock_guard render_lock(panel->render_mutex);
         width = clamp_dimension(width, panel->min_width, panel->max_width);
         height = clamp_dimension(height, panel->min_height, panel->max_height);
@@ -4993,6 +5499,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_geometry(sao_ui_panel_handl
             (void)upload_panel(panel);
             return status;
         }
+        mutation.release();
         return notify(panel, SAO_UI_PANEL_EVENT_RESIZE);
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;

@@ -437,16 +437,31 @@ extern "C" void SAO_UI_CALL sao_ui_script_canvas_destroy(sao_ui_script_canvas_ha
         }
         uint32_t removed = 0;
         (void)sao::ui::detail::release_widget_event_handlers(canvas->widget, &removed);
-        std::lock_guard lock(canvas->mu);
-        canvas->pending_ops.clear();
-        canvas->committed_ops.clear();
-        canvas->snapshot_aux_arena.clear();
-        canvas->pending_aux_bytes = 0;
-        canvas->committed_aux_bytes = 0;
-        canvas->bitmaps.clear();
-        canvas->pointer_cb = nullptr;
-        canvas->pointer_ud = nullptr;
-        canvas->draw_open = false;
+        {
+            std::lock_guard lock(canvas->mu);
+            canvas->pending_ops.clear();
+            canvas->committed_ops.clear();
+            canvas->snapshot_aux_arena.clear();
+            canvas->pending_aux_bytes = 0;
+            canvas->committed_aux_bytes = 0;
+            canvas->bitmaps.clear();
+            canvas->pointer_cb = nullptr;
+            canvas->pointer_ud = nullptr;
+            canvas->draw_open = false;
+        }
+        // Drop the owning unique_ptr — every create+destroy pair used to
+        // leave the struct in the registry forever (unbounded leak). Only
+        // erase AFTER the lifecycle is retired so mid-destroy leases still
+        // fail HANDLE_INVALID rather than dereferencing freed memory.
+        auto& registry = script_canvas_registry();
+        std::lock_guard registry_lock(registry.mutex);
+        const auto it = std::find_if(registry.storage.begin(), registry.storage.end(),
+                                     [canvas](const std::unique_ptr<sao_ui_script_canvas_s>& p) {
+                                         return p.get() == canvas;
+                                     });
+        if (it != registry.storage.end()) {
+            registry.storage.erase(it);
+        }
     } catch (...) {
     }
 }

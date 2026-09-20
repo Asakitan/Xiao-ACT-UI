@@ -6,6 +6,8 @@
 #include "sao/ui/theme.h"
 #include "sao/ui/animator.h"
 #include "fisheye_backdrop_gpu.h"
+#include "menu_scene_internal.h"
+#include "panel_theme_internal.h"
 
 #include <algorithm>
 #include <atomic>
@@ -799,7 +801,12 @@ sao_status_t render_procedural_vector(const SaoUiFisheyeBackdropRect& rect,
 #if defined(_WIN32)
 sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGeometry& geometry,
                               bool visible, uint64_t revision, uint32_t delta_ms) {
-    const bool reduced = sao_ui_reduced_motion_enabled();
+    sao::ui::detail::MenuSceneFrame scene_frame{};
+    const bool coordinated = sao::ui::detail::read_menu_scene(handle->compositor, scene_frame);
+    const bool high_contrast = sao::ui::detail::panel_theme_high_contrast() ||
+                              (coordinated && scene_frame.high_contrast);
+    const bool reduced = sao_ui_reduced_motion_enabled() || high_contrast ||
+                         (coordinated && scene_frame.reduced_motion);
     SaoUiThemeId theme = SAO_UI_THEME_LIGHT;
     const sao_status_t theme_status = sao_ui_theme_get_active_id(&theme);
     if (theme_status != SAO_STATUS_OK) return theme_status;
@@ -812,23 +819,37 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
     {
         std::lock_guard lock(handle->mutex);
         constexpr uint32_t theme_duration = 1000u;
-        if (!handle->theme_initialized || !handle->gpu_bound || handle->opacity <= 0.001F || reduced) {
+        if (coordinated) {
+            theme_mix = std::clamp(scene_frame.theme_progress, 0.0F, 1.0F);
+            theme_direction = std::clamp(scene_frame.theme_direction, -1.0F, 1.0F);
+            if (reduced) {
+                theme_mix = theme_direction > 0.0F ? 1.0F : theme_direction < 0.0F ? 0.0F
+                    : (theme_mix >= 0.5F ? 1.0F : 0.0F);
+                theme_direction = 0.0F;
+            }
             handle->theme_initialized = true;
-            handle->theme_mix = handle->theme_from = handle->theme_target = target_theme;
-            handle->theme_elapsed = theme_duration;
-        } else if (target_theme != handle->theme_target) {
-            handle->theme_from = handle->theme_mix;
+            handle->theme_mix = handle->theme_from = theme_mix;
             handle->theme_target = target_theme;
-            handle->theme_elapsed = 0u;
+            handle->theme_elapsed = theme_mix == target_theme ? theme_duration : 0u;
+        } else {
+            if (!handle->theme_initialized || !handle->gpu_bound || handle->opacity <= 0.001F || reduced) {
+                handle->theme_initialized = true;
+                handle->theme_mix = handle->theme_from = handle->theme_target = target_theme;
+                handle->theme_elapsed = theme_duration;
+            } else if (target_theme != handle->theme_target) {
+                handle->theme_from = handle->theme_mix;
+                handle->theme_target = target_theme;
+                handle->theme_elapsed = 0u;
+            }
+            handle->theme_elapsed = std::min(theme_duration,
+                handle->theme_elapsed + std::min(delta_ms, theme_duration));
+            float blend = static_cast<float>(handle->theme_elapsed) / theme_duration;
+            blend = blend * blend * blend * (blend * (blend * 6.0F - 15.0F) + 10.0F);
+            handle->theme_mix = handle->theme_from + (handle->theme_target - handle->theme_from) * blend;
+            theme_mix = handle->theme_mix;
+            if (handle->theme_elapsed < theme_duration)
+                theme_direction = target_theme > theme_mix ? 1.0F : -1.0F;
         }
-        handle->theme_elapsed = std::min(theme_duration,
-            handle->theme_elapsed + std::min(delta_ms, theme_duration));
-        float blend = static_cast<float>(handle->theme_elapsed) / theme_duration;
-        blend = blend * blend * blend * (blend * (blend * 6.0F - 15.0F) + 10.0F);
-        handle->theme_mix = handle->theme_from + (handle->theme_target - handle->theme_from) * blend;
-        theme_mix = handle->theme_mix;
-        if (handle->theme_elapsed < theme_duration)
-            theme_direction = target_theme > theme_mix ? 1.0F : -1.0F;
         if (visible != handle->fade_target) {
             handle->fade_target = visible;
             handle->fade_from = handle->opacity;
@@ -843,7 +864,8 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
         t = t * t * (3.0F - 2.0F * t);
         handle->opacity = handle->fade_from + ((visible ? 1.0F : 0.0F) - handle->fade_from) * t;
         opacity = handle->opacity;
-        seconds = static_cast<float>(handle->visual_ms) / 1000.0F;
+        seconds = reduced ? 0.0F : coordinated ? scene_frame.seconds
+            : static_cast<float>(handle->visual_ms) / 1000.0F;
         layer = handle->layer;
     }
     if (!layer && !visible)
@@ -866,7 +888,25 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
         const auto status = sao::ui::fisheye_gpu::create(&handle->gpu);
         if (status != SAO_STATUS_OK) return status;
     }
-    sao::ui::fisheye_gpu::update(handle->gpu, seconds, opacity, reduced, theme_mix, theme_direction);
+    sao::ui::fisheye_gpu::Scene gpu_scene{};
+    gpu_scene.high_contrast = high_contrast ? 1.0F : 0.0F;
+    if (coordinated) {
+        const float width = static_cast<float>(geometry.rect.width);
+        const float height = static_cast<float>(geometry.rect.height);
+        gpu_scene.menu_rect_uv[0] = (scene_frame.menu_x - static_cast<float>(geometry.rect.x)) / width;
+        gpu_scene.menu_rect_uv[1] = (scene_frame.menu_y - static_cast<float>(geometry.rect.y)) / height;
+        gpu_scene.menu_rect_uv[2] = scene_frame.menu_width / width;
+        gpu_scene.menu_rect_uv[3] = scene_frame.menu_height / height;
+        gpu_scene.host_uv[0] = static_cast<float>(geometry.rect.x) / scene_frame.viewport_width;
+        gpu_scene.host_uv[1] = static_cast<float>(geometry.rect.y) / scene_frame.viewport_height;
+        gpu_scene.host_uv[2] = width / scene_frame.viewport_width;
+        gpu_scene.host_uv[3] = height / scene_frame.viewport_height;
+        gpu_scene.menu_visibility = std::clamp(scene_frame.menu_visibility, 0.0F, 1.0F);
+        gpu_scene.child_activity = std::clamp(scene_frame.child_activity, 0.0F, 1.0F);
+        gpu_scene.fps_pressure = scene_frame.fps_pressure ? 1.0F : 0.0F;
+    }
+    sao::ui::fisheye_gpu::update(handle->gpu, seconds, opacity, reduced, theme_mix, theme_direction,
+                               gpu_scene);
     sao_status_t status = sao_ui_layer_set_geometry(layer, geometry.rect.x, geometry.rect.y,
                                                     geometry.rect.width, geometry.rect.height);
     if (status == SAO_STATUS_OK) status = sao_ui_layer_set_alpha(layer, kBackdropOpacity);

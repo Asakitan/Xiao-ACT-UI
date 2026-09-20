@@ -32,6 +32,9 @@ public:
     sao_status_t list_classes(uint32_t* offsets, size_t max_off, size_t* off_ct,
                                char* names, size_t names_cap,
                                size_t* names_used) override {
+        (void)offsets;
+        (void)max_off;
+        (void)names_cap;
         if (offsets == nullptr || off_ct == nullptr || names == nullptr ||
             names_used == nullptr)
             return SAO_STATUS_ERR_INVALID_ARGUMENT;

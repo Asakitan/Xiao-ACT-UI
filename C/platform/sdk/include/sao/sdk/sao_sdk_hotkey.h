@@ -20,6 +20,8 @@ static inline sao_sdk_status_t sao_sdk_hotkey_register(
     sao_sdk_hotkey_callback_t callback,
     void* user_data,
     sao_sdk_hotkey_id_t* out_id) {
+    if (ctx == NULL || ctx->hotkey == NULL || ctx->hotkey->register_hotkey == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->hotkey->register_hotkey(ctx->ctx_impl, hotkey_name_utf8,
                                          virtual_key, modifier_mask,
                                          callback, user_data, out_id);
@@ -27,6 +29,8 @@ static inline sao_sdk_status_t sao_sdk_hotkey_register(
 
 static inline sao_sdk_status_t sao_sdk_hotkey_unregister(
     const struct SaoSdkContext* ctx, sao_sdk_hotkey_id_t id) {
+    if (ctx == NULL || ctx->hotkey == NULL || ctx->hotkey->unregister_hotkey == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->hotkey->unregister_hotkey(ctx->ctx_impl, id);
 }
 

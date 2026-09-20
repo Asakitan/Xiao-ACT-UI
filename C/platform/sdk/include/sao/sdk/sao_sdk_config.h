@@ -14,43 +14,59 @@ extern "C" {
 
 static inline sao_sdk_status_t sao_sdk_config_get_bool(
     const struct SaoSdkContext* ctx, const char* key_utf8, bool* out_value) {
+    if (ctx == NULL || ctx->config == NULL || ctx->config->get_bool == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->config->get_bool(ctx->ctx_impl, key_utf8, out_value);
 }
 
 static inline sao_sdk_status_t sao_sdk_config_get_int(
     const struct SaoSdkContext* ctx, const char* key_utf8, int64_t* out_value) {
+    if (ctx == NULL || ctx->config == NULL || ctx->config->get_int == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->config->get_int(ctx->ctx_impl, key_utf8, out_value);
 }
 
 static inline sao_sdk_status_t sao_sdk_config_get_double(
     const struct SaoSdkContext* ctx, const char* key_utf8, double* out_value) {
+    if (ctx == NULL || ctx->config == NULL || ctx->config->get_double == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->config->get_double(ctx->ctx_impl, key_utf8, out_value);
 }
 
 static inline sao_sdk_status_t sao_sdk_config_get_string(
     const struct SaoSdkContext* ctx, const char* key_utf8,
     char* out_buffer, size_t buffer_len, size_t* out_bytes_needed) {
+    if (ctx == NULL || ctx->config == NULL || ctx->config->get_string == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->config->get_string(ctx->ctx_impl, key_utf8, out_buffer,
                                     buffer_len, out_bytes_needed);
 }
 
 static inline sao_sdk_status_t sao_sdk_config_set_bool(
     const struct SaoSdkContext* ctx, const char* key_utf8, bool value) {
+    if (ctx == NULL || ctx->config == NULL || ctx->config->set_bool == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->config->set_bool(ctx->ctx_impl, key_utf8, value);
 }
 
 static inline sao_sdk_status_t sao_sdk_config_set_int(
     const struct SaoSdkContext* ctx, const char* key_utf8, int64_t value) {
+    if (ctx == NULL || ctx->config == NULL || ctx->config->set_int == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->config->set_int(ctx->ctx_impl, key_utf8, value);
 }
 
 static inline sao_sdk_status_t sao_sdk_config_set_double(
     const struct SaoSdkContext* ctx, const char* key_utf8, double value) {
+    if (ctx == NULL || ctx->config == NULL || ctx->config->set_double == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->config->set_double(ctx->ctx_impl, key_utf8, value);
 }
 
 static inline sao_sdk_status_t sao_sdk_config_set_string(
     const struct SaoSdkContext* ctx, const char* key_utf8, const char* value_utf8) {
+    if (ctx == NULL || ctx->config == NULL || ctx->config->set_string == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->config->set_string(ctx->ctx_impl, key_utf8, value_utf8);
 }
 

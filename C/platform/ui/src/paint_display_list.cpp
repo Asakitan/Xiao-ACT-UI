@@ -99,17 +99,22 @@ struct PaintDisplayList {
     std::shared_ptr<const PaintDisplayList> theme_light;
     std::shared_ptr<const PaintDisplayList> theme_dark;
     float theme_progress{};
+    ThemePaintFrame theme_frame{};
 };
 
 sao_status_t compose_theme_paint(std::shared_ptr<const PaintDisplayList> light,
                                  std::shared_ptr<const PaintDisplayList> dark, float progress,
-                                 std::shared_ptr<const PaintDisplayList>* out) noexcept {
+                                 std::shared_ptr<const PaintDisplayList>* out,
+                                 ThemePaintFrame frame) noexcept {
     if (!out)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out = {};
     if (!light || !dark || light->width != dark->width || light->height != dark->height ||
         light->theme_light || dark->theme_light || !std::isfinite(progress))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (valid_theme_paint_frame(frame) && (frame.reduced_motion || frame.high_contrast))
+        progress = frame.theme_direction > 0.0F ? 1.0F : frame.theme_direction < 0.0F ? 0.0F
+            : (progress >= 0.5F ? 1.0F : 0.0F);
     if (progress <= 0.0F || progress >= 1.0F) {
         *out = progress <= 0.0F ? std::move(light) : std::move(dark);
         return SAO_STATUS_OK;
@@ -121,6 +126,7 @@ sao_status_t compose_theme_paint(std::shared_ptr<const PaintDisplayList> light,
         list->theme_light = std::move(light);
         list->theme_dark = std::move(dark);
         list->theme_progress = progress;
+        list->theme_frame = frame;
         *out = std::move(list);
         return SAO_STATUS_OK;
     } catch (...) {
@@ -513,7 +519,7 @@ sao_status_t replay_paint_display_list(const PaintDisplayList& list,
     };
     if (list.theme_light && list.theme_dark) {
         for (int pass = 0; pass < 2 && status == SAO_STATUS_OK; ++pass) {
-            status = push_gpu_theme_mask(target, list.theme_progress, pass != 0);
+            status = push_gpu_theme_mask(target, list.theme_progress, pass != 0, list.theme_frame);
             if (status != SAO_STATUS_OK)
                 break;
             replay(pass == 0 ? *list.theme_light : *list.theme_dark);

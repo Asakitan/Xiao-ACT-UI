@@ -1,5 +1,6 @@
 #include "fisheye_backdrop_gpu.h"
 #include <algorithm>
+#include <cstddef>
 #include <mutex>
 #include <new>
 
@@ -17,6 +18,7 @@ struct Renderer {
     bool reduced{};
     float darkness{};
     float theme_direction{};
+    Scene scene{};
 #if defined(_WIN32)
     ID3D11Device* device{};
     ID3D11VertexShader* vertex{};
@@ -33,6 +35,14 @@ struct Renderer {
 
 #if defined(_WIN32)
 namespace {
+struct alignas(16) Constants {
+    float resolution[2], time, openness, reduced, pass, darkness, theme_direction;
+    Scene scene;
+};
+static_assert(sizeof(Scene) == 48);
+static_assert(sizeof(Constants) == 80 && alignof(Constants) == 16);
+static_assert(offsetof(Constants, reduced) == 16 && offsetof(Constants, scene) == 32);
+static_assert(offsetof(Scene, host_uv) == 16 && offsetof(Scene, menu_visibility) == 32);
 template<class T> void release(T*& object) noexcept {
     if (object) { object->Release(); object = nullptr; }
 }
@@ -57,7 +67,7 @@ bool ensure_device(Renderer& r, ID3D11Device* device) noexcept {
         release_device(r); return false;
     }
     D3D11_BUFFER_DESC buffer{};
-    buffer.ByteWidth = 32u; buffer.Usage = D3D11_USAGE_DYNAMIC;
+    buffer.ByteWidth = static_cast<UINT>(sizeof(Constants)); buffer.Usage = D3D11_USAGE_DYNAMIC;
     buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER; buffer.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     D3D11_SAMPLER_DESC sampler{};
     sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -102,12 +112,13 @@ void destroy(Renderer* renderer) noexcept {
     delete renderer;
 }
 void update(Renderer* r, float seconds, float openness, bool reduced_motion,
-            float darkness, float theme_direction) noexcept {
+            float darkness, float theme_direction, Scene scene) noexcept {
     if (!r) return;
     std::lock_guard lock(r->mutex);
     r->seconds = seconds; r->openness = std::clamp(openness, 0.0F, 1.0F); r->reduced = reduced_motion;
     r->darkness = std::clamp(darkness, 0.0F, 1.0F);
     r->theme_direction = reduced_motion ? 0.0F : std::clamp(theme_direction, -1.0F, 1.0F);
+    r->scene = scene;
 }
 sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* frame, void* user) noexcept {
 #if defined(_WIN32)
@@ -125,13 +136,12 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* frame, void*
         const UINT width = std::max(1u, frame->width_px * 85u / 100u);
         const UINT height = std::max(1u, frame->height_px * 85u / 100u);
         if (!ensure_device(*r, device) || !ensure_field(*r, width, height)) return failure();
-        struct Constants { float resolution[2], time, openness, reduced, pass, darkness, theme_direction; };
-        static_assert(sizeof(Constants) == 32);
         const auto uniforms = [&](UINT w, UINT h, float pass) {
             D3D11_MAPPED_SUBRESOURCE mapped{};
             if (FAILED(context->Map(r->constants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) return false;
             *static_cast<Constants*>(mapped.pData) = {{static_cast<float>(w), static_cast<float>(h)},
-                r->seconds, r->openness, r->reduced ? 1.0F : 0.0F, pass, r->darkness, r->theme_direction};
+                r->seconds, r->openness, r->reduced ? 1.0F : 0.0F, pass, r->darkness, r->theme_direction,
+                r->scene};
             context->Unmap(r->constants, 0); return true;
         };
         ID3D11ShaderResourceView* empty = nullptr;

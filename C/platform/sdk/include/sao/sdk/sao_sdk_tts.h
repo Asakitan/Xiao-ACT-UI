@@ -12,10 +12,14 @@ extern "C" {
 static inline sao_sdk_status_t sao_sdk_tts_speak(
     const struct SaoSdkContext* ctx, const char* text_utf8,
     float volume, float rate) {
+    if (ctx == NULL || ctx->tts == NULL || ctx->tts->speak == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->tts->speak(ctx->ctx_impl, text_utf8, volume, rate);
 }
 
 static inline sao_sdk_status_t sao_sdk_tts_stop(const struct SaoSdkContext* ctx) {
+    if (ctx == NULL || ctx->tts == NULL || ctx->tts->stop == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->tts->stop(ctx->ctx_impl);
 }
 

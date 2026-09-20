@@ -34,10 +34,6 @@ struct sao_ui_z_order_manager_s {
 
 namespace {
 
-constexpr SaoUiDcMutationRect kPhysicalRectScrub{0, 0, 1, 1};
-constexpr uint32_t kPhysicalRectScrubSettleMs = 40;
-constexpr uint32_t kPhysicalRectScrubTimeoutMs = 2000;
-
 bool valid_policy(int32_t policy) {
     return policy == SAO_UI_TOPMOST_FOLLOW_GAME || policy == SAO_UI_TOPMOST_ALWAYS ||
            policy == SAO_UI_TOPMOST_NEVER;
@@ -68,37 +64,13 @@ bool current_topmost(void* hwnd) {
 #endif
 }
 
-void update_status(sao_ui_z_order_manager_s* manager, void* host_hwnd, void* game_hwnd,
-                   bool game_topmost, bool game_present) {
-    manager->status.policy = manager->policy;
-    manager->status.is_topmost = current_topmost(host_hwnd);
-    manager->status.game_hwnd_snapshot = game_hwnd;
-    manager->status.game_topmost_snapshot = game_topmost;
-    manager->status.game_present_snapshot = game_present;
-    manager->status.last_enforce_ns = monotonic_ns();
-}
-
-sao_status_t submit_physical_rect_scrub(sao_ui_z_order_manager_s* manager, void* hwnd) {
-    if (manager->dc_mutation == nullptr)
-        return SAO_STATUS_OK;
-    const sao_status_t status = sao_ui_dc_mutation_coordinator_submit_hide_window_rect(
-        manager->dc_mutation, hwnd, &kPhysicalRectScrub, kPhysicalRectScrubSettleMs,
-        kPhysicalRectScrubTimeoutMs);
-    return status == SAO_STATUS_ERR_NOT_INITIALIZED ? SAO_STATUS_OK : status;
-}
-
-// Physical z-order sibling-chain unlink.  Mirrors the Python authority's
-// The raw disposition is recorded in manager->last_unlink_state so the
-// flattened OK doesn't erase the distinction callers need for evidence.
-// Callers hold manager->mu.
 sao_status_t submit_z_order_unlink(sao_ui_z_order_manager_s* manager, void* hwnd) {
     if (manager->dc_mutation == nullptr) {
         manager->last_unlink_state = SAO_UI_Z_ORDER_UNLINK_NO_PROVIDER;
         return SAO_STATUS_OK;
     }
-    const sao_status_t status =
-        sao_ui_dc_mutation_coordinator_submit_unlink_z_order(manager->dc_mutation, hwnd,
-                                                             kPhysicalRectScrubTimeoutMs);
+    const sao_status_t status = sao_ui_dc_mutation_coordinator_submit_unlink_z_order(
+        manager->dc_mutation, hwnd, 2000u);
     if (status == SAO_STATUS_OK) {
         manager->last_unlink_state = SAO_UI_Z_ORDER_UNLINK_SPLICED;
         return SAO_STATUS_OK;
@@ -112,9 +84,17 @@ sao_status_t submit_z_order_unlink(sao_ui_z_order_manager_s* manager, void* hwnd
         return SAO_STATUS_OK;
     }
     manager->last_unlink_state = SAO_UI_Z_ORDER_UNLINK_FAILED;
-    return status == SAO_STATUS_ERR_NOT_INITIALIZED || status == SAO_STATUS_ERR_CANCELLED
-               ? SAO_STATUS_OK
-               : status;
+    return status;
+}
+
+void update_status(sao_ui_z_order_manager_s* manager, void* host_hwnd, void* game_hwnd,
+                   bool game_topmost, bool game_present) {
+    manager->status.policy = manager->policy;
+    manager->status.is_topmost = current_topmost(host_hwnd);
+    manager->status.game_hwnd_snapshot = game_hwnd;
+    manager->status.game_topmost_snapshot = game_topmost;
+    manager->status.game_present_snapshot = game_present;
+    manager->status.last_enforce_ns = monotonic_ns();
 }
 
 } // namespace
@@ -217,9 +197,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_enforce(sao_ui_z_order_manage
         if (!restored)
             return SAO_STATUS_ERR_OS_CALL_FAILED;
         (void)::DwmFlush();
-        const sao_status_t scrub_status = submit_physical_rect_scrub(handle, host_hwnd);
-        const sao_status_t unlink_status = submit_z_order_unlink(handle, host_hwnd);
-        return scrub_status != SAO_STATUS_OK ? scrub_status : unlink_status;
+        return SAO_STATUS_OK;
     }
 
     BOOL succeeded = FALSE;
@@ -245,9 +223,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_z_order_enforce(sao_ui_z_order_manage
     if (!succeeded)
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     (void)::DwmFlush();
-    const sao_status_t scrub_status = submit_physical_rect_scrub(handle, host_hwnd);
-    const sao_status_t unlink_status = submit_z_order_unlink(handle, host_hwnd);
-    return scrub_status != SAO_STATUS_OK ? scrub_status : unlink_status;
+    return SAO_STATUS_OK;
 #endif
 }
 
@@ -319,11 +295,7 @@ extern "C" bool SAO_UI_CALL sao_ui_z_order_stale(sao_ui_z_order_manager_handle_t
         }
         return true;
     }
-    // No-game branch: the host is healthy while it stays inside the topmost
-    // band; the first non-TOPMOST window above it means it fell out.  A
-    // missing predecessor means the host fell off the sibling chain
-    // entirely (post-unlink it is physically spliced out), which is stale —
-    // not healthy — so enforce() re-asserts and resubmits.
+    // A missing predecessor is stale because the host left the sibling chain.
     HWND current = ::GetWindow(comp, GW_HWNDPREV);
     if (current == nullptr)
         return true;

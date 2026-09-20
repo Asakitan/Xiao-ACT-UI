@@ -2182,6 +2182,25 @@ sao_sdk_status_t provider_overlay_clear(ContextState* state, sao_sdk_overlay_tok
     return SAO_SDK_OK;
 }
 
+sao_sdk_status_t provider_overlay_clear_surface(ContextState* state,
+                                                const char* surface_id_utf8) {
+    if (state == nullptr)
+        return SAO_SDK_ERR_HANDLE_INVALID;
+    if (surface_id_utf8 == nullptr || surface_id_utf8[0] == '\0')
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    uint64_t overlay = 0;
+    {
+        std::lock_guard<std::mutex> lock(state->mu);
+        const auto found = state->overlays.find(surface_id_utf8);
+        if (found == state->overlays.end())
+            return SAO_SDK_ERR_NOT_FOUND;
+        overlay = reinterpret_cast<uint64_t>(found->second);
+    }
+    if (overlay == 0)
+        return SAO_SDK_ERR_NOT_FOUND;
+    return provider_overlay_clear(state, overlay);
+}
+
 sao_sdk_status_t retain_gpu_provider(ContextState* state, SaoSdkProviderVTable* out_provider,
                                      std::string* out_plugin_id) {
     if (state == nullptr)
@@ -2600,6 +2619,16 @@ sao_sdk_overlay_clear(const SaoSdkContext* ctx, sao_sdk_overlay_token_t overlay)
         return lease.status();
     return sao_sdk_internal::invoke_callback_barrier(
         [&] { return sao_sdk_internal::provider_overlay_clear(lease.state(), overlay); });
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
+sao_sdk_overlay_clear_surface(const SaoSdkContext* ctx, const char* surface_id_utf8) {
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    return sao_sdk_internal::invoke_callback_barrier([&] {
+        return sao_sdk_internal::provider_overlay_clear_surface(lease.state(), surface_id_utf8);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_platform_render_dispatch(

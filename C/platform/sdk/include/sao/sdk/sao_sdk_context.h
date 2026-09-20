@@ -848,6 +848,9 @@ struct SaoSdkContext {
     const struct SaoSdkTtsTable* tts;
     const struct SaoSdkBannerTable* banner;
     const struct SaoSdkGpuHuntTable* gpu_hunt;
+    // VT-Splitview hypervisor surface (sao_sdk_vt.h).  NULL on contexts
+    // built before the vt table existed; slots fail closed.
+    const struct SaoSdkVtTable* vt;
     // TODO(script-host-table): scripting table for plugins that host scripts of
     // their own (e.g. the workshop plugin's LuaJit sandbox).
 };

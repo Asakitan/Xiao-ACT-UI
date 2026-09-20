@@ -844,6 +844,21 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
                     (std::abs(entry - previous_entry) + std::abs(leave - previous_leave)) * 18.0F);
     }
 
+    char bootstrap_stage_label[kBootstrapCaptionCapacity]{};
+    char bootstrap_waiting[kBootstrapCaptionCapacity]{};
+    const char* bootstrap_separator = std::strchr(handle->bootstrap_caption, '|');
+    if (bootstrap_separator != nullptr) {
+        const size_t stage_length = std::min(
+            static_cast<size_t>(bootstrap_separator - handle->bootstrap_caption),
+            sizeof(bootstrap_stage_label) - 1u);
+        std::memcpy(bootstrap_stage_label, handle->bootstrap_caption, stage_length);
+        std::snprintf(bootstrap_waiting, sizeof(bootstrap_waiting), "%s",
+                      bootstrap_separator + 1u);
+    } else {
+        std::snprintf(bootstrap_stage_label, sizeof(bootstrap_stage_label), "%s",
+                      handle->bootstrap_caption);
+    }
+
     if (status == SAO_STATUS_OK && !handle->outro && scene_seconds >= handle->timeline.p4_start) {
         const float entry_end = std::min(handle->timeline.p4_start + 0.40F,
                                          handle->timeline.p4_hold_end);
@@ -873,13 +888,40 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
             status = centered_text(paint_ctx, center_x, cy - 21.0F * scale,
                 handle->bootstrap_hold_active ? "SYSTEM >> LINKING" : "SYSTEM >> CONNECTED", 31.0F * scale,
                 with_alpha(0xff41545eu, opacity), sao::ui::detail::ClassicTextRole::Display);
-        if (status == SAO_STATUS_OK)
-            status = centered_ascii_text(paint_ctx, center_x, cy + 43.0F * scale,
+        if (status == SAO_STATUS_OK) {
+            status = centered_ascii_text(
+                paint_ctx, center_x,
+                cy + (handle->bootstrap_hold_active ? 28.0F : 43.0F) * scale,
                 handle->bootstrap_hold_active ? "PREPARING INTERFACE" : "FULL DIVE INITIALIZED",
                 12.0F * scale, 2.5F * scale, with_alpha(0xff73858fu, opacity));
-        if (status == SAO_STATUS_OK)
-            status = sao_ui_paint_ctx_stroke_line(paint_ctx, center_x - 90.0F * scale, cy + 73.0F * scale,
-                center_x + 90.0F * scale, cy + 73.0F * scale, scale, with_alpha(0xff659b89u, opacity * 0.5F));
+        }
+        if (status == SAO_STATUS_OK && handle->bootstrap_hold_active) {
+            char stage_line[kBootstrapCaptionCapacity + 32u]{};
+            (void)std::snprintf(stage_line, sizeof(stage_line), "STAGE %u/%u: %s",
+                                handle->bootstrap_stage_index + 1u,
+                                handle->bootstrap_stage_count,
+                                bootstrap_stage_label[0] != '\0' ? bootstrap_stage_label
+                                                                  : "BOOTSTRAP");
+            status = centered_ascii_text(paint_ctx, center_x, cy + 53.0F * scale, stage_line,
+                                         9.0F * scale, 1.5F * scale,
+                                         with_alpha(0xff5f7886u, opacity));
+            if (status == SAO_STATUS_OK && bootstrap_waiting[0] != '\0') {
+                char wait_line[kBootstrapCaptionCapacity + 16u]{};
+                (void)std::snprintf(wait_line, sizeof(wait_line), "WAITING: %s",
+                                    bootstrap_waiting);
+                status = centered_ascii_text(paint_ctx, center_x, cy + 70.0F * scale, wait_line,
+                                             8.0F * scale, 1.2F * scale,
+                                             with_alpha(0xff73858fu, opacity));
+            }
+        }
+        if (status == SAO_STATUS_OK) {
+            const float divider_y =
+                cy + (handle->bootstrap_hold_active ? 91.0F : 73.0F) * scale;
+            status = sao_ui_paint_ctx_stroke_line(
+                paint_ctx, center_x - 90.0F * scale, divider_y,
+                center_x + 90.0F * scale, divider_y, scale,
+                with_alpha(0xff659b89u, opacity * 0.5F));
+        }
         };
         const float entry = eased_progress(scene_seconds, handle->timeline.p4_start,
                                             entry_end);
@@ -939,7 +981,7 @@ sao_status_t render_frame_locked(sao_ui_linkstart_s* handle) {
         char caption[kBootstrapCaptionCapacity + 32u]{};
         if (bootstrap_telemetry) {
             const char* label =
-                handle->bootstrap_caption[0] != '\0' ? handle->bootstrap_caption : "BOOTSTRAP";
+                bootstrap_stage_label[0] != '\0' ? bootstrap_stage_label : "BOOTSTRAP";
             const unsigned stage_number = handle->bootstrap_stage_index + 1u;
             if (handle->bootstrap_failed) {
                 (void)std::snprintf(caption, sizeof(caption), "%s %u/%u FAILED", label,

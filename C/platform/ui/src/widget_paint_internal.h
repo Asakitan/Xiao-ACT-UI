@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sao/ui/d2d_widgets.h"
+#include "menu_scene_internal.h"
 
 #include <cstdint>
 #include <memory>
@@ -34,7 +35,8 @@ sao_status_t replay_paint_display_list(const PaintDisplayList& display_list,
 
 sao_status_t compose_theme_paint(std::shared_ptr<const PaintDisplayList> light,
                                  std::shared_ptr<const PaintDisplayList> dark, float progress,
-                                 std::shared_ptr<const PaintDisplayList>* out) noexcept;
+                                 std::shared_ptr<const PaintDisplayList>* out,
+                                 ThemePaintFrame frame = {}) noexcept;
 
 sao_status_t paint_rounded_rect(sao_ui_paint_ctx_handle_t context, float x, float y, float width,
                                 float height, float radius, uint32_t argb) noexcept;

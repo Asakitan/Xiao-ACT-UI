@@ -14,12 +14,16 @@ static inline sao_sdk_status_t sao_sdk_event_subscribe(
     sao_sdk_event_callback_t callback,
     void* user_data,
     sao_sdk_subscription_t* out_subscription) {
+    if (ctx == NULL || ctx->event == NULL || ctx->event->subscribe == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->event->subscribe(ctx->ctx_impl, topic_utf8, callback,
                                   user_data, out_subscription);
 }
 
 static inline sao_sdk_status_t sao_sdk_event_unsubscribe(
     const struct SaoSdkContext* ctx, sao_sdk_subscription_t subscription) {
+    if (ctx == NULL || ctx->event == NULL || ctx->event->unsubscribe == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->event->unsubscribe(ctx->ctx_impl, subscription);
 }
 
@@ -28,6 +32,8 @@ static inline sao_sdk_status_t sao_sdk_event_publish(
     const char* topic_utf8,
     const uint8_t* json_payload_utf8,
     size_t payload_len) {
+    if (ctx == NULL || ctx->event == NULL || ctx->event->publish == NULL)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     return ctx->event->publish(ctx->ctx_impl, topic_utf8,
                                 json_payload_utf8, payload_len);
 }

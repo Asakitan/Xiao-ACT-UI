@@ -1215,6 +1215,7 @@ void populate_context(ContextState* state, SaoSdkContext* out_ctx,
     out_ctx->tts = make_tts_table();
     out_ctx->banner = make_banner_table();
     out_ctx->gpu_hunt = make_public_gpu_hunt_table();
+    out_ctx->vt = make_vt_table();
 }
 
 } // namespace sao_sdk_internal

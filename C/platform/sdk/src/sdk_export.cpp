@@ -16,7 +16,7 @@
 #include <cstring>
 #include <new>
 
-extern "C" uint32_t SAO_SDK_CALL sao_sdk_abi_version(void) {
+extern "C" SAO_SDK_API uint32_t SAO_SDK_CALL sao_sdk_abi_version(void) {
     return SAO_SDK_ABI_VERSION;
 }
 

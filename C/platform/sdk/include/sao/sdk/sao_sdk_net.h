@@ -112,6 +112,9 @@ sao_sdk_context_net_provider_status(const struct SaoSdkContext* ctx);
 SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_platform_net_configure_provider(const struct SaoSdkNetProviderVTable* provider);
 
+// The provider-based capture path (capture_start + packet callback)
+// supersedes this pre-v1.5 slot; the installed handler always returns
+// SAO_SDK_ERR_UNSUPPORTED.
 static inline sao_sdk_status_t sao_sdk_net_set_frame_callback(
     const struct SaoSdkContext* ctx,
     void(SAO_SDK_CALL* frame_callback)(const uint8_t*, size_t, uint64_t, void*), void* user_data) {

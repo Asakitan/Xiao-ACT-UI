@@ -4404,6 +4404,19 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_compose_snapshot_(
 }
 
 extern "C" sao_status_t SAO_UI_CALL
+sao_ui_compositor_set_topmost(sao_ui_compositor_handle_t compositor, bool enabled) {
+    if (compositor == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (std::this_thread::get_id() != compositor->render_thread)
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    if (compositor->z_order == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t status = sao_ui_z_order_set_policy(
+        compositor->z_order, enabled ? SAO_UI_TOPMOST_ALWAYS : SAO_UI_TOPMOST_NEVER);
+    return status == SAO_STATUS_OK ? sao_ui_compositor_enforce_z_order(compositor) : status;
+}
+
+extern "C" sao_status_t SAO_UI_CALL
 sao_ui_compositor_enforce_z_order(sao_ui_compositor_handle_t compositor) {
     if (compositor == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
