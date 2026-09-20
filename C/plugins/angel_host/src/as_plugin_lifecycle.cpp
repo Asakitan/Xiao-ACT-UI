@@ -32,6 +32,8 @@ namespace sao::plugins::angel_host {
 
 #if defined(SAO_HAS_ANGELSCRIPT)
 
+namespace {
+
 std::atomic_uint64_t g_next_legacy_module_generation{1};
 
 std::string next_legacy_module_name(const std::string& plugin_id) {
@@ -160,7 +162,23 @@ sao_plugins_ashost_load_plugin(as_host_handle_t host, const char* plugin_json_pa
     asIScriptModule* mod = engine->GetModule(module_name.c_str(), asGM_ALWAYS_CREATE);
     if (mod == nullptr)
         return SAO_ERR_OS_CALL_FAILED;
-    int r = mod->AddScriptSection(manifest.entry.c_str(), entry_body.c_str(), entry_body.size());
+    // Reflective-engine section first so manifest entries can call
+    // sao_engine::* wrappers; takes PluginContext@ ctx as a param, so it
+    // compiles even though this path has no module-bridge ctx global.
+    const std::string engine_preamble = sao_as_engine_preamble(engine);
+    int r = mod->AddScriptSection("sao_engine_preamble", engine_preamble.c_str(),
+                                  engine_preamble.size());
+    if (r < 0) {
+        const char* m = "AddScriptSection failed";
+        if (out_error_utf8) {
+            *out_error_utf8 = static_cast<char*>(std::malloc(std::strlen(m) + 1));
+            if (*out_error_utf8)
+                std::strcpy(*out_error_utf8, m);
+        }
+        engine->DiscardModule(module_name.c_str());
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    r = mod->AddScriptSection(manifest.entry.c_str(), entry_body.c_str(), entry_body.size());
     if (r < 0) {
         const char* m = "AddScriptSection failed";
         if (out_error_utf8) {

@@ -661,6 +661,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_luahost_register
             sao::plugins::loader::engine_kind::lua, &table);
         if (status != SAO_OK)
             return status;
+        (void)detail::register_runtime_bridge_provider();
         owner->active = true;
         g_adapter_owner = owner.get();
         *out_owner = owner.release();
@@ -691,6 +692,7 @@ sao_plugins_luahost_unregister_loader_adapter(lua_loader_adapter_owner_t owner) 
             sao::plugins::loader::engine_kind::lua);
         if (status != SAO_OK)
             return status;
+        (void)detail::unregister_runtime_bridge_provider();
         lock.lock();
         owner->active = false;
         g_adapter_owner = nullptr;

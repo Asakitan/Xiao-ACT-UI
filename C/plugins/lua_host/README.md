@@ -46,6 +46,15 @@ C++ ctx → lua_State (真 5.4) → 插件 lua script
 新平台推荐**统一冒号**, 老 plugin.lua 里的 ``ctx.log(...)`` 通过 metatable
 的 ``__index`` 转发也能跑 (compat 层)。
 
+**ctx.engine 反射引擎面**: ``ctx.engine`` 是 sdk_binding 引擎目录的命名
+函数表 (``mem.read_u64`` → ``ctx.engine.mem_read_u64``); 位置参数按
+catalog ``arg_names`` 顺序映射, 单个 dict 表按 kwargs 处理。
+``ctx.engine.list()`` 返回目录数组, ``ctx.engine.on(channel, fn)`` 注册
+通用回调通道, ``ctx.engine_call(name, args)`` 是透传入口。调用走
+bridge 自带的 ``SaoSdkContext`` + ``method_engine_call`` JSON dispatch;
+非零 status 抛 ``engine call <name> failed: <status>``, 缺 provider
+fail closed。该面要求 manifest 声明 ``engine_access`` (或 ``unsafe``)。
+
 ## vcpkg 依赖
 
 - ``lua`` (5.4)

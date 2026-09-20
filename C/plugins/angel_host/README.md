@@ -37,6 +37,7 @@ C++ 平台的 angel_host 走**真 SDK**:
 | ``as_sandbox.h`` | addon 白名单 (file/net 默认拒) |
 | ``as_stdlib.h`` | 注册官方 addon (string / array / dictionary / math) |
 | ``as_error.h`` | GetExceptionString → SAO_STATUS |
+| ``as_engine_preamble.cpp`` | 生成 ``namespace sao_engine`` 段（catalog→typed+``_raw`` 包装），载入时注入每个 plugin module |
 
 ## 关键设计
 

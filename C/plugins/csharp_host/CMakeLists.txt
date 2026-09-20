@@ -25,7 +25,7 @@ target_include_directories(sao_plugins_csharp_host PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../sdk_binding/include>
 )
 
-target_compile_features(sao_plugins_csharp_host PUBLIC cxx_std_17)
+target_compile_features(sao_plugins_csharp_host PUBLIC cxx_std_20)
 target_compile_definitions(sao_plugins_csharp_host PRIVATE
     SAO_PLUGINS_BUILDING_DLL
     _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)
@@ -34,6 +34,7 @@ target_link_libraries(sao_plugins_csharp_host PUBLIC
     sao_plugins_loader
     sao_plugins_sdk_binding
     sao::sdk
+    sao::plugins::script_ctx
 )
 
 # hostfxr 走随包 vendor (nethost.lib), 不进 vcpkg 图。

@@ -10,7 +10,6 @@ add_library(sao_plugins_lua_host STATIC
     src/lua_loader_adapter.cpp
     src/lua_module_bridge.cpp
     src/lua_call.cpp
-    src/lua_sandbox.cpp
     src/lua_sandbox_runtime.cpp
     src/lua_stdlib.cpp
     src/lua_error.cpp
@@ -21,6 +20,7 @@ target_include_directories(sao_plugins_lua_host PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../loader/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../sdk_binding/include>
 )
 
 # 沙箱敏感字符串使用 SAO_ENC_STR (header-only, 无需链接)
@@ -37,6 +37,9 @@ endif()
 
 target_link_libraries(sao_plugins_lua_host PUBLIC
     sao_plugins_loader
+    sao::plugins::script_ctx
+    sao_plugins_sdk_binding
+    sao::sdk
 )
 
 # Lua 5.4 is resolved only from vcpkg or another preprovisioned package.
@@ -52,11 +55,50 @@ if (SAO_PLUGINS_LUA_AUTO_FETCH)
         "Legacy compatibility switch; runtime downloads are disabled." FORCE)
 endif()
 
-find_package(Lua 5.4 QUIET)
-if (NOT Lua_FOUND)
-    find_package(lua 5.4 QUIET CONFIG)
+# Vendored upstream Lua 5.4 is the first-class resolution path: the C++
+# tree owns the base interpreter so lua_host works without any external
+# runtime package.  SAO_LUA_SOURCE_DIR can point at another Lua source
+# root; find_package below remains the fallback for custom installs.
+set(SAO_LUA_SOURCE_DIR "" CACHE PATH
+    "Lua 5.4 source root containing src/lua.h (defaults to the vendored copy)")
+if (NOT SAO_LUA_SOURCE_DIR AND
+    EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/lua/src/lua.h")
+    set(SAO_LUA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/lua")
 endif()
+
 set(_sao_lua_resolved OFF)
+if (SAO_LUA_SOURCE_DIR AND EXISTS "${SAO_LUA_SOURCE_DIR}/src/lua.h")
+    file(GLOB _sao_lua_sources CONFIGURE_DEPENDS "${SAO_LUA_SOURCE_DIR}/src/*.c")
+    list(REMOVE_ITEM _sao_lua_sources
+        "${SAO_LUA_SOURCE_DIR}/src/lua.c"
+        "${SAO_LUA_SOURCE_DIR}/src/luac.c"
+        "${SAO_LUA_SOURCE_DIR}/src/onelua.c")
+    if (_sao_lua_sources)
+        add_library(sao_lua_vendored STATIC ${_sao_lua_sources})
+        target_include_directories(sao_lua_vendored PUBLIC "${SAO_LUA_SOURCE_DIR}/src")
+        if (MSVC)
+            target_compile_definitions(sao_lua_vendored PRIVATE _CRT_SECURE_NO_WARNINGS)
+            # Vendored upstream source: suppress its inherent narrowing / padding /
+            # /W4 noise instead of patching third-party .c files.
+            target_compile_options(sao_lua_vendored PRIVATE
+                /wd4244 /wd4310 /wd4324 /wd4701 /wd4702)
+        endif()
+        target_link_libraries(sao_plugins_lua_host PRIVATE sao_lua_vendored)
+        target_compile_definitions(sao_plugins_lua_host PRIVATE SAO_HAS_LUA=1)
+        set(_sao_lua_resolved ON)
+        message(STATUS "plugins/lua_host: vendored Lua sources (SAO_HAS_LUA=1)")
+    else()
+        message(WARNING "plugins/lua_host: SAO_LUA_SOURCE_DIR has no sources; falling back to find_package")
+    endif()
+endif()
+
+if (NOT _sao_lua_resolved)
+    find_package(Lua 5.4 QUIET)
+    if (NOT Lua_FOUND)
+        find_package(lua 5.4 QUIET CONFIG)
+    endif()
+endif()
+
 if (TARGET Lua::Lua)
     target_link_libraries(sao_plugins_lua_host PRIVATE Lua::Lua)
     target_compile_definitions(sao_plugins_lua_host PRIVATE SAO_HAS_LUA=1)

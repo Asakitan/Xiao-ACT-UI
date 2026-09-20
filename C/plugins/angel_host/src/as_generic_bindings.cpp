@@ -247,6 +247,16 @@ void context_plugin_id(asIScriptGeneric* generic) {
     }
 }
 
+void context_should_stop(asIScriptGeneric* generic) {
+    try {
+        auto* context = static_cast<loader::plugin_context_t*>(generic->GetObject());
+        generic->SetReturnByte(
+            context != nullptr && loader::sao_plugins_ctx_should_stop(context) ? 1 : 0);
+    } catch (...) {
+        generic->SetReturnByte(0);
+    }
+}
+
 void context_time(asIScriptGeneric* generic) {
     try {
         const auto now = std::chrono::system_clock::now().time_since_epoch();

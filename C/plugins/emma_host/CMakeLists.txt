@@ -19,6 +19,7 @@ target_include_directories(sao_plugins_emma_host PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../loader/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../script_ctx/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../sdk_binding/include>
 )
 
@@ -27,6 +28,16 @@ target_compile_definitions(sao_plugins_emma_host PRIVATE SAO_PLUGINS_BUILDING_DL
 
 target_link_libraries(sao_plugins_emma_host PUBLIC
     sao_plugins_loader
+    sao_plugins_script_ctx
     sao_plugins_sdk_binding
+)
+
+# sao::sdk 走 PRIVATE, 避免它的 PUBLIC cxx_std_20 泄漏给 emma_host 的下游
+# 消费者 (同 angel_host 约定)。反射引擎面在 install_context 里用
+# sao_sdk_context_create + bind_platform_services 持有宿主自有
+# SaoSdkContext, 再经 sao_plugins_sdk_context_dispatch(method_engine_call)
+# 走 binding_engine.h 契约。
+target_link_libraries(sao_plugins_emma_host PRIVATE
+    sao::sdk
 )
 

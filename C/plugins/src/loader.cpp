@@ -66,6 +66,7 @@ int32_t map_loader_status(int32_t status) noexcept {
     case SAO_PLUGINS_ERR_DEPENDENCY_MISSING:
         return SAO_ERR_NOT_INITIALIZED;
     case SAO_PLUGINS_ERR_NOT_OWNER:
+    case SAO_PLUGINS_ERR_NOT_FOUND:
         return SAO_ERR_HANDLE_INVALID;
     case SAO_PLUGINS_ERR_ALREADY_EXISTS:
     case SAO_PLUGINS_ERR_DEPENDENCY_CYCLE:

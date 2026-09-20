@@ -67,6 +67,9 @@ class scope {
     void define(const std::string& name, emma_value value);
     bool has(const std::string& name) const;
 
+    // 本层变量名快照 (不递归父作用域), 供 cross-language module facade 列成员。
+    std::vector<std::string> names() const;
+
   private:
     std::unordered_map<std::string, emma_value> vars_;
     std::shared_ptr<scope> parent_;
@@ -105,6 +108,9 @@ class interpreter {
 
     // 读取已注入的全局值。不存在时返回 nil。
     emma_value get_global(const std::string& name) const;
+
+    // 全局作用域的成员名快照 (含 builtins/ctx), 供 module facade 枚举。
+    std::vector<std::string> global_names() const;
 
     // 由 host 侧调 Emma 函数 (Emma 的 on_load(ctx) 等)。
     emma_value call_function(const std::shared_ptr<callable>& fn, std::vector<emma_value> args,

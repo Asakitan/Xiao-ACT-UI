@@ -8,6 +8,7 @@ add_library(sao_plugins_angel_host STATIC
     src/as_module_bridge.cpp
     src/as_call.cpp
     src/as_generic_bindings.cpp
+    src/as_ctx_surface.cpp
     src/as_loader_adapter.cpp
     src/as_sandbox.cpp
     src/as_stdlib.cpp
@@ -16,6 +17,8 @@ add_library(sao_plugins_angel_host STATIC
     src/as_plugin_lifecycle.cpp
     # gpu_hunt SDK binding (Vec3 / Mat4 / GpuTracker → AS)
     src/as_gpu_hunt_bind.cpp
+    # reflective engine surface preamble (namespace sao_engine section)
+    src/as_engine_preamble.cpp
 )
 add_library(sao::plugins::angel_host ALIAS sao_plugins_angel_host)
 
@@ -33,6 +36,10 @@ target_include_directories(sao_plugins_angel_host PRIVATE
 
 target_compile_features(sao_plugins_angel_host PUBLIC cxx_std_17)
 target_compile_definitions(sao_plugins_angel_host PRIVATE SAO_PLUGINS_BUILDING_DLL)
+if (MSVC)
+    target_compile_definitions(sao_plugins_angel_host PRIVATE
+        _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING)
+endif()
 
 target_link_libraries(sao_plugins_angel_host PUBLIC
     sao_plugins_loader
@@ -46,9 +53,11 @@ target_link_libraries(sao_plugins_angel_host PUBLIC
 # not leak into downstream consumers of sao_plugins_angel_host.  The
 # gpu-hunt binding source is the only consumer inside this target and
 # only needs the header path (SaoSdkContext + SaoSdkGpuHuntTable) at
-# compile time.
+# compile time.  sao::plugins::script_ctx follows the same PRIVATE
+# pattern for the ctx-surface ui builder + runtime bridge.
 target_link_libraries(sao_plugins_angel_host PRIVATE
     sao::sdk
+    sao::plugins::script_ctx
 )
 
 option(SAO_PLUGINS_ANGEL_REQUIRE_RUNTIME
@@ -59,6 +68,15 @@ option(SAO_PLUGINS_ANGEL_MAX_PORTABILITY
     "从本地 SDK 源构建 AS_MAX_PORTABILITY runtime" OFF)
 set(SAO_ANGELSCRIPT_SOURCE_DIR "" CACHE PATH
     "AngelScript SDK 根目录（包含 angelscript/ 与 add_on/）")
+
+# The vendored SDK copy is the default base runtime: the C++ tree owns the
+# interpreter so angel_host builds without any external package.  Package
+# manager results still win when present (resolution order below).
+if (NOT SAO_ANGELSCRIPT_SOURCE_DIR AND
+    EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/angelscript_2.36.1/angelscript/projects/cmake/CMakeLists.txt")
+    set(SAO_ANGELSCRIPT_SOURCE_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/angelscript_2.36.1")
+endif()
 
 option(SAO_PLUGINS_ANGEL_AUTO_FETCH
     "Legacy compatibility switch; runtime downloads are disabled." OFF)

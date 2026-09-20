@@ -61,6 +61,14 @@ bool scope::has(const std::string& name) const {
     return false;
 }
 
+std::vector<std::string> scope::names() const {
+    std::vector<std::string> result;
+    result.reserve(vars_.size());
+    for (const auto& [name, _] : vars_)
+        result.push_back(name);
+    return result;
+}
+
 // ── interpreter 实现 ──
 namespace {
 
@@ -246,6 +254,10 @@ std::shared_ptr<callable> interpreter::get_function(const std::string& name) {
 
 emma_value interpreter::get_global(const std::string& name) const {
     return pimpl_->global->get(name);
+}
+
+std::vector<std::string> interpreter::global_names() const {
+    return pimpl_->global->names();
 }
 
 const ast_pool* interpreter::pool() const {

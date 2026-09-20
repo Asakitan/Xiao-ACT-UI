@@ -40,6 +40,13 @@ enum class cs_managed_callback_kind : uint32_t {
     entity_snapshot,
     entity_action,
     entity_action_v2,
+    // Append-only extension kinds bound through the loader-context dispatch
+    // path (table_dispatch). Each maps to a dedicated invocation payload; the
+    // wrapped out_callback pointer is never invoked for these kinds because
+    // every kind routes through a kind-specific native trampoline.
+    render_hook,
+    data_source,
+    compositor_input,
 };
 
 using cs_managed_callback_invoke_fn = int32_t(SAO_CSHOST_MANAGED_CALL*)(
@@ -152,6 +159,42 @@ struct cs_managed_entity_action_invocation_v2 {
     void* sink_user_data;
 };
 
+// render_hook: managed reads the surface name and payload json and writes the
+// replacement spec json into out_spec_json_utf8 (capacity out_spec_capacity),
+// reporting the byte count through out_spec_required. required > capacity
+// triggers exactly one native-side buffer resize and re-invoke; required == 0
+// leaves the caller-owned *out_spec pointer null (payload passes through).
+struct cs_managed_render_invocation {
+    const char* surface_utf8;
+    const char* payload_json_utf8;
+    char* out_spec_json_utf8;
+    size_t out_spec_capacity;
+    size_t* out_spec_required;
+};
+
+// data_source: one managed callback receives both lifecycle edges of a loader
+// data source registration; phase 0 is start and phase 1 is stop. The invoke
+// return code propagates to the loader verbatim.
+struct cs_managed_data_source_invocation {
+    int32_t phase;
+    int32_t reserved;
+};
+
+// compositor_input: a single managed callback multiplexes the four loader
+// compositor input callbacks. event selects the payload interpretation:
+//   0 = cursor_pos (x, y)
+//   1 = mouse_button (button, pressed)
+//   2 = cursor_leave
+//   3 = scroll (x=dx, y=dy)
+struct cs_managed_compositor_input_invocation {
+    uint32_t event;
+    uint32_t button;
+    float x;
+    float y;
+    uint8_t pressed;
+    uint8_t reserved[7];
+};
+
 struct cs_managed_sdk_call {
     uint32_t struct_size;
     uint32_t reserved;
@@ -224,6 +267,25 @@ struct cs_managed_sdk_table {
     int32_t(SAO_PLUGINS_CALL* submit_action_result_v2)(
         cs_managed_sdk_session_t session, cs_managed_callback_token_t callback_token,
         const cs_managed_action_result_v2* result);
+    // ABI1 append (V3): canonical `ctx.ui.*` spec builder. Delegates to the
+    // shared script_ctx builder table (script_ui_build) using neutral
+    // nlohmann::json marshalling — managed sends the builder method name and an
+    // args array/kwargs json, native returns the node json the same way. No
+    // csharp-only builder names are added; parity is achieved by shared names.
+    int32_t(SAO_PLUGINS_CALL* ui_build)(cs_managed_sdk_session_t session,
+                                        const char* method_utf8,
+                                        const char* args_json_utf8, size_t args_size,
+                                        char* out_node_json_utf8, size_t out_capacity,
+                                        size_t* out_required);
+    // ABI1 append (V3): blocking `ctx.prompt`. Bound to the SDK INPUT dialog
+    // surface when a dialog provider exists; returns {"text": string|null}
+    // where null means cancel/dismiss/timeout — managed maps null to the
+    // caller-supplied default so canonical `prompt` semantics hold.
+    int32_t(SAO_PLUGINS_CALL* prompt)(cs_managed_sdk_session_t session,
+                                      const char* title_utf8,
+                                      const char* current_utf8,
+                                      char* out_result_json_utf8, size_t out_capacity,
+                                      size_t* out_required);
 };
 
 // ABI version 1 is retained. Consumers must gate appended entries with
@@ -237,8 +299,14 @@ inline constexpr size_t SAO_CSHOST_SDK_TABLE_V1_SIZE =
 inline constexpr size_t SAO_CSHOST_SDK_TABLE_V2_SIZE =
     offsetof(cs_managed_sdk_table, submit_action_result_v2);
 
-// Current full size includes the action-v2 result submission slot. Consumers
-// compiled against this header must publish struct_size >= V2 size and use
+// V3 extended the append-only tail with submit_action_result_v2 (11 total
+// pointers). V3 remains a valid readable extent for consumers that lack the
+// ui_build and prompt slots.
+inline constexpr size_t SAO_CSHOST_SDK_TABLE_V3_SIZE =
+    offsetof(cs_managed_sdk_table, ui_build);
+
+// Current full size includes the ui_build and prompt slots. Consumers compiled
+// against this header must publish struct_size >= V3 size and use
 // safe_readable_extent when iterating unknown producer sizes.
 inline constexpr size_t SAO_CSHOST_SDK_TABLE_CURRENT_SIZE = sizeof(cs_managed_sdk_table);
 
@@ -267,8 +335,19 @@ static_assert(offsetof(cs_managed_sdk_table, register_entity_provider_v2) == 72)
 static_assert(offsetof(cs_managed_sdk_table, emit_context) == 80);
 static_assert(SAO_CSHOST_SDK_TABLE_V2_SIZE == 88);
 static_assert(offsetof(cs_managed_sdk_table, submit_action_result_v2) == 88);
-static_assert(sizeof(cs_managed_sdk_table) == 96);
-static_assert(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE == 96);
+static_assert(SAO_CSHOST_SDK_TABLE_V3_SIZE == 96);
+static_assert(offsetof(cs_managed_sdk_table, ui_build) == 96);
+static_assert(offsetof(cs_managed_sdk_table, prompt) == 104);
+static_assert(sizeof(cs_managed_sdk_table) == 112);
+static_assert(SAO_CSHOST_SDK_TABLE_CURRENT_SIZE == 112);
+static_assert(sizeof(cs_managed_render_invocation) == 40);
+static_assert(alignof(cs_managed_render_invocation) == 8);
+static_assert(offsetof(cs_managed_render_invocation, out_spec_json_utf8) == 16);
+static_assert(offsetof(cs_managed_render_invocation, out_spec_required) == 32);
+static_assert(sizeof(cs_managed_data_source_invocation) == 8);
+static_assert(sizeof(cs_managed_compositor_input_invocation) == 24);
+static_assert(offsetof(cs_managed_compositor_input_invocation, x) == 8);
+static_assert(offsetof(cs_managed_compositor_input_invocation, pressed) == 16);
 static_assert(sizeof(cs_managed_action_result_v2) == 24);
 static_assert(alignof(cs_managed_action_result_v2) == 8);
 static_assert(offsetof(cs_managed_action_result_v2, struct_size) == 0);
@@ -290,6 +369,8 @@ static_assert(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V1_SIZE, sizeof(cs_manag
               SAO_CSHOST_SDK_TABLE_V1_SIZE);
 static_assert(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V2_SIZE, sizeof(cs_managed_sdk_table)) ==
               SAO_CSHOST_SDK_TABLE_V2_SIZE);
+static_assert(safe_readable_extent(SAO_CSHOST_SDK_TABLE_V3_SIZE, sizeof(cs_managed_sdk_table)) ==
+              SAO_CSHOST_SDK_TABLE_V3_SIZE);
 static_assert(safe_readable_extent(sizeof(cs_managed_sdk_table) + 32,
                                     sizeof(cs_managed_sdk_table)) == sizeof(cs_managed_sdk_table));
 #endif

@@ -73,6 +73,17 @@ shared_plugin_state acquire_plugin_state(as_plugin_handle_t plugin) {
     return found == g_plugin_registry.end() ? shared_plugin_state{} : found->second;
 }
 
+shared_plugin_state acquire_plugin_state_by_bound_context(void* bound_context) {
+    if (bound_context == nullptr)
+        return {};
+    std::lock_guard lock(g_plugin_registry_mutex);
+    for (const auto& entry : g_plugin_registry) {
+        if (entry.second != nullptr && entry.second->bound_context == bound_context)
+            return entry.second;
+    }
+    return {};
+}
+
 shared_plugin_state retire_plugin_state(as_plugin_handle_t plugin) {
     if (plugin == nullptr)
         return {};
@@ -266,14 +277,24 @@ int32_t teardown_plugin_locked(as_plugin_s& plugin) {
         }
         plugin.binding = nullptr;
     }
+    // release ctx-surface callbacks (funcdef refs, provider registrations)
+    // while the module + engine are still alive.
+    if (plugin.bound_context != nullptr) {
+        ctx_surface_teardown(plugin.bound_context);
+    }
+    // Clearing the bound `ctx` global is best-effort: modules loaded via the
+    // direct ashost path (no module-bridge ctx) legitimately have no ctx
+    // global, and a DiscardModule below clears it anyway. Failure must not
+    // abort teardown — otherwise the plugin stays in g_plugin_registry in
+    // cleanup_pending state and its destructor re-enters engine teardown at
+    // process exit (atexit), which trips a purecall inside asCModule
+    // destruction.
     if (plugin.module != nullptr && plugin.engine != nullptr) {
         const int32_t status = sao_plugins_ashost_bind_ctx(
             plugin.engine, nullptr, plugin.module_name.c_str());
         if (status != SAO_OK) {
-            plugin.lifecycle = plugin_runtime_state::cleanup_pending;
             retain_plugin_error(plugin, "teardown", status,
                                 "AngelScript module context cleanup failed");
-            return status;
         }
     }
     if (plugin.context != nullptr) {
@@ -366,8 +387,11 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_load_scri
         if (plugin->module == nullptr)
             return rollback_failed_load(plugin, SAO_ERR_OS_CALL_FAILED, out_plugin);
         constexpr char bridge_section[] = "PluginContext@ ctx;";
+        const std::string engine_preamble = sao_as_engine_preamble(engine);
         if (plugin->module->AddScriptSection("sao_module_bridge", bridge_section,
                                              sizeof(bridge_section) - 1) < 0 or
+            plugin->module->AddScriptSection("sao_engine_preamble", engine_preamble.c_str(),
+                                             engine_preamble.size()) < 0 or
             plugin->module->AddScriptSection(entry_relative, source.c_str(), source.size()) < 0 or
             plugin->module->Build() < 0) {
             return rollback_failed_load(plugin, SAO_ERR_INVALID_ARGUMENT, out_plugin);

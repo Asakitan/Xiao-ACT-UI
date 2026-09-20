@@ -5,12 +5,21 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/sdk_binding/binding_csharp.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
+#include "sao/plugins/script_ctx/runtime_bridge.h"
+#include "sao/plugins/script_ctx/script_ui.h"
 #include "sao/sdk/sao_sdk.h"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -88,6 +97,18 @@ static_assert(std::is_nothrow_move_constructible_v<entity_registration>);
 
 } // namespace
 
+// Per-timer binding payload pooled by the owning session for the full provider
+// registration window. Blocks are never freed mid-flight so the provider can
+// never observe a dangling user_data pointer; one-shot blocks stay pooled
+// after their single fire and are reclaimed with the session.
+struct loader_timer_ud {
+    void* managed_token = nullptr;
+    loader::plugin_context_t* ctx = nullptr;
+    bool one_shot = false;
+    uint64_t managed_id = 0;
+    std::string token;
+};
+
 struct sdk_bridge_session {
     std::mutex mutex;
     std::condition_variable idle;
@@ -105,6 +126,12 @@ struct sdk_bridge_session {
     std::vector<managed_callback*> callbacks;
     std::vector<entity_registration> entities;
     std::vector<std::string> pending_entity_ids;
+    // Loader-context dispatch bookkeeping. Keys "sub:<u32>", "timer:<token>",
+    // "hook:<u32>", "dsrc:<id>", "ci:<name>" map to managed callback tokens so
+    // explicit unregister paths release the matching wrapper early; session
+    // teardown drains anything left through session->callbacks.
+    std::unordered_map<std::string, void*> loader_bindings;
+    std::vector<std::unique_ptr<loader_timer_ud>> timer_ud_pool;
 };
 
 namespace {
@@ -526,6 +553,132 @@ int32_t SAO_PLUGINS_CALL callback_entity_action_v2(
     return status;
 }
 
+// ── loader-context trampolines for canonical ctx bindings ─────────────────
+// Each trampoline adapts one plugin_context_t callback signature to its
+// kind-specific managed invocation and routes it through invoke_callback with
+// the managed callback token as user_data. The new kinds never ride through
+// the wrapped out_callback path; callback_entry maps them to their primary
+// trampoline only so the pointer contract stays meaningful.
+
+constexpr size_t kMaxRenderSpecJsonBytes = 1024u * 1024u;
+
+void SAO_PLUGINS_CALL callback_loader_event(const char* topic_utf8,
+                                            const char* event_json_utf8,
+                                            void* user_data) {
+    if (event_json_utf8 == nullptr) {
+        event_json_utf8 = "{}";
+    }
+    const cs_managed_event_invocation invocation{
+        topic_utf8, reinterpret_cast<const uint8_t*>(event_json_utf8),
+        std::strlen(event_json_utf8)};
+    (void)invoke_callback(user_data, &invocation);
+}
+
+void SAO_PLUGINS_CALL callback_loader_timer(void* user_data) {
+    auto* ud = static_cast<loader_timer_ud*>(user_data);
+    if (ud == nullptr) {
+        return;
+    }
+    if (ud->one_shot && ud->ctx != nullptr && !ud->token.empty()) {
+        // Canonical one-shot semantics: the loader token completes before the
+        // managed handler runs so the registration cannot re-fire.
+        (void)loader::sao_plugins_ctx_complete_timer(ud->ctx, ud->token.c_str());
+    }
+    const cs_managed_timer_invocation invocation{ud->managed_id};
+    (void)invoke_callback(ud->managed_token, &invocation);
+}
+
+int32_t SAO_PLUGINS_CALL callback_data_source_start(void* user_data) {
+    const cs_managed_data_source_invocation invocation{0, 0};
+    return invoke_callback(user_data, &invocation);
+}
+
+int32_t SAO_PLUGINS_CALL callback_data_source_stop(void* user_data) {
+    const cs_managed_data_source_invocation invocation{1, 0};
+    return invoke_callback(user_data, &invocation);
+}
+
+int32_t SAO_PLUGINS_CALL callback_render_hook(const char* surface_utf8,
+                                              const char* payload_json_utf8,
+                                              char** out_spec_json_utf8,
+                                              void* user_data) {
+    if (out_spec_json_utf8 == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *out_spec_json_utf8 = nullptr;
+    // Two-budget capacity protocol: the managed side reports required bytes
+    // through the invocation; grow once when the estimate under-runs, then
+    // hand the loader a caller-freed copy in the ctx string family (new[]).
+    size_t capacity = 64u * 1024u;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        std::unique_ptr<char[]> buffer(new (std::nothrow) char[capacity]);
+        if (buffer == nullptr)
+            return SAO_ERR_OS_CALL_FAILED;
+        size_t required = 0;
+        cs_managed_render_invocation invocation{surface_utf8, payload_json_utf8, buffer.get(),
+                                                capacity, &required};
+        const int32_t status = invoke_callback(user_data, &invocation);
+        if (status != SAO_OK)
+            return status;
+        if (required == 0)
+            return SAO_OK;
+        if (required > kMaxRenderSpecJsonBytes)
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (required <= capacity) {
+            char* spec = new (std::nothrow) char[required + 1];
+            if (spec == nullptr)
+                return SAO_ERR_OS_CALL_FAILED;
+            std::memcpy(spec, buffer.get(), required);
+            spec[required] = '\0';
+            *out_spec_json_utf8 = spec;
+            return SAO_OK;
+        }
+        capacity = required + 1;
+    }
+    return SAO_ERR_OS_CALL_FAILED;
+}
+
+void SAO_PLUGINS_CALL callback_compositor_cursor_pos(float x, float y, void* user_data) {
+    const cs_managed_compositor_input_invocation invocation{0, 0, x, y, 0, {}};
+    (void)invoke_callback(user_data, &invocation);
+}
+void SAO_PLUGINS_CALL callback_compositor_mouse_button(uint32_t button, bool pressed,
+                                                       void* user_data) {
+    const cs_managed_compositor_input_invocation invocation{1, button, 0.0f, 0.0f,
+                                                            static_cast<uint8_t>(pressed ? 1 : 0),
+                                                            {}};
+    (void)invoke_callback(user_data, &invocation);
+}
+void SAO_PLUGINS_CALL callback_compositor_cursor_leave(void* user_data) {
+    const cs_managed_compositor_input_invocation invocation{2, 0, 0.0f, 0.0f, 0, {}};
+    (void)invoke_callback(user_data, &invocation);
+}
+void SAO_PLUGINS_CALL callback_compositor_scroll(float dx, float dy, void* user_data) {
+    const cs_managed_compositor_input_invocation invocation{3, 0, dx, dy, 0, {}};
+    (void)invoke_callback(user_data, &invocation);
+}
+
+// Snapshot-only entity providers registered via the canonical
+// register_menu_category dispatch carry no managed action handler; this stub
+// submits a declined result so row activation fails closed instead of
+// stalling the loader's action-v2 contract. Full action plumbing stays
+// available through the register_entity_provider_v2 table slot.
+int32_t SAO_PLUGINS_CALL decline_entity_action_v2(
+    const char* action_id_utf8, const char* payload_json_utf8,
+    loader::entity_action_result_sink_v2_fn result_sink, void* result_sink_user_data,
+    void* user_data) {
+    (void)action_id_utf8;
+    (void)payload_json_utf8;
+    (void)user_data;
+    if (result_sink == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    loader::entity_action_result_v2 result{};
+    result.struct_size = sizeof(result);
+    result.abi_version = 2;
+    result.handled = 0;
+    result.result_json_utf8 = nullptr;
+    return result_sink(&result, result_sink_user_data);
+}
+
 void* callback_entry(cs_managed_callback_kind kind) noexcept {
     switch (kind) {
     case cs_managed_callback_kind::event:
@@ -540,6 +693,12 @@ void* callback_entry(cs_managed_callback_kind kind) noexcept {
     case cs_managed_callback_kind::entity_action:
     case cs_managed_callback_kind::entity_action_v2:
         return reinterpret_cast<void*>(&invoke_managed);
+    case cs_managed_callback_kind::render_hook:
+        return reinterpret_cast<void*>(&callback_render_hook);
+    case cs_managed_callback_kind::data_source:
+        return reinterpret_cast<void*>(&callback_data_source_start);
+    case cs_managed_callback_kind::compositor_input:
+        return reinterpret_cast<void*>(&callback_compositor_cursor_pos);
     }
     return nullptr;
 }
@@ -576,6 +735,1238 @@ void release_callback_token(void* token) noexcept {
         sdk_binding::sao_plugins_binding_csharp_release_delegate(token);
 }
 
+// ── canonical ctx surface: loader-context dispatch ────────────────────────
+//
+// sao_plugins_sdk_context_dispatch intentionally covers only the SDK-domain
+// subset of the canonical v1 ctx names (props, settings, hotkey, ui panel,
+// overlay, time).  Everything else — the event/snapshot domain, timers,
+// notifications, dialogs, compositor layers, data sources, entity menus,
+// engine lookup, requirements and load_local — lives on the loader
+// plugin_context_t ABI (the same layer the python host prefers).  The two
+// switches below own every canonical name that has a loader-context
+// counterpart (or must fail closed) while SDK-domain ids fall through to the
+// existing dispatch unchanged.  Results follow the binding convention: raw
+// JSON values serialized into out_result_json_utf8.
+
+using ordered_json = nlohmann::ordered_json;
+
+constexpr int32_t kDispatchFallthrough = (std::numeric_limits<int32_t>::min)();
+constexpr size_t kMaxDispatchArgsBytes = 64u * 1024u * 1024u;
+constexpr auto kPromptWaitBudget = std::chrono::seconds(300);
+
+int32_t write_raw_result(const char* data, size_t size, char* out, size_t capacity,
+                         size_t* required) noexcept {
+    if (required == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *required = size + 1;
+    if (out == nullptr || capacity < *required) {
+        if (out != nullptr && capacity > 0)
+            out[0] = '\0';
+        return SAO_ERR_BUFFER_TOO_SMALL;
+    }
+    if (size > 0)
+        std::memcpy(out, data, size);
+    out[size] = '\0';
+    return SAO_OK;
+}
+
+int32_t write_call_result(const std::string& serialized, cs_managed_sdk_call* call) noexcept {
+    try {
+        return write_raw_result(serialized.data(), serialized.size(),
+                                call->out_result_json_utf8, call->out_capacity,
+                                call->out_required);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t write_call_json(const ordered_json& value, cs_managed_sdk_call* call) noexcept {
+    try {
+        return write_call_result(value.dump(), call);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+const ordered_json* arg_member(const ordered_json& args, const char* key) noexcept {
+    if (key == nullptr || !args.is_object())
+        return nullptr;
+    const auto it = args.find(key);
+    return it == args.end() ? nullptr : &*it;
+}
+
+std::string arg_utf8(const ordered_json& args, const char* key,
+                     const std::string& fallback = "") {
+    const ordered_json* value = arg_member(args, key);
+    if (value == nullptr)
+        return fallback;
+    try {
+        if (value->is_string())
+            return value->get<std::string>();
+        if (value->is_number_integer())
+            return std::to_string(value->get<int64_t>());
+        if (value->is_number_unsigned())
+            return std::to_string(value->get<uint64_t>());
+    } catch (...) {
+    }
+    return fallback;
+}
+
+double arg_f64(const ordered_json& args, const char* key, double fallback = 0.0) noexcept {
+    const ordered_json* value = arg_member(args, key);
+    if (value == nullptr || !value->is_number())
+        return fallback;
+    try {
+        return value->get<double>();
+    } catch (...) {
+        return fallback;
+    }
+}
+
+int64_t arg_i64(const ordered_json& args, const char* key, int64_t fallback = 0) noexcept {
+    const ordered_json* value = arg_member(args, key);
+    if (value == nullptr || !value->is_number())
+        return fallback;
+    try {
+        return value->get<int64_t>();
+    } catch (...) {
+        return fallback;
+    }
+}
+
+uint32_t arg_u32(const ordered_json& args, const char* key, uint32_t fallback = 0) noexcept {
+    const int64_t value = arg_i64(args, key, fallback);
+    return value < 0 ? fallback : static_cast<uint32_t>(value);
+}
+
+bool arg_bool(const ordered_json& args, const char* key, bool fallback = false) noexcept {
+    const ordered_json* value = arg_member(args, key);
+    if (value == nullptr)
+        return fallback;
+    try {
+        if (value->is_boolean())
+            return value->get<bool>();
+        if (value->is_number())
+            return value->get<int64_t>() != 0;
+    } catch (...) {
+    }
+    return fallback;
+}
+
+uint64_t fnv1a64(const std::string& text) noexcept {
+    uint64_t hash = 14695981039346656037ull;
+    for (const unsigned char c : text) {
+        hash ^= c;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+std::string hex64(uint64_t value) {
+    const char* digits = "0123456789abcdef";
+    std::string out(16, '0');
+    for (int i = 0; i < 16; ++i)
+        out[static_cast<size_t>(i)] = digits[(value >> ((15 - i) * 4)) & 0xF];
+    return out;
+}
+
+std::wstring wide_from_utf8(const std::string& text) {
+    std::wstring out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        uint32_t cp = 0;
+        size_t len = 1;
+        if (c < 0x80) {
+            cp = c;
+        } else if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F;
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F;
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07;
+            len = 4;
+        } else {
+            cp = 0xFFFD;
+        }
+        if (i + len > text.size()) {
+            cp = 0xFFFD;
+            len = 1;
+        }
+        for (size_t k = 1; k < len; ++k) {
+            const unsigned char cont = static_cast<unsigned char>(text[i + k]);
+            cp = (cont & 0xC0) == 0x80 ? (cp << 6) | (cont & 0x3F) : 0xFFFD;
+            if (cp == 0xFFFD)
+                break;
+        }
+        i += len;
+        if (cp > 0x10FFFF)
+            cp = 0xFFFD;
+        if (cp > 0xFFFF) {
+            cp -= 0x10000;
+            out.push_back(static_cast<wchar_t>(0xD800 + (cp >> 10)));
+            out.push_back(static_cast<wchar_t>(0xDC00 + (cp & 0x3FF)));
+        } else {
+            out.push_back(static_cast<wchar_t>(cp));
+        }
+    }
+    return out;
+}
+
+std::string utf8_from_wide(const std::wstring& text) {
+    std::string out;
+    out.reserve(text.size() * 3);
+    for (size_t i = 0; i < text.size(); ++i) {
+        uint32_t cp = static_cast<uint16_t>(text[i]);
+        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < text.size()) {
+            const uint32_t lo = static_cast<uint16_t>(text[i + 1]);
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                ++i;
+            }
+        }
+        if (cp < 0x80) {
+            out.push_back(static_cast<char>(cp));
+        } else if (cp < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else if (cp < 0x10000) {
+            out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        }
+    }
+    return out;
+}
+
+int8_t base64_value(unsigned char c) noexcept {
+    if (c >= 'A' && c <= 'Z')
+        return static_cast<int8_t>(c - 'A');
+    if (c >= 'a' && c <= 'z')
+        return static_cast<int8_t>(c - 'a' + 26);
+    if (c >= '0' && c <= '9')
+        return static_cast<int8_t>(c - '0' + 52);
+    if (c == '+')
+        return 62;
+    if (c == '/')
+        return 63;
+    return -1;
+}
+
+bool base64_decode(const std::string& input, std::vector<uint8_t>& out) {
+    out.clear();
+    out.reserve((input.size() / 4) * 3 + 3);
+    uint32_t acc = 0;
+    int bits = 0;
+    bool padding = false;
+    for (const unsigned char c : input) {
+        if (c == '=') {
+            padding = true;
+            continue;
+        }
+        if (c == ' ' || c == '\n' || c == '\r' || c == '\t')
+            continue;
+        if (padding)
+            return false;
+        const int8_t value = base64_value(c);
+        if (value < 0)
+            return false;
+        acc = (acc << 6) | static_cast<uint32_t>(value);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<uint8_t>((acc >> bits) & 0xFFu));
+            acc &= (1u << bits) - 1u;
+        }
+    }
+    return true;
+}
+
+bool parse_call_args(const cs_managed_sdk_call* call, ordered_json& args) noexcept {
+    args = ordered_json::object();
+    if (call == nullptr || call->args_json_utf8 == nullptr || call->args_size == 0)
+        return true;
+    if (call->args_size > kMaxDispatchArgsBytes)
+        return false;
+    try {
+        args = ordered_json::parse(call->args_json_utf8,
+                                   call->args_json_utf8 + call->args_size);
+        return args.is_object() || args.is_array();
+    } catch (...) {
+        return false;
+    }
+}
+
+void put_loader_binding(sdk_bridge_session* session, const std::string& key,
+                        void* managed_token) noexcept {
+    try {
+        std::lock_guard lock(session->mutex);
+        session->loader_bindings[key] = managed_token;
+    } catch (...) {
+    }
+}
+
+void* take_loader_binding(sdk_bridge_session* session, const std::string& key) noexcept {
+    try {
+        std::lock_guard lock(session->mutex);
+        const auto found = session->loader_bindings.find(key);
+        if (found == session->loader_bindings.end())
+            return nullptr;
+        void* token = found->second;
+        session->loader_bindings.erase(found);
+        return token;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void release_loader_binding(sdk_bridge_session* session, const std::string& key) noexcept {
+    void* token = take_loader_binding(session, key);
+    if (token != nullptr)
+        release_callback_token(token);
+}
+
+const char* fixed_event_topic(sdk_method_id method) noexcept {
+    switch (method) {
+    case sdk_method_id::method_on_damage:
+        return "damage";
+    case sdk_method_id::method_on_heal:
+        return "heal";
+    case sdk_method_id::method_on_skill:
+        return "skill";
+    case sdk_method_id::method_on_boss:
+        return "boss";
+    case sdk_method_id::method_on_snapshot:
+        return "act_snapshot";
+    case sdk_method_id::method_on_encounter_finalized:
+        return "encounter_finalized";
+    default:
+        return nullptr;
+    }
+}
+
+const char* extension_kind_for(sdk_method_id method) noexcept {
+    switch (method) {
+    case sdk_method_id::method_register_parser_adapter:
+        return "parser_adapter";
+    case sdk_method_id::method_register_exporter:
+        return "exporter";
+    case sdk_method_id::method_register_formatter:
+        return "formatter";
+    case sdk_method_id::method_register_trigger_type:
+        return "trigger_type";
+    case sdk_method_id::method_register_report_view:
+        return "report_view";
+    case sdk_method_id::method_register_timer:
+        return "timer";
+    default:
+        return nullptr;
+    }
+}
+
+// Method ids that belong to the loader plugin_context_t domain (or must fail
+// closed there). Everything else falls through to the SDK-context dispatch.
+bool loader_ctx_owns_method(sdk_method_id method) noexcept {
+    switch (method) {
+    case sdk_method_id::prop_should_stop:
+    case sdk_method_id::method_subscribe:
+    case sdk_method_id::method_subscribe_once:
+    case sdk_method_id::method_unsubscribe:
+    case sdk_method_id::method_on_damage:
+    case sdk_method_id::method_on_heal:
+    case sdk_method_id::method_on_skill:
+    case sdk_method_id::method_on_boss:
+    case sdk_method_id::method_on_snapshot:
+    case sdk_method_id::method_on_encounter_finalized:
+    case sdk_method_id::method_emit:
+    case sdk_method_id::method_get_snapshot:
+    case sdk_method_id::method_snapshot_value:
+    case sdk_method_id::method_recent_events:
+    case sdk_method_id::method_register_parser_adapter:
+    case sdk_method_id::method_register_exporter:
+    case sdk_method_id::method_register_formatter:
+    case sdk_method_id::method_register_trigger_type:
+    case sdk_method_id::method_register_report_view:
+    case sdk_method_id::method_register_timer:
+    case sdk_method_id::method_register_render_hook:
+    case sdk_method_id::method_register_data_source:
+    case sdk_method_id::method_register_menu_category:
+    case sdk_method_id::method_register_menu_surface:
+    case sdk_method_id::method_register_action_handler:
+    case sdk_method_id::method_set_interval:
+    case sdk_method_id::method_set_timeout:
+    case sdk_method_id::method_clear_timer:
+    case sdk_method_id::method_run_on_ui:
+    case sdk_method_id::method_notify:
+    case sdk_method_id::method_dismiss_notify:
+    case sdk_method_id::method_toast:
+    case sdk_method_id::method_open_file:
+    case sdk_method_id::method_open_window:
+    case sdk_method_id::method_create_compositor_layer:
+    case sdk_method_id::method_upload_compositor_frame:
+    case sdk_method_id::method_set_compositor_layer_mmf_source:
+    case sdk_method_id::method_set_compositor_layer_shared_texture_source:
+    case sdk_method_id::method_set_compositor_layer_position:
+    case sdk_method_id::method_set_compositor_layer_visible:
+    case sdk_method_id::method_set_compositor_layer_input:
+    case sdk_method_id::method_destroy_compositor_layer:
+    case sdk_method_id::method_compositor_gpu_interop_available:
+    case sdk_method_id::method_compositor_layer_shared_texture_active:
+    case sdk_method_id::method_compositor_display_refresh_hz:
+    case sdk_method_id::method_get_engine:
+    case sdk_method_id::method_require_engine:
+    case sdk_method_id::method_call_engine:
+    case sdk_method_id::method_call_runtime:
+    case sdk_method_id::method_ensure_requirements:
+    case sdk_method_id::method_load_local:
+    case sdk_method_id::method_register_engine:
+        return true;
+    default:
+        return false;
+    }
+}
+
+int32_t loader_subscribe_dispatch(sdk_bridge_session* session, plugin_context_t* ctx,
+                                  const std::string& topic, bool once,
+                                  cs_managed_sdk_call* call) {
+    if (topic.empty() || call->callback == nullptr ||
+        call->callback->kind != cs_managed_callback_kind::event) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    void* managed_token = nullptr;
+    void* ignored_entry = nullptr;
+    int32_t status =
+        wrap_managed_callback(session, call->callback, &ignored_entry, &managed_token);
+    if (status != SAO_OK)
+        return status;
+    uint32_t token = 0;
+    status = once ? loader::sao_plugins_ctx_subscribe_once(ctx, topic.c_str(),
+                                                         callback_loader_event, managed_token,
+                                                         &token)
+                  : loader::sao_plugins_ctx_subscribe(ctx, topic.c_str(), callback_loader_event,
+                                                    managed_token, &token);
+    if (status != SAO_OK) {
+        release_callback_token(managed_token);
+        return status;
+    }
+    put_loader_binding(session, "sub:" + std::to_string(token), managed_token);
+    if (call->out_callback_token != nullptr)
+        *call->out_callback_token = managed_token;
+    return write_call_json(ordered_json(token), call);
+}
+
+int32_t loader_timer_dispatch(sdk_bridge_session* session, plugin_context_t* ctx, double seconds,
+                              bool one_shot, cs_managed_sdk_call* call) {
+    if (call->callback == nullptr || call->callback->kind != cs_managed_callback_kind::timer ||
+        !(seconds > 0.0) || !(seconds < 31536000.0)) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    void* managed_token = nullptr;
+    void* ignored_entry = nullptr;
+    int32_t status =
+        wrap_managed_callback(session, call->callback, &ignored_entry, &managed_token);
+    if (status != SAO_OK)
+        return status;
+    auto ud = std::make_unique<loader_timer_ud>();
+    ud->managed_token = managed_token;
+    ud->ctx = ctx;
+    ud->one_shot = one_shot;
+    char* raw_token = nullptr;
+    status = one_shot ? loader::sao_plugins_ctx_set_timeout(ctx, callback_loader_timer, seconds,
+                                                          ud.get(), &raw_token)
+                      : loader::sao_plugins_ctx_set_interval(ctx, callback_loader_timer, seconds,
+                                                             ud.get(), &raw_token);
+    if (status != SAO_OK) {
+        release_callback_token(managed_token);
+        return status;
+    }
+    if (raw_token == nullptr || raw_token[0] == '\0') {
+        if (raw_token != nullptr)
+            loader::sao_plugins_ctx_free_string(raw_token);
+        release_callback_token(managed_token);
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+    ud->token = raw_token;
+    loader::sao_plugins_ctx_free_string(raw_token);
+    ud->managed_id = fnv1a64(ud->token);
+    const std::string token_string = ud->token;
+    try {
+        std::lock_guard lock(session->mutex);
+        session->loader_bindings["timer:" + token_string] = managed_token;
+        session->timer_ud_pool.push_back(std::move(ud));
+    } catch (...) {
+        (void)loader::sao_plugins_ctx_clear_timer(ctx, token_string.c_str());
+        release_callback_token(managed_token);
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+    if (call->out_callback_token != nullptr)
+        *call->out_callback_token = managed_token;
+    return write_call_json(ordered_json(token_string), call);
+}
+
+// Shared "register a v3 entity provider from already-wrapped managed tokens"
+// used by the canonical register_menu_category / register_action_handler
+// dispatches. Mirrors the table-slot flow (qualified id, dedup, teardown via
+// session->entities) but lets the caller pick native snapshot/action entries —
+// including the decline stub for snapshot-only menus.
+int32_t register_entity_provider_v3_dispatch(
+    sdk_bridge_session* session, const std::string& provider_id, void* snapshot_token,
+    void* action_v2_token, const loader::entity_root_contribution_descriptor* root,
+    uint32_t flags, std::string& out_qualified_id) noexcept {
+    try {
+        plugin_context_t* ctx = session->loader_context;
+        entity_registration registration;
+        registration.provider_id = provider_id;
+        const char* plugin_id = loader::sao_plugins_ctx_plugin_id(ctx);
+        if (plugin_id == nullptr || plugin_id[0] == '\0')
+            return SAO_ERR_HANDLE_INVALID;
+        registration.qualified_provider_id = std::string(plugin_id) + "/" + provider_id;
+        registration.callbacks = std::make_unique<entity_callback_pair>();
+        registration.callbacks->snapshot = snapshot_token;
+        registration.callbacks->action_v2 = action_v2_token;
+        {
+            std::lock_guard lock(session->mutex);
+            const auto duplicate =
+                std::find_if(session->entities.begin(), session->entities.end(),
+                             [&registration](const entity_registration& current) {
+                                 return current.provider_id == registration.provider_id;
+                             });
+            if (duplicate != session->entities.end())
+                return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
+            if (std::find(session->pending_entity_ids.begin(), session->pending_entity_ids.end(),
+                          registration.provider_id) != session->pending_entity_ids.end()) {
+                return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
+            }
+            session->entities.reserve(session->entities.size() +
+                                      session->pending_entity_ids.size() + 1);
+            session->pending_entity_ids.push_back(registration.provider_id);
+        }
+        const auto clear_pending = [&session, &registration]() noexcept {
+            try {
+                std::lock_guard lock(session->mutex);
+                std::erase(session->pending_entity_ids, registration.provider_id);
+            } catch (...) {
+            }
+        };
+        const bool action_only = (flags & loader::kContextEntityProviderV3ActionOnly) != 0;
+        loader::context_entity_provider_descriptor_v3 native{};
+        native.struct_size = sizeof(native);
+        native.provider_id_utf8 = registration.provider_id.c_str();
+        // ACTION_ONLY descriptors require snapshot/user_data/root_contribution
+        // to be null; the pair still reaches action invocations through
+        // action_user_data.
+        native.snapshot = !action_only && snapshot_token != nullptr
+                              ? callback_entity_snapshot_v2
+                              : nullptr;
+        native.action_handler = nullptr;
+        native.user_data = action_only ? nullptr : registration.callbacks.get();
+        native.root_contribution = action_only ? nullptr : root;
+        native.action_handler_v2 =
+            action_v2_token != nullptr ? callback_entity_action_v2 : decline_entity_action_v2;
+        native.action_user_data = registration.callbacks.get();
+        native.flags = flags;
+        native.reserved = 0;
+        const int32_t status =
+            loader::sao_plugins_ctx_register_entity_provider_v3(ctx, &native);
+        if (status != SAO_OK) {
+            clear_pending();
+            return status;
+        }
+        {
+            std::lock_guard lock(session->mutex);
+            out_qualified_id = registration.qualified_provider_id;
+            session->entities.push_back(std::move(registration));
+            std::erase(session->pending_entity_ids, provider_id);
+        }
+        return SAO_OK;
+    } catch (...) {
+        try {
+            std::lock_guard lock(session->mutex);
+            std::erase(session->pending_entity_ids, provider_id);
+        } catch (...) {
+        }
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t loader_menu_category_dispatch(sdk_bridge_session* session, plugin_context_t* ctx,
+                                      const ordered_json& args,
+                                      cs_managed_sdk_call* call) {
+    const std::string name = arg_utf8(args, "name");
+    if (name.empty())
+        return SAO_ERR_INVALID_ARGUMENT;
+    const std::string icon = arg_utf8(args, "icon");
+    const double priority = arg_f64(args, "priority", 50.0);
+    const char* plugin_id = loader::sao_plugins_ctx_plugin_id(ctx);
+    if (plugin_id == nullptr || plugin_id[0] == '\0')
+        return SAO_ERR_HANDLE_INVALID;
+    // Canonical provider identity — fnv64 over the category name, matching the
+    // python host's NativeMenuBridge hashing so menu toolchains behave alike.
+    const std::string provider_id = "menu-" + hex64(fnv1a64(name));
+    if (call->callback == nullptr) {
+        const int32_t status = loader::sao_plugins_ctx_register_menu_category(
+            ctx, name.c_str(), icon.c_str(), nullptr, static_cast<float>(priority), nullptr);
+        if (status != SAO_OK)
+            return status;
+        ordered_json result;
+        result["id"] = provider_id;
+        return write_call_json(result, call);
+    }
+    if (call->callback->kind != cs_managed_callback_kind::entity_snapshot)
+        return SAO_ERR_INVALID_ARGUMENT;
+    void* managed_token = nullptr;
+    void* ignored_entry = nullptr;
+    int32_t status =
+        wrap_managed_callback(session, call->callback, &ignored_entry, &managed_token);
+    if (status != SAO_OK)
+        return status;
+    const std::string contribution_id = provider_id;
+    const std::string root_id =
+        "plugin:" + hex64(fnv1a64(std::string(plugin_id) + "\n" + name));
+    loader::entity_root_contribution_descriptor root{};
+    root.struct_size = sizeof(root);
+    root.contribution_id_utf8 = contribution_id.c_str();
+    root.root_id_utf8 = root_id.c_str();
+    root.name_utf8 = name.c_str();
+    root.icon_utf8 = icon.c_str();
+    root.priority = priority;
+    std::string qualified_id;
+    status = register_entity_provider_v3_dispatch(session, provider_id, managed_token, nullptr,
+                                                  &root, 0, qualified_id);
+    if (status != SAO_OK) {
+        release_callback_token(managed_token);
+        return status;
+    }
+    if (call->out_callback_token != nullptr)
+        *call->out_callback_token = managed_token;
+    ordered_json result;
+    result["id"] = qualified_id;
+    return write_call_json(result, call);
+}
+
+int32_t loader_action_handler_dispatch(sdk_bridge_session* session, plugin_context_t* ctx,
+                                       cs_managed_sdk_call* call) {
+    if (call->callback == nullptr ||
+        call->callback->kind != cs_managed_callback_kind::entity_action_v2) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    // Canonical opaque action sink: ACTION_ONLY replace semantics keep
+    // re-register idempotent (v3 replaces only the action binding when the
+    // provider exists).
+    constexpr const char* kOpaqueProviderId = "opaque-actions";
+    entity_callback_pair* pair = nullptr;
+    {
+        std::lock_guard lock(session->mutex);
+        const auto found = std::find_if(session->entities.begin(), session->entities.end(),
+                                        [](const entity_registration& current) {
+                                            return current.provider_id == kOpaqueProviderId;
+                                        });
+        if (found != session->entities.end())
+            pair = found->callbacks.get();
+    }
+    void* managed_token = nullptr;
+    void* ignored_entry = nullptr;
+    int32_t status =
+        wrap_managed_callback(session, call->callback, &ignored_entry, &managed_token);
+    if (status != SAO_OK)
+        return status;
+    if (pair != nullptr) {
+        void* old_token = pair->action_v2;
+        loader::context_entity_provider_descriptor_v3 native{};
+        native.struct_size = sizeof(native);
+        native.provider_id_utf8 = kOpaqueProviderId;
+        native.snapshot = nullptr;
+        native.action_handler = nullptr;
+        native.user_data = nullptr;
+        native.root_contribution = nullptr;
+        native.action_handler_v2 = callback_entity_action_v2;
+        native.action_user_data = pair;
+        native.flags = loader::kContextEntityProviderV3ActionOnly;
+        native.reserved = 0;
+        status = loader::sao_plugins_ctx_register_entity_provider_v3(ctx, &native);
+        if (status != SAO_OK) {
+            release_callback_token(managed_token);
+            return status;
+        }
+        pair->action_v2 = managed_token;
+        if (old_token != nullptr && old_token != managed_token)
+            release_callback_token(old_token);
+        if (call->out_callback_token != nullptr)
+            *call->out_callback_token = managed_token;
+        const char* plugin_id = loader::sao_plugins_ctx_plugin_id(ctx);
+        ordered_json result;
+        result["id"] =
+            std::string(plugin_id != nullptr ? plugin_id : "") + "/" + kOpaqueProviderId;
+        return write_call_json(result, call);
+    }
+    std::string qualified_id;
+    status = register_entity_provider_v3_dispatch(session, kOpaqueProviderId, nullptr,
+                                                  managed_token, nullptr,
+                                                  loader::kContextEntityProviderV3ActionOnly,
+                                                  qualified_id);
+    if (status != SAO_OK) {
+        release_callback_token(managed_token);
+        return status;
+    }
+    if (call->out_callback_token != nullptr)
+        *call->out_callback_token = managed_token;
+    ordered_json result;
+    result["id"] = qualified_id;
+    return write_call_json(result, call);
+}
+
+int32_t dispatch_loader_method(sdk_bridge_session* session, sdk_method_id method,
+                               const ordered_json& args, cs_managed_sdk_call* call) noexcept {
+    try {
+        plugin_context_t* ctx = session->loader_context;
+        switch (method) {
+        case sdk_method_id::prop_should_stop:
+            return write_call_json(ordered_json(loader::sao_plugins_ctx_should_stop(ctx)), call);
+
+        case sdk_method_id::method_subscribe:
+        case sdk_method_id::method_subscribe_once: {
+            const std::string topic = arg_utf8(args, "topic");
+            return loader_subscribe_dispatch(session, ctx, topic,
+                                             method == sdk_method_id::method_subscribe_once, call);
+        }
+
+        case sdk_method_id::method_on_damage:
+        case sdk_method_id::method_on_heal:
+        case sdk_method_id::method_on_skill:
+        case sdk_method_id::method_on_boss:
+        case sdk_method_id::method_on_snapshot:
+        case sdk_method_id::method_on_encounter_finalized:
+            return loader_subscribe_dispatch(session, ctx, fixed_event_topic(method), false, call);
+
+        case sdk_method_id::method_unsubscribe: {
+            uint32_t token = 0;
+            const ordered_json* value = arg_member(args, "token");
+            if (value != nullptr && value->is_number()) {
+                token = static_cast<uint32_t>(value->get<uint64_t>());
+            } else if (value != nullptr && value->is_string()) {
+                token = static_cast<uint32_t>(
+                    std::strtoul(value->get<std::string>().c_str(), nullptr, 10));
+            } else {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            const int32_t status = loader::sao_plugins_ctx_unsubscribe(ctx, token);
+            if (status != SAO_OK)
+                return status;
+            release_loader_binding(session, "sub:" + std::to_string(token));
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_emit: {
+            const std::string topic = arg_utf8(args, "topic");
+            if (topic.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const ordered_json* payload = arg_member(args, "payload");
+            // The loader wraps payload in the {topic,payload} envelope and
+            // requires parseable JSON — dump() keeps any managed value shape
+            // valid (strings, objects, scalars all remain legal JSON).
+            const std::string payload_json =
+                payload == nullptr ? "{}" : payload->dump();
+            const int32_t status =
+                loader::sao_plugins_ctx_emit(ctx, topic.c_str(), payload_json.c_str());
+            if (status != SAO_OK)
+                return status;
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_get_snapshot: {
+            char* raw = nullptr;
+            const int32_t status = loader::sao_plugins_ctx_get_snapshot(ctx, &raw);
+            if (status != SAO_OK)
+                return status;
+            if (raw == nullptr)
+                return write_call_json(ordered_json::object(), call);
+            const size_t size = std::strlen(raw);
+            const int32_t written =
+                write_raw_result(raw, size, call->out_result_json_utf8, call->out_capacity,
+                                 call->out_required);
+            loader::sao_plugins_ctx_free_string(raw);
+            return written;
+        }
+
+        case sdk_method_id::method_snapshot_value: {
+            const std::string path = arg_utf8(args, "path");
+            if (path.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            char* raw = nullptr;
+            int32_t status = loader::sao_plugins_ctx_get_snapshot(ctx, &raw);
+            if (status != SAO_OK)
+                return status;
+            ordered_json snapshot;
+            try {
+                snapshot = raw != nullptr ? ordered_json::parse(raw) : ordered_json::object();
+            } catch (...) {
+                snapshot = ordered_json::object();
+            }
+            if (raw != nullptr)
+                loader::sao_plugins_ctx_free_string(raw);
+            // Canonical dotted-path navigation across the snapshot map.
+            const ordered_json* cursor = &snapshot;
+            bool found = true;
+            size_t head = 0;
+            while (found && head <= path.size()) {
+                const size_t dot = path.find('.', head);
+                const std::string segment = path.substr(
+                    head, dot == std::string::npos ? std::string::npos : dot - head);
+                if (cursor->is_object() && cursor->contains(segment)) {
+                    cursor = &(*cursor)[segment];
+                } else {
+                    found = false;
+                }
+                if (dot == std::string::npos)
+                    break;
+                head = dot + 1;
+            }
+            if (found)
+                return write_call_json(*cursor, call);
+            const ordered_json* fallback = arg_member(args, "default");
+            return write_call_json(fallback == nullptr ? ordered_json(nullptr) : *fallback, call);
+        }
+
+        case sdk_method_id::method_recent_events: {
+            const uint32_t limit = arg_u32(args, "limit", 20);
+            const std::string topic = arg_utf8(args, "topic");
+            char* raw = nullptr;
+            const int32_t status = loader::sao_plugins_ctx_recent_events(
+                ctx, limit, topic.empty() ? nullptr : topic.c_str(), &raw);
+            if (status != SAO_OK)
+                return status;
+            if (raw == nullptr)
+                return write_call_json(ordered_json::array(), call);
+            const size_t size = std::strlen(raw);
+            const int32_t written =
+                write_raw_result(raw, size, call->out_result_json_utf8, call->out_capacity,
+                                 call->out_required);
+            loader::sao_plugins_ctx_free_string(raw);
+            return written;
+        }
+
+        case sdk_method_id::method_register_parser_adapter:
+        case sdk_method_id::method_register_exporter:
+        case sdk_method_id::method_register_formatter:
+        case sdk_method_id::method_register_trigger_type:
+        case sdk_method_id::method_register_report_view:
+        case sdk_method_id::method_register_timer: {
+            const char* kind = extension_kind_for(method);
+            const std::string id = arg_utf8(args, "id");
+            if (kind == nullptr || id.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const ordered_json* meta = arg_member(args, "meta");
+            const std::string meta_json =
+                meta == nullptr || meta->is_null() ? std::string() : meta->dump();
+            const int32_t status = loader::sao_plugins_ctx_register_extension(
+                ctx, kind, id.c_str(), meta_json.empty() ? nullptr : meta_json.c_str(), nullptr,
+                nullptr);
+            if (status != SAO_OK)
+                return status;
+            ordered_json result;
+            result["id"] = id;
+            result["kind"] = kind;
+            return write_call_json(result, call);
+        }
+
+        case sdk_method_id::method_register_render_hook: {
+            const std::string surface = arg_utf8(args, "surface");
+            if (surface.empty() || call->callback == nullptr ||
+                call->callback->kind != cs_managed_callback_kind::render_hook) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            const float priority = static_cast<float>(arg_f64(args, "priority", 0.0));
+            void* managed_token = nullptr;
+            void* ignored_entry = nullptr;
+            int32_t status =
+                wrap_managed_callback(session, call->callback, &ignored_entry, &managed_token);
+            if (status != SAO_OK)
+                return status;
+            uint32_t token = 0;
+            status = loader::sao_plugins_ctx_register_render_hook(
+                ctx, surface.c_str(), priority, callback_render_hook, managed_token, &token);
+            if (status != SAO_OK) {
+                release_callback_token(managed_token);
+                return status;
+            }
+            put_loader_binding(session, "hook:" + std::to_string(token), managed_token);
+            if (call->out_callback_token != nullptr)
+                *call->out_callback_token = managed_token;
+            return write_call_json(ordered_json(token), call);
+        }
+
+        case sdk_method_id::method_register_data_source: {
+            const std::string id = arg_utf8(args, "id");
+            const std::string alt_id = arg_utf8(args, "source_id");
+            const std::string source_id = !id.empty() ? id : alt_id;
+            if (source_id.empty() || call->callback == nullptr ||
+                call->callback->kind != cs_managed_callback_kind::data_source) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            const ordered_json* meta = arg_member(args, "meta");
+            const std::string meta_json =
+                meta == nullptr || meta->is_null() ? std::string() : meta->dump();
+            void* managed_token = nullptr;
+            void* ignored_entry = nullptr;
+            int32_t status =
+                wrap_managed_callback(session, call->callback, &ignored_entry, &managed_token);
+            if (status != SAO_OK)
+                return status;
+            status = loader::sao_plugins_ctx_register_data_source(
+                ctx, source_id.c_str(), meta_json.empty() ? nullptr : meta_json.c_str(),
+                callback_data_source_start, callback_data_source_stop, managed_token);
+            if (status != SAO_OK) {
+                release_callback_token(managed_token);
+                return status;
+            }
+            put_loader_binding(session, "dsrc:" + source_id, managed_token);
+            if (call->out_callback_token != nullptr)
+                *call->out_callback_token = managed_token;
+            ordered_json result;
+            result["id"] = source_id;
+            return write_call_json(result, call);
+        }
+
+        case sdk_method_id::method_register_menu_category:
+            return loader_menu_category_dispatch(session, ctx, args, call);
+
+        case sdk_method_id::method_register_menu_surface: {
+            const std::string surface_id = arg_utf8(args, "surface_id");
+            const std::string alt_id = arg_utf8(args, "id");
+            const std::string id = !surface_id.empty() ? surface_id : alt_id;
+            if (id.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const ordered_json* descriptor = arg_member(args, "descriptor");
+            const std::string descriptor_json =
+                descriptor == nullptr || descriptor->is_null() ? "{}" : descriptor->dump();
+            const float priority = static_cast<float>(arg_f64(args, "priority", 0.0));
+            const int32_t status = loader::sao_plugins_ctx_register_menu_surface(
+                ctx, id.c_str(), descriptor_json.c_str(), priority);
+            if (status != SAO_OK)
+                return status;
+            ordered_json result;
+            result["id"] = id;
+            return write_call_json(result, call);
+        }
+
+        case sdk_method_id::method_register_action_handler:
+            return loader_action_handler_dispatch(session, ctx, call);
+
+        case sdk_method_id::method_set_interval:
+        case sdk_method_id::method_set_timeout: {
+            const double seconds = arg_f64(args, "seconds", arg_f64(args, "interval", 0.0));
+            return loader_timer_dispatch(session, ctx, seconds,
+                                         method == sdk_method_id::method_set_timeout, call);
+        }
+
+        case sdk_method_id::method_clear_timer: {
+            const std::string token = arg_utf8(args, "token");
+            if (token.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const int32_t status = loader::sao_plugins_ctx_clear_timer(ctx, token.c_str());
+            if (status != SAO_OK)
+                return status;
+            release_loader_binding(session, "timer:" + token);
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_notify: {
+            const std::string title = arg_utf8(args, "title");
+            std::string message = arg_utf8(args, "message");
+            if (message.empty())
+                message = arg_utf8(args, "text");
+            const double duration = arg_f64(args, "duration_s", arg_f64(args, "duration", 3.0));
+            const std::string kind = arg_utf8(args, "kind", "info");
+            const int32_t status = loader::sao_plugins_ctx_notify(
+                ctx, title.c_str(), message.c_str(), duration,
+                kind.empty() ? "info" : kind.c_str());
+            if (status != SAO_OK)
+                return status;
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_dismiss_notify: {
+            const int32_t status = loader::sao_plugins_ctx_dismiss_notify(ctx);
+            if (status != SAO_OK)
+                return status;
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_toast: {
+            std::string message = arg_utf8(args, "message");
+            if (message.empty())
+                message = arg_utf8(args, "text");
+            if (message.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const int32_t status = loader::sao_plugins_ctx_toast(ctx, message.c_str());
+            if (status != SAO_OK)
+                return status;
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_open_file: {
+            const ordered_json* filters = arg_member(args, "filters");
+            std::string filters_json;
+            if (filters != nullptr && !filters->is_null()) {
+                filters_json = filters->is_string() ? filters->get<std::string>()
+                                                    : filters->dump();
+            }
+            const std::string title = arg_utf8(args, "title");
+            const std::string initial_dir = arg_utf8(args, "initial_dir");
+            const int64_t hwnd = arg_i64(args, "hwnd", 0);
+            const std::wstring initial_dir_w =
+                initial_dir.empty() ? std::wstring() : wide_from_utf8(initial_dir);
+            wchar_t* selected = nullptr;
+            const int32_t status = loader::sao_plugins_ctx_open_file(
+                ctx, filters_json.empty() ? nullptr : filters_json.c_str(),
+                title.empty() ? nullptr : title.c_str(),
+                initial_dir_w.empty() ? nullptr : initial_dir_w.c_str(),
+                static_cast<intptr_t>(hwnd), &selected);
+            if (status != SAO_OK)
+                return status;
+            if (selected == nullptr)
+                return write_call_json(ordered_json(nullptr), call);
+            const std::string utf8_path = utf8_from_wide(selected);
+            loader::sao_plugins_ctx_free_wstring(selected);
+            return write_call_json(ordered_json(utf8_path), call);
+        }
+
+        case sdk_method_id::method_open_window: {
+            const std::string panel_id = arg_utf8(args, "panel_id");
+            const uint32_t width = arg_u32(args, "width", 0);
+            const uint32_t height = arg_u32(args, "height", 0);
+            const int32_t status = loader::sao_plugins_ctx_open_window(
+                ctx, panel_id.empty() ? nullptr : panel_id.c_str(), width, height);
+            if (status != SAO_OK)
+                return status;
+            ordered_json result;
+            result["panel_id"] = panel_id;
+            return write_call_json(result, call);
+        }
+
+        case sdk_method_id::method_create_compositor_layer: {
+            const std::string name = arg_utf8(args, "name");
+            if (name.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const uint32_t width = arg_u32(args, "width", 0);
+            const uint32_t height = arg_u32(args, "height", 0);
+            const int32_t x = static_cast<int32_t>(arg_i64(args, "x", 0));
+            const int32_t y = static_cast<int32_t>(arg_i64(args, "y", 0));
+            const int32_t z = static_cast<int32_t>(arg_i64(args, "z", 140));
+            const bool click_through = arg_bool(args, "click_through", true);
+            const bool high_fps = arg_bool(args, "high_fps", false);
+            const uint32_t target_fps = arg_u32(args, "target_fps", 0);
+            const int32_t status = loader::sao_plugins_ctx_create_compositor_layer(
+                ctx, name.c_str(), width, height, x, y, z, click_through, high_fps, target_fps);
+            if (status != SAO_OK)
+                return status;
+            ordered_json result;
+            result["name"] = name;
+            return write_call_json(result, call);
+        }
+
+        case sdk_method_id::method_upload_compositor_frame: {
+            const std::string name = arg_utf8(args, "name");
+            if (name.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            std::string encoded = arg_utf8(args, "data_base64");
+            if (encoded.empty())
+                encoded = arg_utf8(args, "data");
+            const uint32_t width = arg_u32(args, "width", 0);
+            const uint32_t height = arg_u32(args, "height", 0);
+            std::vector<uint8_t> bytes;
+            if (encoded.empty() || !base64_decode(encoded, bytes) || bytes.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const int32_t status = loader::sao_plugins_ctx_upload_compositor_frame(
+                ctx, name.c_str(), bytes.data(), bytes.size(), width, height);
+            if (status != SAO_OK)
+                return status;
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_set_compositor_layer_position: {
+            const std::string name = arg_utf8(args, "name");
+            if (name.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const int32_t status = loader::sao_plugins_ctx_set_compositor_layer_position(
+                ctx, name.c_str(), static_cast<int32_t>(arg_i64(args, "x", 0)),
+                static_cast<int32_t>(arg_i64(args, "y", 0)));
+            if (status != SAO_OK)
+                return status;
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_set_compositor_layer_visible: {
+            const std::string name = arg_utf8(args, "name");
+            if (name.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const int32_t status = loader::sao_plugins_ctx_set_compositor_layer_visible(
+                ctx, name.c_str(), arg_bool(args, "visible", true));
+            if (status != SAO_OK)
+                return status;
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_destroy_compositor_layer: {
+            const std::string name = arg_utf8(args, "name");
+            if (name.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const int32_t status =
+                loader::sao_plugins_ctx_destroy_compositor_layer(ctx, name.c_str());
+            if (status != SAO_OK)
+                return status;
+            return write_call_json(ordered_json(true), call);
+        }
+
+        case sdk_method_id::method_set_compositor_layer_input: {
+            const std::string name = arg_utf8(args, "name");
+            if (name.empty() || call->callback == nullptr ||
+                call->callback->kind != cs_managed_callback_kind::compositor_input) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            void* managed_token = nullptr;
+            void* ignored_entry = nullptr;
+            int32_t status =
+                wrap_managed_callback(session, call->callback, &ignored_entry, &managed_token);
+            if (status != SAO_OK)
+                return status;
+            status = loader::sao_plugins_ctx_set_compositor_layer_input(
+                ctx, name.c_str(), callback_compositor_cursor_pos,
+                callback_compositor_mouse_button, callback_compositor_cursor_leave,
+                callback_compositor_scroll, managed_token);
+            if (status != SAO_OK) {
+                release_callback_token(managed_token);
+                return status;
+            }
+            put_loader_binding(session, "ci:" + name, managed_token);
+            if (call->out_callback_token != nullptr)
+                *call->out_callback_token = managed_token;
+            ordered_json result;
+            result["name"] = name;
+            return write_call_json(result, call);
+        }
+
+        case sdk_method_id::method_get_engine: {
+            const std::string name = arg_utf8(args, "name");
+            if (name.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            void* engine = loader::sao_plugins_ctx_get_engine(ctx, name.c_str());
+            ordered_json result;
+            result["handle"] =
+                engine == nullptr
+                    ? ordered_json(nullptr)
+                    : ordered_json(reinterpret_cast<uintptr_t>(engine));
+            return write_call_json(result, call);
+        }
+
+        case sdk_method_id::method_require_engine: {
+            const std::string name = arg_utf8(args, "name");
+            if (name.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            void* engine = loader::sao_plugins_ctx_get_engine(ctx, name.c_str());
+            if (engine == nullptr)
+                return SAO_ERR_HANDLE_INVALID;
+            ordered_json result;
+            result["handle"] = reinterpret_cast<uintptr_t>(engine);
+            return write_call_json(result, call);
+        }
+
+        case sdk_method_id::method_ensure_requirements: {
+            const bool install = arg_bool(args, "install", true);
+            char* raw = nullptr;
+            const int32_t status =
+                loader::sao_plugins_ctx_ensure_requirements(ctx, install, &raw);
+            if (status != SAO_OK)
+                return status;
+            if (raw == nullptr)
+                return write_call_json(ordered_json::object(), call);
+            const size_t size = std::strlen(raw);
+            const int32_t written =
+                write_raw_result(raw, size, call->out_result_json_utf8, call->out_capacity,
+                                 call->out_required);
+            loader::sao_plugins_ctx_free_string(raw);
+            return written;
+        }
+
+        case sdk_method_id::method_load_local: {
+            std::string rel = arg_utf8(args, "path");
+            if (rel.empty())
+                rel = arg_utf8(args, "rel");
+            if (rel.empty())
+                return SAO_ERR_INVALID_ARGUMENT;
+            const char* plugin_id = loader::sao_plugins_ctx_plugin_id(ctx);
+            const wchar_t* root_dir = loader::sao_plugins_ctx_path(ctx);
+            if (plugin_id == nullptr || plugin_id[0] == '\0' || root_dir == nullptr)
+                return SAO_ERR_HANDLE_INVALID;
+            script_ctx::load_local_result kind = script_ctx::load_local_result::missing;
+            std::shared_ptr<script_ctx::script_module> module;
+            std::wstring abs_path;
+            std::string diag;
+            const int32_t status = script_ctx::runtime_bridge_load_local(
+                ctx, plugin_id, root_dir, rel.c_str(), &kind, &module, &abs_path, &diag);
+            if (status != SAO_OK)
+                return status;
+            ordered_json result;
+            switch (kind) {
+            case script_ctx::load_local_result::module:
+                result["kind"] = "module";
+                result["path"] = utf8_from_wide(abs_path);
+                result["module_id"] = module != nullptr ? module->module_id() : "";
+                result["diag"] = nullptr;
+                break;
+            case script_ctx::load_local_result::path_only:
+                result["kind"] = "path";
+                result["path"] = utf8_from_wide(abs_path);
+                result["module_id"] = nullptr;
+                result["diag"] = diag.empty() ? ordered_json(nullptr) : ordered_json(diag);
+                break;
+            case script_ctx::load_local_result::missing:
+                result["kind"] = "missing";
+                result["path"] = nullptr;
+                result["module_id"] = nullptr;
+                result["diag"] = diag.empty() ? ordered_json(nullptr) : ordered_json(diag);
+                break;
+            case script_ctx::load_local_result::unsupported:
+            default:
+                result["kind"] = "unsupported";
+                result["path"] = nullptr;
+                result["module_id"] = nullptr;
+                result["diag"] = diag.empty() ? ordered_json(nullptr) : ordered_json(diag);
+                break;
+            }
+            return write_call_json(result, call);
+        }
+
+        // Canonical names with no loader or SDK counterpart fail closed. The
+        // ctx.surface records still mark these as bound because the managed
+        // facade carries them; the graceful UNSUPPORTED keeps the old
+        // "missing surface returns default" behaviour instead of raising.
+        case sdk_method_id::method_run_on_ui:
+        case sdk_method_id::method_register_engine:
+        case sdk_method_id::method_call_engine:
+        case sdk_method_id::method_call_runtime:
+        case sdk_method_id::method_set_compositor_layer_mmf_source:
+        case sdk_method_id::method_set_compositor_layer_shared_texture_source:
+        case sdk_method_id::method_compositor_gpu_interop_available:
+        case sdk_method_id::method_compositor_layer_shared_texture_active:
+        case sdk_method_id::method_compositor_display_refresh_hz:
+            return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+
+        default:
+            return kDispatchFallthrough;
+        }
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
 int32_t SAO_PLUGINS_CALL table_dispatch(cs_managed_sdk_session_t opaque,
                                         cs_managed_sdk_call* call) {
     if (call == nullptr || call->struct_size < sizeof(cs_managed_sdk_call) ||
@@ -590,6 +1981,26 @@ int32_t SAO_PLUGINS_CALL table_dispatch(cs_managed_sdk_session_t opaque,
     if (status != SAO_OK)
         return status;
     auto* session = lease.get();
+
+    // Canonical ctx expansion: loader-context-owned methods run first so the
+    // event/timer/dialog/compositor domains route to the canonical
+    // plugin_context_t ABI; SDK-domain ids fall through to the existing
+    // sdk_context dispatch unchanged.
+    if (session->loader_context != nullptr &&
+        loader_ctx_owns_method(static_cast<sdk_method_id>(call->method_id))) {
+        ordered_json loader_args;
+        if (!parse_call_args(call, loader_args)) {
+            remember_error(session, SAO_ERR_INVALID_ARGUMENT, "loader dispatch");
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        status = dispatch_loader_method(session, static_cast<sdk_method_id>(call->method_id),
+                                        loader_args, call);
+        if (status != kDispatchFallthrough) {
+            remember_error(session, status, "loader dispatch");
+            return status;
+        }
+    }
+
     if (session->sdk_context == nullptr)
         return SAO_ERR_NOT_INITIALIZED;
 
@@ -1089,6 +2500,179 @@ int32_t SAO_PLUGINS_CALL table_last_error(cs_managed_sdk_session_t opaque, char*
     return SAO_OK;
 }
 
+// ── ABI1 V3 appended slots: ctx.ui.* spec builder + blocking prompt ───────
+
+int32_t SAO_PLUGINS_CALL table_ui_build(cs_managed_sdk_session_t opaque,
+                                        const char* method_utf8,
+                                        const char* args_json_utf8, size_t args_size,
+                                        char* out_node_json_utf8, size_t out_capacity,
+                                        size_t* out_required) {
+    if (method_utf8 == nullptr || method_utf8[0] == '\0')
+        return SAO_ERR_INVALID_ARGUMENT;
+    session_call_lease lease;
+    int32_t status = lease.acquire_handle(opaque);
+    if (status != SAO_OK)
+        return status;
+    auto* session = lease.get();
+    nlohmann::json args = nlohmann::json::object();
+    if (args_json_utf8 != nullptr && args_size != 0) {
+        if (args_size > kMaxDispatchArgsBytes) {
+            remember_error(session, SAO_ERR_INVALID_ARGUMENT, "ui_build");
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        try {
+            args = nlohmann::json::parse(args_json_utf8, args_json_utf8 + args_size);
+        } catch (...) {
+            remember_error(session, SAO_ERR_INVALID_ARGUMENT, "ui_build");
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+    }
+    nlohmann::json node;
+    std::string error;
+    if (!script_ctx::script_ui_build(method_utf8, args, node, error)) {
+        try {
+            std::lock_guard lock(session->mutex);
+            session->last_error =
+                "ui_build(" + std::string(method_utf8) + ") failed: " + error;
+        } catch (...) {
+        }
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    const std::string serialized = node.dump();
+    return write_raw_result(serialized.data(), serialized.size(), out_node_json_utf8,
+                            out_capacity, out_required);
+}
+
+// Blocking prompt surface. The INPUT dialog provider owns the interaction;
+// managed ctx.prompt maps {"text": null} back to its caller-supplied default
+// so canonical cancel/timeout semantics hold.
+struct prompt_wait_state {
+    std::mutex mutex;
+    std::condition_variable ready;
+    bool done = false;
+    int32_t pressed_button = -1;
+    bool has_text = false;
+    std::string text;
+};
+
+void SAO_SDK_CALL prompt_dialog_callback(sao_sdk_dialog_token_t, int32_t pressed_button,
+                                         const char* input_text_utf8, size_t input_text_len,
+                                         void* user_data) {
+    auto* state = static_cast<prompt_wait_state*>(user_data);
+    if (state == nullptr)
+        return;
+    try {
+        std::lock_guard lock(state->mutex);
+        state->pressed_button = pressed_button;
+        if (input_text_utf8 != nullptr)
+            state->text.assign(input_text_utf8, input_text_len);
+        state->has_text = input_text_utf8 != nullptr;
+        state->done = true;
+        state->ready.notify_all();
+    } catch (...) {
+    }
+}
+
+int32_t SAO_PLUGINS_CALL table_prompt(cs_managed_sdk_session_t opaque,
+                                      const char* title_utf8, const char* current_utf8,
+                                      char* out_result_json_utf8, size_t out_capacity,
+                                      size_t* out_required) {
+    session_call_lease lease;
+    const int32_t lease_status = lease.acquire_handle(opaque);
+    if (lease_status != SAO_OK)
+        return lease_status;
+    auto* session = lease.get();
+    if (session->sdk_context == nullptr)
+        return SAO_ERR_NOT_INITIALIZED;
+
+    prompt_wait_state state;
+    SaoSdkDialogSpec spec{};
+    spec.kind = SAO_SDK_DIALOG_INPUT;
+    spec.title_utf8 = title_utf8 != nullptr ? title_utf8 : "";
+    spec.message_utf8 = "";
+    spec.input_prompt_utf8 = title_utf8 != nullptr ? title_utf8 : "";
+    spec.input_default_utf8 = current_utf8 != nullptr ? current_utf8 : "";
+    spec.input_max_length = 0;
+    spec.dismiss_on_focus_out = false;
+    spec.dismiss_on_esc = true;
+
+    sao_sdk_dialog_token_t dialog = 0;
+    const sao_sdk_status_t shown = sao_sdk_dialog_show(
+        session->sdk_context, &spec, prompt_dialog_callback, &state, &dialog);
+    ordered_json result;
+    if (shown != SAO_SDK_OK) {
+        // No dialog provider → canonical default (cancel) instead of raising.
+        result["text"] = nullptr;
+    } else {
+        {
+            std::unique_lock lock(state.mutex);
+            if (!state.ready.wait_for(lock, kPromptWaitBudget,
+                                      [&state] { return state.done; })) {
+                lock.unlock();
+                (void)sao_sdk_dialog_dismiss(session->sdk_context, dialog);
+            }
+        }
+        result["text"] = state.done && state.pressed_button == SAO_SDK_DIALOG_BUTTON_OK &&
+                                 state.has_text
+                             ? ordered_json(state.text)
+                             : ordered_json(nullptr);
+    }
+    const std::string serialized = result.dump();
+    return write_raw_result(serialized.data(), serialized.size(), out_result_json_utf8,
+                            out_capacity, out_required);
+}
+
+// Canonical csharp ctx surface — every name bound by the managed ctx facade.
+// Names whose native surface is optional (compositor gpu/mmf, run_on_ui, …)
+// are still marked bound: ctx_surface records binding presence, while the
+// dispatch resolves availability per provider and fails closed.
+const char* const kCsharpCtxSurfaceNames[] = {
+    "plugin_id",      "path",            "web_path",        "assets_path",
+    "base_dir",       "should_stop",     "event_bus",       "owner",
+    "engine",         "ui",              "mem",
+    "log",            "log_info",        "log_warn",        "log_error",
+    "subscribe",      "subscribe_once",  "unsubscribe",     "emit",
+    "on_damage",      "on_heal",         "on_skill",        "on_boss",
+    "on_snapshot",    "on_encounter_finalized",
+    "get_snapshot",   "snapshot_value",  "recent_events",   "time",
+    "get_setting",    "setting",         "set_setting",     "set_defaults",
+    "register_parser_adapter",           "register_exporter",
+    "register_formatter",                "register_trigger_type",
+    "register_report_view",              "register_timer",
+    "register_ui_panel",                 "register_render_hook",
+    "set_overlay",    "clear_overlay",   "request_redraw",
+    "register_hotkey","register_engine", "get_engine",      "require_engine",
+    "call_engine",    "call_runtime",
+    "register_data_source",              "register_menu_category",
+    "register_menu_surface",             "register_action_handler",
+    "set_interval",   "set_timeout",     "clear_timer",     "run_on_ui",
+    "notify",         "dismiss_notify",  "toast",
+    "open_file",      "open_window",
+    "create_compositor_layer",           "upload_compositor_frame",
+    "set_compositor_layer_mmf_source",   "set_compositor_layer_shared_texture_source",
+    "set_compositor_layer_position",     "set_compositor_layer_visible",
+    "set_compositor_layer_input",        "destroy_compositor_layer",
+    "compositor_gpu_interop_available",  "compositor_layer_shared_texture_active",
+    "compositor_display_refresh_hz",
+    "ensure_requirements",               "load_local",      "prompt",
+    "register_thread",
+    "ui.panel",       "ui.section",      "ui.card",         "ui.row",
+    "ui.group",       "ui.text",         "ui.title",        "ui.kv",
+    "ui.bar",         "ui.slider",       "ui.badge",        "ui.divider",
+    "ui.spacer",      "ui.button",       "ui.input",        "ui.table",
+    "ui.canvas",      "ui.rgba_frame",   "ui.rect",         "ui.oval",
+    "ui.line",        "ui.ctext",
+    nullptr,
+};
+
+void note_csharp_ctx_surface() noexcept {
+    static std::once_flag noted;
+    std::call_once(noted, [] {
+        script_ctx::ctx_surface_note_all(loader::engine_kind::csharp,
+                                         kCsharpCtxSurfaceNames);
+    });
+}
+
 const cs_managed_sdk_table kSdkTable{
     sizeof(cs_managed_sdk_table),
     SAO_CSHOST_SDK_TABLE_ABI_VERSION,
@@ -1103,6 +2687,8 @@ const cs_managed_sdk_table kSdkTable{
     table_register_entity_provider_v2,
     table_emit_context,
     table_submit_action_result_v2,
+    table_ui_build,
+    table_prompt,
 };
 
 int32_t quiesce_entities(sdk_bridge_session* session) noexcept {
@@ -1187,6 +2773,9 @@ int32_t cshost_sdk_session_create(void* runtime, void* loader_context, void* sdk
             }
             published = true;
         }
+        // Record the canonical csharp ctx surface once per process; the note
+        // table is a global set keyed by engine kind.
+        note_csharp_ctx_surface();
         *out_session = session.release();
         return SAO_OK;
     } catch (...) {

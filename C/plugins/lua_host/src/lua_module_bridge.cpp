@@ -3,6 +3,13 @@
 #include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/plugin_manifest.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
+#include "sao/plugins/script_ctx/runtime_bridge.h"
+#include "sao/plugins/script_ctx/script_ui.h"
+#include "sao/plugins/sdk_binding/binding_common.h"
+#include "sao/plugins/sdk_binding/binding_engine.h"
+#include "sao/sdk/sao_sdk.h"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +21,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -110,6 +120,16 @@ struct passive_resource {
     std::uint64_t sequence = 0;
 };
 
+// Dispatch block shared by the four compositor input native callbacks (they
+// receive a single common user_data pointer).  `record_ids` holds the
+// event_callback_record dispatch ids looked up through g_callback_map.
+struct compositor_input_dispatch {
+    std::array<uintptr_t, 4> record_ids{};  // cursor_pos, mouse_button, cursor_leave, scroll
+    std::string key;                        // layer name
+    std::atomic_bool closing{false};
+    std::uint64_t sequence = 0;
+};
+
 struct bridge_state {
     lua_State* state = nullptr;
     loader_context_t* context = nullptr;
@@ -122,7 +142,19 @@ struct bridge_state {
     std::unordered_map<std::string, std::shared_ptr<event_callback_record>> timers;
     std::unordered_map<uint32_t, std::shared_ptr<event_callback_record>> render_hooks;
     std::unordered_map<std::string, int> engines;
+    // FULL reflective engine surface: per-bridge SaoSdkContext bound at
+    // register_ctx time plus the channel map for ctx.engine.on().  The
+    // dedicated mutex keeps provider-thread channel lookups off the state
+    // lock so a provider drain inside sao_sdk_context_destroy cannot
+    // deadlock against teardown.
+    SaoSdkContext sdk_ctx{};
+    bool sdk_ctx_bound = false;
+    std::mutex engine_callbacks_mutex;
+    std::unordered_map<std::string, std::shared_ptr<event_callback_record>> engine_callbacks;
     std::vector<passive_resource> passive_resources;
+    std::unordered_map<std::string, std::shared_ptr<compositor_input_dispatch>> compositor_inputs;
+    std::unordered_map<uintptr_t, std::shared_ptr<event_callback_record>> compositor_records;
+    std::vector<std::shared_ptr<compositor_input_dispatch>> retired_compositor_dispatches;
     std::vector<std::unique_ptr<menu_bridge>> menus;
     action_handler_bridge action_handler;
     bool enable_checkpoint_active = false;
@@ -1289,6 +1321,887 @@ int32_t render_hook_callback(const char* surface_utf8, const char* payload_json_
     }
 }
 
+// ── ctx → lua_State map (runtime_bridge provider lookup) ─────────────
+std::mutex g_ctx_state_mutex;
+std::unordered_map<loader_context_t*, lua_State*> g_ctx_state_map;
+
+lua_State* find_state_for_context(loader_context_t* context) noexcept {
+    if (context == nullptr)
+        return nullptr;
+    try {
+        std::lock_guard lock(g_ctx_state_mutex);
+        const auto found = g_ctx_state_map.find(context);
+        return found == g_ctx_state_map.end() ? nullptr : found->second;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// ── UTF-8 / UTF-16 helpers (filesystem codecs keep this TU windows-free) ──
+std::string wide_to_utf8(const wchar_t* value) {
+    if (value == nullptr || *value == L'\0')
+        return {};
+    try {
+        const auto u8 = std::filesystem::path(std::wstring(value)).u8string();
+        return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+    } catch (...) {
+        return {};
+    }
+}
+
+std::wstring utf8_to_wide_string(const char* value) {
+    if (value == nullptr || *value == '\0')
+        return {};
+    try {
+        const std::string_view view(value);
+        return std::filesystem::path(
+                   std::u8string_view(reinterpret_cast<const char8_t*>(value),
+                                      view.size()))
+            .wstring();
+    } catch (...) {
+        return {};
+    }
+}
+
+// ── compositor input dispatch (shared user_data for the 4 native fns) ──
+enum compositor_input_slot : std::size_t {
+    compositor_input_cursor_pos = 0,
+    compositor_input_mouse_button = 1,
+    compositor_input_cursor_leave = 2,
+    compositor_input_scroll = 3,
+};
+
+std::shared_ptr<event_callback_record> find_compositor_record(
+    compositor_input_dispatch* dispatch, std::size_t slot) noexcept {
+    if (dispatch == nullptr || slot >= dispatch->record_ids.size() ||
+        dispatch->closing.load(std::memory_order_acquire) ||
+        dispatch->record_ids[slot] == 0) {
+        return nullptr;
+    }
+    return find_callback(reinterpret_cast<void*>(dispatch->record_ids[slot]));
+}
+
+void compositor_invoke(void* user_data, std::size_t slot, double arg_a, double arg_b,
+                       bool arg_b_is_bool, int argument_count) noexcept {
+    try {
+        auto* dispatch = static_cast<compositor_input_dispatch*>(user_data);
+        auto record = find_compositor_record(dispatch, slot);
+        if (record == nullptr || !enter_callback(*record))
+            return;
+        struct callback_guard final {
+            event_callback_record& callback;
+            ~callback_guard() {
+                leave_callback(callback);
+            }
+        } guard{*record};
+        lua_State* state = record->state.load(std::memory_order_acquire);
+        if (state == nullptr)
+            return;
+        detail::state_operation operation;
+        if (detail::acquire_state_operation(state, operation) != SAO_OK ||
+            record->closing.load(std::memory_order_acquire)) {
+            return;
+        }
+        state = operation.state();
+        const int base = lua_gettop(state);
+        lua_rawgeti(state, LUA_REGISTRYINDEX, record->function_ref);
+        if (!lua_isfunction(state, -1)) {
+            lua_settop(state, base);
+            return;
+        }
+        int pushed = 0;
+        if (argument_count >= 1) {
+            lua_pushnumber(state, static_cast<lua_Number>(arg_a));
+            pushed = 1;
+        }
+        if (argument_count >= 2) {
+            if (arg_b_is_bool) {
+                lua_pushboolean(state, arg_b != 0.0 ? 1 : 0);
+            } else {
+                lua_pushnumber(state, static_cast<lua_Number>(arg_b));
+            }
+            pushed = 2;
+        }
+        if (lua_pcall(state, pushed, 0, 0) != LUA_OK) {
+            if (lua_gettop(state) > base) {
+                detail::capture_state_error_locked(state, -1);
+            }
+        }
+        lua_settop(state, base);
+    } catch (...) {
+    }
+}
+
+void SAO_PLUGINS_CALL compositor_cursor_pos_dispatch(float x, float y,
+                                                     void* user_data) noexcept {
+    compositor_invoke(user_data, compositor_input_cursor_pos, static_cast<double>(x),
+                      static_cast<double>(y), false, 2);
+}
+
+void SAO_PLUGINS_CALL compositor_mouse_button_dispatch(uint32_t button, bool pressed,
+                                                       void* user_data) noexcept {
+    compositor_invoke(user_data, compositor_input_mouse_button,
+                      static_cast<double>(button), pressed ? 1.0 : 0.0, true, 2);
+}
+
+void SAO_PLUGINS_CALL compositor_cursor_leave_dispatch(void* user_data) noexcept {
+    compositor_invoke(user_data, compositor_input_cursor_leave, 0.0, 0.0, false, 0);
+}
+
+void SAO_PLUGINS_CALL compositor_scroll_dispatch(float dx, float dy,
+                                                 void* user_data) noexcept {
+    compositor_invoke(user_data, compositor_input_scroll, static_cast<double>(dx),
+                      static_cast<double>(dy), false, 2);
+}
+
+// Release the lua callback records bound to one compositor layer name.
+// Returns SAO_PLUGINS_ERR_BUSY if a callback is currently in flight.
+int32_t release_compositor_input_locked(bridge_state& bridge, lua_State* state,
+                                        const std::string& name) noexcept {
+    const auto found = bridge.compositor_inputs.find(name);
+    if (found == bridge.compositor_inputs.end())
+        return SAO_OK;
+    auto& dispatch = found->second;
+    dispatch->closing.store(true, std::memory_order_release);
+    std::vector<std::shared_ptr<event_callback_record>> records;
+    records.reserve(dispatch->record_ids.size());
+    for (const uintptr_t id : dispatch->record_ids) {
+        if (id == 0)
+            continue;
+        const auto rec = bridge.compositor_records.find(id);
+        if (rec != bridge.compositor_records.end())
+            records.push_back(rec->second);
+    }
+    std::vector<std::shared_ptr<event_callback_record>> stopped;
+    stopped.reserve(records.size());
+    for (const auto& record : records) {
+        const int32_t status = stop_callback(*record);
+        if (status != SAO_OK) {
+            for (const auto& item : stopped)
+                resume_callback(*item);
+            dispatch->closing.store(false, std::memory_order_release);
+            return status;
+        }
+        stopped.push_back(record);
+    }
+    for (const auto& record : records) {
+        bridge.compositor_records.erase(record->dispatch_id);
+        release_callback_ref(state, *record);
+    }
+    bridge.compositor_inputs.erase(found);
+    try {
+        bridge.retired_compositor_dispatches.push_back(std::move(dispatch));
+    } catch (...) {
+    }
+    return SAO_OK;
+}
+
+// ── script_value ↔ lua marshalling ───────────────────────────────────────
+constexpr int kMaximumScriptValueDepth = 64;
+constexpr std::size_t kMaximumScriptValueItems = 16384;
+
+struct script_value_box {
+    script_ctx::script_value_ptr value;
+};
+
+struct script_module_box {
+    std::shared_ptr<script_ctx::script_module> module;
+};
+
+int script_value_dispatch(lua_State* state) noexcept;   // forward
+int script_module_index(lua_State* state) noexcept;     // forward
+int script_module_member_call(lua_State* state) noexcept;  // forward
+
+int script_value_gc(lua_State* state) noexcept {
+    auto* box = static_cast<script_value_box*>(lua_touserdata(state, 1));
+    if (box != nullptr)
+        box->~script_value_box();
+    return 0;
+}
+
+int script_module_gc(lua_State* state) noexcept {
+    auto* box = static_cast<script_module_box*>(lua_touserdata(state, 1));
+    if (box != nullptr)
+        box->~script_module_box();
+    return 0;
+}
+
+void ensure_script_value_metatable(lua_State* state) {
+    if (luaL_newmetatable(state, "SaoScriptValue") == 0) {
+        lua_pop(state, 1);
+        return;
+    }
+    lua_pushcfunction(state, script_value_dispatch);
+    lua_setfield(state, -2, "__call");
+    lua_pushcfunction(state, script_value_gc);
+    lua_setfield(state, -2, "__gc");
+    lua_pushliteral(state, "locked");
+    lua_setfield(state, -2, "__metatable");
+}
+
+void ensure_script_module_metatable(lua_State* state) {
+    if (luaL_newmetatable(state, "SaoScriptModule") == 0) {
+        lua_pop(state, 1);
+        return;
+    }
+    lua_pushcfunction(state, script_module_index);
+    lua_setfield(state, -2, "__index");
+    lua_pushcfunction(state, script_module_gc);
+    lua_setfield(state, -2, "__gc");
+    lua_pushliteral(state, "locked");
+    lua_setfield(state, -2, "__metatable");
+}
+
+bool push_script_box(lua_State* state, script_ctx::script_value_ptr value) {
+    auto* box = static_cast<script_value_box*>(lua_newuserdatauv(
+        state, sizeof(script_value_box), 0));
+    if (box == nullptr)
+        return false;
+    try {
+        new (box) script_value_box{std::move(value)};
+    } catch (...) {
+        lua_pop(state, 1);
+        return false;
+    }
+    ensure_script_value_metatable(state);
+    lua_setmetatable(state, -2);
+    return true;
+}
+
+bool push_script_module_box(lua_State* state,
+                            std::shared_ptr<script_ctx::script_module> module) {
+    auto* box = static_cast<script_module_box*>(lua_newuserdatauv(
+        state, sizeof(script_module_box), 0));
+    if (box == nullptr)
+        return false;
+    try {
+        new (box) script_module_box{std::move(module)};
+    } catch (...) {
+        lua_pop(state, 1);
+        return false;
+    }
+    ensure_script_module_metatable(state);
+    lua_setmetatable(state, -2);
+    return true;
+}
+
+// script_value → lua.  `error` is optional diagnostics for callers.
+bool push_script_value(lua_State* state, const script_ctx::script_value_ptr& value,
+                       std::string& error, int depth = 0) {
+    if (depth > kMaximumScriptValueDepth) {
+        error = "script value nesting exceeds its depth budget";
+        return false;
+    }
+    if (value == nullptr) {
+        lua_pushnil(state);
+        return true;
+    }
+    using kind = script_ctx::script_value::kind;
+    switch (value->k) {
+    case kind::null:
+        lua_pushnil(state);
+        return true;
+    case kind::boolean:
+        lua_pushboolean(state, value->boolean ? 1 : 0);
+        return true;
+    case kind::integer:
+        lua_pushinteger(state, static_cast<lua_Integer>(value->integer));
+        return true;
+    case kind::number:
+        lua_pushnumber(state, static_cast<lua_Number>(value->number));
+        return true;
+    case kind::string:
+    case kind::bytes:
+        lua_pushlstring(state, value->text.data(), value->text.size());
+        return true;
+    case kind::list: {
+        if (value->items.size() > kMaximumScriptValueItems ||
+            value->items.size() > static_cast<std::size_t>(
+                                      std::numeric_limits<int>::max())) {
+            error = "script list value is too large for Lua";
+            return false;
+        }
+        lua_createtable(state, static_cast<int>(value->items.size()), 0);
+        for (std::size_t index = 0; index < value->items.size(); ++index) {
+            if (!push_script_value(state, value->items[index], error, depth + 1)) {
+                lua_pop(state, 1);
+                return false;
+            }
+            lua_rawseti(state, -2, static_cast<lua_Integer>(index + 1));
+        }
+        return true;
+    }
+    case kind::map: {
+        if (value->object.size() > kMaximumScriptValueItems) {
+            error = "script map value is too large for Lua";
+            return false;
+        }
+        lua_createtable(state, 0, static_cast<int>(value->object.size()));
+        for (const auto& [key, item] : value->object) {
+            lua_pushlstring(state, key.data(), key.size());
+            if (!push_script_value(state, item, error, depth + 1)) {
+                lua_pop(state, 2);
+                return false;
+            }
+            lua_rawset(state, -3);
+        }
+        return true;
+    }
+    case kind::function:
+        return push_script_box(state, value);
+    }
+    error = "script value kind is not representable in Lua";
+    return false;
+}
+
+// lua → script_value (positional args for module->call).
+bool lua_to_script_value(lua_State* state, int index, script_ctx::script_value_ptr& out,
+                         std::string& error, int depth,
+                         std::vector<const void*>& active_tables) {
+    if (depth > kMaximumScriptValueDepth) {
+        error = "Lua value nesting exceeds its depth budget";
+        return false;
+    }
+    index = lua_absindex(state, index);
+    using kind = script_ctx::script_value::kind;
+    switch (lua_type(state, index)) {
+    case LUA_TNONE:
+    case LUA_TNIL:
+        out = script_ctx::script_value::null_value();
+        return true;
+    case LUA_TBOOLEAN:
+        out = script_ctx::script_value::make_boolean(lua_toboolean(state, index) != 0);
+        return true;
+    case LUA_TNUMBER:
+        if (lua_isinteger(state, index)) {
+            out = script_ctx::script_value::make_integer(
+                static_cast<int64_t>(lua_tointeger(state, index)));
+        } else {
+            const double number = static_cast<double>(lua_tonumber(state, index));
+            if (!std::isfinite(number)) {
+                error = "Lua numbers passed to modules must be finite";
+                return false;
+            }
+            out = script_ctx::script_value::make_number(number);
+        }
+        return true;
+    case LUA_TSTRING: {
+        std::size_t length = 0;
+        const char* text = lua_tolstring(state, index, &length);
+        out = script_ctx::script_value::make_string(
+            std::string(text == nullptr ? "" : text, length));
+        return true;
+    }
+    case LUA_TUSERDATA: {
+        auto* box = static_cast<script_value_box*>(luaL_testudata(state, index,
+                                                                "SaoScriptValue"));
+        if (box != nullptr && box->value != nullptr &&
+            box->value->k == kind::function) {
+            out = box->value;
+            return true;
+        }
+        error = "Lua userdata cannot cross the script module boundary";
+        return false;
+    }
+    case LUA_TTABLE: {
+        const void* identity = lua_topointer(state, index);
+        if (std::find(active_tables.begin(), active_tables.end(), identity) !=
+            active_tables.end()) {
+            error = "cyclic Lua tables cannot cross the script module boundary";
+            return false;
+        }
+        if (lua_checkstack(state, 3) == 0) {
+            error = "Lua stack cannot represent the script value";
+            return false;
+        }
+        active_tables.push_back(identity);
+        detail::active_table_guard guard(active_tables);
+        struct entry {
+            bool integer_key = false;
+            lua_Integer integer = 0;
+            std::string string_key;
+            script_ctx::script_value_ptr value;
+        };
+        std::vector<entry> items;
+        bool array_candidate = true;
+        lua_Integer largest_index = 0;
+        std::size_t count = 0;
+        lua_pushnil(state);
+        while (lua_next(state, index) != 0) {
+            if (++count > kMaximumScriptValueItems) {
+                lua_pop(state, 2);
+                error = "Lua table exceeds the script value item budget";
+                return false;
+            }
+            entry item;
+            if (lua_isinteger(state, -2)) {
+                item.integer_key = true;
+                item.integer = lua_tointeger(state, -2);
+                if (item.integer <= 0)
+                    array_candidate = false;
+                largest_index = std::max(largest_index, item.integer);
+            } else if (lua_type(state, -2) == LUA_TSTRING) {
+                std::size_t length = 0;
+                const char* key = lua_tolstring(state, -2, &length);
+                item.string_key.assign(key == nullptr ? "" : key, length);
+                array_candidate = false;
+            } else {
+                lua_pop(state, 2);
+                error = "Lua table script-value keys must be strings or positive integers";
+                return false;
+            }
+            if (!lua_to_script_value(state, -1, item.value, error, depth + 1,
+                                     active_tables)) {
+                lua_pop(state, 2);
+                return false;
+            }
+            items.push_back(std::move(item));
+            lua_pop(state, 1);
+        }
+        array_candidate = array_candidate && !items.empty() && largest_index >= 0 &&
+                          static_cast<std::size_t>(largest_index) == items.size();
+        if (array_candidate) {
+            std::vector<script_ctx::script_value_ptr> list(items.size());
+            for (auto& item : items) {
+                list[static_cast<std::size_t>(item.integer - 1)] = std::move(item.value);
+            }
+            out = script_ctx::script_value::make_list(std::move(list));
+        } else {
+            std::vector<std::pair<std::string, script_ctx::script_value_ptr>> object;
+            object.reserve(items.size());
+            for (auto& item : items) {
+                const std::string key = item.integer_key
+                                            ? std::to_string(item.integer)
+                                            : std::move(item.string_key);
+                object.emplace_back(std::move(key), std::move(item.value));
+            }
+            out = script_ctx::script_value::make_map(std::move(object));
+        }
+        return true;
+    }
+    default:
+        error = std::string("Lua value type '") + luaL_typename(state, index) +
+                "' cannot cross the script module boundary";
+        return false;
+    }
+}
+
+bool lua_to_script_value(lua_State* state, int index, script_ctx::script_value_ptr& out,
+                         std::string& error) {
+    std::vector<const void*> active_tables;
+    try {
+        return lua_to_script_value(state, index, out, error, 0, active_tables);
+    } catch (...) {
+        error = "Lua script-value conversion failed";
+        return false;
+    }
+}
+
+// ── lua-backed script_module facade (ctx.load_local for .lua) ────────────
+// Executes a bundled .lua file inside the plugin's own lua_State under a fresh
+// _ENV and exposes the result table (or the env table when the chunk returns
+// nil) through the shared script_module ABI.
+class lua_local_module final
+    : public script_ctx::script_module,
+      public std::enable_shared_from_this<lua_local_module> {
+  public:
+    lua_local_module(lua_State* state, int table_ref, std::string id)
+        : state_(detail::main_thread(state)), table_ref_(table_ref), id_(std::move(id)) {}
+
+    ~lua_local_module() override {
+        if (state_ == nullptr || table_ref_ == LUA_NOREF || table_ref_ == LUA_REFNIL)
+            return;
+        // Skip the unref once the bridge is gone — during lua_close the
+        // registry dies with the state and luaL_unref would touch dead memory.
+        if (!detail::has_ctx_bridge_locked(state_))
+            return;
+        detail::state_operation operation;
+        if (detail::acquire_state_operation(state_, operation) == SAO_OK &&
+            operation.state() != nullptr) {
+            luaL_unref(operation.state(), LUA_REGISTRYINDEX, table_ref_);
+        }
+        table_ref_ = LUA_NOREF;
+    }
+
+    const std::string& module_id() const noexcept override {
+        return id_;
+    }
+
+    std::vector<std::string> member_names() const override {
+        std::vector<std::string> names;
+        if (state_ == nullptr)
+            return names;
+        detail::state_operation operation;
+        if (detail::acquire_state_operation(state_, operation) != SAO_OK)
+            return names;
+        lua_State* state = operation.state();
+        if (state == nullptr)
+            return names;
+        const int base = lua_gettop(state);
+        lua_rawgeti(state, LUA_REGISTRYINDEX, table_ref_);
+        if (lua_istable(state, -1) && lua_checkstack(state, 3) != 0) {
+            lua_pushnil(state);
+            while (lua_next(state, -2) != 0) {
+                if (lua_type(state, -2) == LUA_TSTRING) {
+                    std::size_t length = 0;
+                    const char* key = lua_tolstring(state, -2, &length);
+                    if (key != nullptr && std::strlen(key) == length)
+                        names.emplace_back(key, length);
+                }
+                lua_pop(state, 1);
+            }
+        }
+        lua_settop(state, base);
+        return names;
+    }
+
+    int32_t get(const std::string& name, script_ctx::script_value_ptr* out_value,
+                std::string* out_error) override {
+        if (out_value == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        out_value->reset();
+        if (state_ == nullptr) {
+            if (out_error != nullptr)
+                *out_error = "lua module state is closed";
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        detail::state_operation operation;
+        const int32_t acquire = detail::acquire_state_operation(state_, operation);
+        if (acquire != SAO_OK || operation.state() == nullptr) {
+            if (out_error != nullptr)
+                *out_error = "lua module state is unavailable";
+            return acquire != SAO_OK ? acquire : SAO_ERR_HANDLE_INVALID;
+        }
+        lua_State* state = operation.state();
+        const int base = lua_gettop(state);
+        int32_t result = SAO_OK;
+        lua_rawgeti(state, LUA_REGISTRYINDEX, table_ref_);
+        if (!lua_istable(state, -1)) {
+            if (out_error != nullptr)
+                *out_error = "lua module table is unavailable";
+            result = SAO_ERR_HANDLE_INVALID;
+        } else {
+            lua_pushlstring(state, name.data(), name.size());
+            lua_rawget(state, -2);
+            if (lua_isfunction(state, -1)) {
+                auto self = shared_from_this();
+                const std::string member = name;
+                *out_value = script_ctx::script_value::make_function(
+                    [self, member](const std::vector<script_ctx::script_value_ptr>& args,
+                                   script_ctx::script_value_ptr* inner_out,
+                                   std::string* inner_error) -> int32_t {
+                        return self->call(member, args, inner_out, inner_error);
+                    });
+            } else {
+                script_ctx::script_value_ptr converted;
+                std::string error;
+                if (!lua_to_script_value(state, -1, converted, error)) {
+                    if (out_error != nullptr)
+                        *out_error = std::move(error);
+                    result = SAO_ERR_INVALID_ARGUMENT;
+                } else {
+                    *out_value = std::move(converted);
+                }
+            }
+        }
+        lua_settop(state, base);
+        return result;
+    }
+
+    int32_t call(const std::string& name,
+                 const std::vector<script_ctx::script_value_ptr>& args,
+                 script_ctx::script_value_ptr* out_value,
+                 std::string* out_error) override {
+        if (state_ == nullptr) {
+            if (out_error != nullptr)
+                *out_error = "lua module state is closed";
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        detail::state_operation operation;
+        const int32_t acquire = detail::acquire_state_operation(state_, operation);
+        if (acquire != SAO_OK || operation.state() == nullptr) {
+            if (out_error != nullptr)
+                *out_error = "lua module state is unavailable";
+            return acquire != SAO_OK ? acquire : SAO_ERR_HANDLE_INVALID;
+        }
+        lua_State* state = operation.state();
+        const int base = lua_gettop(state);
+        int32_t result = SAO_OK;
+        lua_rawgeti(state, LUA_REGISTRYINDEX, table_ref_);
+        if (!lua_istable(state, -1)) {
+            if (out_error != nullptr)
+                *out_error = "lua module table is unavailable";
+            result = SAO_ERR_HANDLE_INVALID;
+        } else {
+            lua_pushlstring(state, name.data(), name.size());
+            lua_rawget(state, -2);
+            if (!lua_isfunction(state, -1)) {
+                if (out_error != nullptr)
+                    *out_error = "lua module member is not callable: " + name;
+                result = SAO_ERR_INVALID_ARGUMENT;
+            } else {
+                int argument_count = 0;
+                bool args_ok = true;
+                std::string push_error;
+                for (const auto& argument : args) {
+                    if (!push_script_value(state, argument, push_error)) {
+                        args_ok = false;
+                        break;
+                    }
+                    ++argument_count;
+                }
+                if (!args_ok) {
+                    if (out_error != nullptr)
+                        *out_error = std::move(push_error);
+                    result = SAO_ERR_INVALID_ARGUMENT;
+                } else if (lua_pcall(state, argument_count, 1, 0) != LUA_OK) {
+                    const char* message = lua_tostring(state, -1);
+                    if (out_error != nullptr) {
+                        *out_error = message == nullptr
+                                         ? "lua module member call failed"
+                                         : std::string(message);
+                    }
+                    detail::capture_state_error_locked(state, -1);
+                    result = SAO_ERR_OS_CALL_FAILED;
+                } else {
+                    script_ctx::script_value_ptr converted;
+                    std::string error;
+                    if (!lua_to_script_value(state, -1, converted, error)) {
+                        if (out_error != nullptr)
+                            *out_error = std::move(error);
+                        result = SAO_ERR_INVALID_ARGUMENT;
+                    } else if (out_value != nullptr) {
+                        *out_value = std::move(converted);
+                    }
+                }
+            }
+        }
+        lua_settop(state, base);
+        return result;
+    }
+
+  private:
+    lua_State* state_ = nullptr;
+    int table_ref_ = LUA_NOREF;
+    std::string id_;
+};
+
+// ── runtime_bridge provider (lua engine, priority 50) ────────────────────
+bool lua_engine_probe(loader_context_t*, const wchar_t*, std::string&,
+                      void* /*user_data*/) noexcept {
+    return true;
+}
+
+int32_t SAO_PLUGINS_CALL lua_engine_load_module(
+    loader_context_t* ctx, const wchar_t* abs_path, const std::string& logical_name,
+    std::shared_ptr<script_ctx::script_module>* out_module, std::string* out_error,
+    void* /*user_data*/) noexcept {
+    try {
+        if (out_module == nullptr)
+            return SAO_ERR_INVALID_ARGUMENT;
+        out_module->reset();
+        if (ctx == nullptr || abs_path == nullptr) {
+            if (out_error != nullptr)
+                *out_error = "lua load_module: invalid argument";
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        lua_State* state = find_state_for_context(ctx);
+        if (state == nullptr) {
+            if (out_error != nullptr)
+                *out_error = "lua engine has no live state for this context";
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        detail::state_operation operation;
+        const int32_t acquire = detail::acquire_state_operation(state, operation);
+        if (acquire != SAO_OK || operation.state() == nullptr) {
+            if (out_error != nullptr)
+                *out_error = "lua state is closing";
+            return acquire != SAO_OK ? acquire : SAO_ERR_HANDLE_INVALID;
+        }
+        state = operation.state();
+
+        std::ifstream input(std::filesystem::path(abs_path), std::ios::binary);
+        if (!input) {
+            if (out_error != nullptr)
+                *out_error = "lua load_module: cannot open file";
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        std::string source{std::istreambuf_iterator<char>(input),
+                           std::istreambuf_iterator<char>()};
+        if (!input.eof() && input.fail()) {
+            if (out_error != nullptr)
+                *out_error = "lua load_module: read failed";
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+
+        const int base = lua_gettop(state);
+        const std::string chunk_name = "@" + wide_to_utf8(abs_path);
+        if (luaL_loadbufferx(state, source.data(), source.size(), chunk_name.c_str(),
+                            "t") != LUA_OK) {
+            const char* message = lua_tostring(state, -1);
+            if (out_error != nullptr) {
+                *out_error = message == nullptr ? "lua chunk load failed"
+                                              : std::string(message);
+            }
+            detail::capture_state_error_locked(state, -1);
+            lua_settop(state, base);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        // stack: [chunk]; add isolated _ENV = setmetatable({}, {__index=_G})
+        lua_newtable(state);                                   // chunk, env
+        lua_newtable(state);                                   // chunk, env, env_mt
+        lua_rawgeti(state, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
+        lua_setfield(state, -2, "__index");
+        lua_setmetatable(state, -2);
+        lua_pushvalue(state, -1);                              // chunk, env, env
+        lua_setupvalue(state, -3, 1);                          // chunk._ENV=env → chunk, env
+        if (lua_pcall(state, 0, 1, 0) != LUA_OK) {
+            const char* message = lua_tostring(state, -1);
+            if (out_error != nullptr) {
+                *out_error = message == nullptr ? "lua chunk exec failed"
+                                              : std::string(message);
+            }
+            detail::capture_state_error_locked(state, -1);
+            lua_settop(state, base);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        // stack: env, result.  Module table = returned table, else env.
+        int module_ref = LUA_NOREF;
+        if (lua_istable(state, -1)) {
+            module_ref = luaL_ref(state, LUA_REGISTRYINDEX);  // refs result table
+        } else {
+            lua_pop(state, 1);                    // drop non-table result
+            module_ref = luaL_ref(state, LUA_REGISTRYINDEX);  // refs env table
+        }
+        lua_settop(state, base);
+        auto module = std::make_shared<lua_local_module>(state, module_ref,
+                                                         logical_name);
+        *out_module = std::move(module);
+        return SAO_OK;
+    } catch (...) {
+        if (out_error != nullptr)
+            *out_error = "lua load_module: internal error";
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+const char* const kLuaScriptExtensions[] = {"lua", nullptr};
+
+const script_ctx::script_engine_ops kLuaEngineOps = {
+    "lua",
+    50,   // priority: below python hosts — lowest-priority probing provider wins
+    kLuaScriptExtensions,
+    &lua_engine_probe,
+    &lua_engine_load_module,
+    nullptr,
+};
+
+int script_value_dispatch(lua_State* state) noexcept {
+    auto* box = static_cast<script_value_box*>(
+        luaL_checkudata(state, 1, "SaoScriptValue"));
+    if (box == nullptr || box->value == nullptr ||
+        box->value->k != script_ctx::script_value::kind::function ||
+        !box->value->call) {
+        return luaL_error(state, "script callable is not invokable");
+    }
+    const int top = lua_gettop(state);
+    std::vector<script_ctx::script_value_ptr> args;
+    try {
+        args.reserve(static_cast<std::size_t>(top > 1 ? top - 1 : 0));
+    } catch (...) {
+        return luaL_error(state, "script call argument allocation failed");
+    }
+    for (int index = 2; index <= top; ++index) {
+        script_ctx::script_value_ptr value;
+        std::string error;
+        if (!lua_to_script_value(state, index, value, error)) {
+            return luaL_error(state, "script call argument is not marshalable: %s",
+                              error.c_str());
+        }
+        args.push_back(std::move(value));
+    }
+    script_ctx::script_value_ptr result;
+    std::string error;
+    const int32_t status = box->value->call(args, &result, &error);
+    if (status != SAO_OK) {
+        return luaL_error(state, "script call failed with status %d: %s",
+                          static_cast<int>(status), error.c_str());
+    }
+    if (!push_script_value(state, result, error)) {
+        return luaL_error(state, "script call result is not marshalable: %s",
+                          error.c_str());
+    }
+    return 1;
+}
+
+int script_module_index(lua_State* state) noexcept {
+    auto* box = static_cast<script_module_box*>(
+        luaL_checkudata(state, 1, "SaoScriptModule"));
+    const char* name = luaL_checkstring(state, 2);
+    if (box != nullptr && box->module != nullptr && name != nullptr && name[0] != '\0') {
+        script_ctx::script_value_ptr value;
+        std::string error;
+        if (box->module->get(name, &value, &error) == SAO_OK && value != nullptr) {
+            std::string push_error;
+            if (push_script_value(state, value, push_error))
+                return 1;
+        }
+        // get() may decline callable-only members — if the name exists at all,
+        // return a closure that forwards to module->call.
+        try {
+            for (const auto& member : box->module->member_names()) {
+                if (member == name) {
+                    lua_pushvalue(state, 1);  // box udata keeps module alive
+                    lua_pushvalue(state, 2);  // member name
+                    lua_pushcclosure(state, script_module_member_call, 2);
+                    return 1;
+                }
+            }
+        } catch (...) {
+        }
+    }
+    lua_pushnil(state);
+    return 1;
+}
+
+int script_module_member_call(lua_State* state) noexcept {
+    auto* box = static_cast<script_module_box*>(
+        lua_touserdata(state, lua_upvalueindex(1)));
+    const char* name = lua_tostring(state, lua_upvalueindex(2));
+    if (box == nullptr || box->module == nullptr || name == nullptr) {
+        return luaL_error(state, "script module handle is closed");
+    }
+    const int top = lua_gettop(state);
+    std::vector<script_ctx::script_value_ptr> args;
+    try {
+        args.reserve(static_cast<std::size_t>(top));
+    } catch (...) {
+        return luaL_error(state, "script call argument allocation failed");
+    }
+    for (int index = 1; index <= top; ++index) {
+        script_ctx::script_value_ptr value;
+        std::string error;
+        if (!lua_to_script_value(state, index, value, error)) {
+            return luaL_error(state, "script call argument is not marshalable: %s",
+                              error.c_str());
+        }
+        args.push_back(std::move(value));
+    }
+    script_ctx::script_value_ptr result;
+    std::string error;
+    const int32_t status = box->module->call(name, args, &result, &error);
+    if (status != SAO_OK) {
+        return luaL_error(state, "module member '%s' failed with status %d: %s", name,
+                          static_cast<int>(status), error.c_str());
+    }
+    std::string push_error;
+    if (!push_script_value(state, result, push_error)) {
+        return luaL_error(state, "module result is not marshalable: %s",
+                          push_error.c_str());
+    }
+    return 1;
+}
+
 int ctx_log(lua_State* state) {
     auto* bridge = checked_bridge(state);
     const char* message = luaL_checkstring(state, 2);
@@ -1910,12 +2823,956 @@ int ctx_recent_events(lua_State* state) {
     return push_owned_json(state, status, value, "recent_events");
 }
 
-int unsupported(lua_State* state) {
-    const char* operation = lua_tostring(state, lua_upvalueindex(1));
-    return luaL_error(state, "%s failed with status %d",
-                      operation == nullptr ? "ctx operation" : operation,
-                      sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+int ctx_register_menu_surface(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* surface_id = luaL_checkstring(state, 2);
+    luaL_checktype(state, 3, LUA_TTABLE);
+    const double priority = luaL_optnumber(state, 4, 0.0);
+    if (surface_id == nullptr || surface_id[0] == '\0' || !std::isfinite(priority)) {
+        return push_status_error(state, "register_menu_surface", SAO_ERR_INVALID_ARGUMENT);
+    }
+    // Flatten the descriptor: scalar/structured values marshal to JSON and
+    // function fields are recorded by name under "hooks" (they cannot cross
+    // the C ABI but must be visible in the record).
+    detail::json metadata = detail::json::object();
+    detail::json hooks = detail::json::array();
+    std::string error;
+    const int descriptor = lua_absindex(state, 3);
+    lua_pushnil(state);
+    while (lua_next(state, descriptor) != 0) {
+        if (lua_type(state, -2) != LUA_TSTRING) {
+            lua_pop(state, 2);
+            return push_status_error(state, "register_menu_surface descriptor",
+                                     SAO_ERR_INVALID_ARGUMENT);
+        }
+        std::size_t key_length = 0;
+        const char* key = lua_tolstring(state, -2, &key_length);
+        detail::json_budget key_budget;
+        if (key == nullptr || std::strlen(key) != key_length || key_length == 0 ||
+            !detail::consume_json_string({key, key_length}, key_budget, error)) {
+            lua_pop(state, 2);
+            return push_status_error(state, "register_menu_surface descriptor",
+                                     SAO_ERR_INVALID_ARGUMENT);
+        }
+        std::string key_copy(key, key_length);
+        if (lua_isfunction(state, -1)) {
+            try {
+                hooks.push_back(std::move(key_copy));
+            } catch (...) {
+                lua_pop(state, 2);
+                throw method_failure{"register_menu_surface", SAO_ERR_OS_CALL_FAILED};
+            }
+        } else {
+            detail::json value;
+            if (!detail::stack_to_json(state, -1, value, error)) {
+                lua_pop(state, 2);
+                return push_status_error(state, "register_menu_surface descriptor",
+                                         SAO_ERR_INVALID_ARGUMENT);
+            }
+            if (!value.is_null()) {
+                try {
+                    metadata[key_copy] = std::move(value);
+                } catch (...) {
+                    lua_pop(state, 2);
+                    throw method_failure{"register_menu_surface", SAO_ERR_OS_CALL_FAILED};
+                }
+            }
+        }
+        lua_pop(state, 1);
+    }
+    if (!hooks.empty())
+        metadata["hooks"] = std::move(hooks);
+    std::string serialized;
+    if (!detail::serialize_json(metadata, serialized, error)) {
+        return push_status_error(state, "register_menu_surface", SAO_ERR_INVALID_ARGUMENT);
+    }
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_register_menu_surface(
+        bridge->context, surface_id, serialized.c_str(), static_cast<float>(priority));
+    if (status != SAO_OK) {
+        return push_status_error(state, "register_menu_surface", status);
+    }
+    lua_pushstring(state, surface_id);
+    return 1;
 }
+
+// open_file(filters, title, initial_dir, hwnd_owner)
+// filters: nil | string | table.  Strings in pipe form "label|pattern|..."
+// are converted to the v1 dict-list JSON the provider's tokenizer pairs up;
+// tables marshal through the standard JSON path.
+int ctx_open_file(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    detail::json filters = detail::json(nullptr);
+    std::string error;
+    if (!lua_isnoneornil(state, 2)) {
+        if (lua_istable(state, 2)) {
+            if (!detail::stack_to_json(state, 2, filters, error)) {
+                return push_status_error(state, "open_file filters",
+                                         SAO_ERR_INVALID_ARGUMENT);
+            }
+        } else {
+            const char* text = luaL_checkstring(state, 2);
+            if (text == nullptr) {
+                return push_status_error(state, "open_file filters",
+                                         SAO_ERR_INVALID_ARGUMENT);
+            }
+            const std::string_view raw(text);
+            if (raw.find('|') != std::string_view::npos) {
+                filters = detail::json::array();
+                std::vector<std::string> tokens;
+                std::size_t cursor = 0;
+                while (cursor <= raw.size()) {
+                    const std::size_t bar = raw.find('|', cursor);
+                    if (bar == std::string_view::npos) {
+                        tokens.emplace_back(raw.substr(cursor));
+                        break;
+                    }
+                    tokens.emplace_back(raw.substr(cursor, bar - cursor));
+                    cursor = bar + 1;
+                }
+                for (std::size_t index = 0; index + 1 < tokens.size(); index += 2) {
+                    filters.push_back({{"name", tokens[index]},
+                                       {"spec", tokens[index + 1]}});
+                }
+                if (filters.empty())
+                    filters = nullptr;
+            } else {
+                filters = detail::json::array(
+                    {{{"name", raw}, {"spec", raw.find('*') != std::string_view::npos
+                                                     ? std::string(raw)
+                                                     : std::string("*.*")}}});
+            }
+        }
+    }
+    const char* title = luaL_optstring(state, 3, "");
+    const char* initial = luaL_optstring(state, 4, nullptr);
+    const auto hwnd_owner = static_cast<intptr_t>(luaL_optinteger(state, 5, 0));
+    const std::wstring initial_dir = utf8_to_wide_string(initial);
+    const std::string filters_json = filters.is_null() ? std::string{} : filters.dump();
+    wchar_t* selected = nullptr;
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_open_file(
+        bridge->context, filters_json.empty() ? nullptr : filters_json.c_str(), title,
+        initial_dir.empty() ? nullptr : initial_dir.c_str(), hwnd_owner, &selected);
+    if (status != SAO_OK) {
+        sao::plugins::loader::sao_plugins_ctx_free_wstring(selected);
+        return push_status_error(state, "open_file", status);
+    }
+    if (selected == nullptr || selected[0] == L'\0') {
+        sao::plugins::loader::sao_plugins_ctx_free_wstring(selected);
+        lua_pushnil(state);
+        return 1;
+    }
+    const std::string utf8 = wide_to_utf8(selected);
+    sao::plugins::loader::sao_plugins_ctx_free_wstring(selected);
+    lua_pushlstring(state, utf8.data(), utf8.size());
+    return 1;
+}
+
+int ctx_open_window(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* panel_id = luaL_optstring(state, 2, "");
+    const auto width = static_cast<uint32_t>(luaL_optinteger(state, 3, 0));
+    const auto height = static_cast<uint32_t>(luaL_optinteger(state, 4, 0));
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_open_window(
+        bridge->context, panel_id, width, height);
+    if (status != SAO_OK) {
+        return push_status_error(state, "open_window", status);
+    }
+    lua_pushstring(state, panel_id == nullptr ? "" : panel_id);
+    return 1;
+}
+
+int ctx_ensure_requirements(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const bool install = lua_isnoneornil(state, 2) || lua_toboolean(state, 2) != 0;
+    char* report = nullptr;
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_ensure_requirements(
+        bridge->context, install, &report);
+    return push_owned_json(state, status, report, "ensure_requirements");
+}
+
+int ctx_load_local(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* rel = luaL_checkstring(state, 2);
+    if (rel == nullptr || rel[0] == '\0') {
+        return push_status_error(state, "load_local", SAO_ERR_INVALID_ARGUMENT);
+    }
+    const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge->context);
+    const wchar_t* root_dir = sao::plugins::loader::sao_plugins_ctx_path(bridge->context);
+    script_ctx::load_local_result kind = script_ctx::load_local_result::missing;
+    std::shared_ptr<script_ctx::script_module> module;
+    std::wstring abs_path;
+    std::string diag;
+    const int32_t status = script_ctx::runtime_bridge_load_local(
+        bridge->context, plugin_id == nullptr ? "" : plugin_id, root_dir, rel, &kind,
+        &module, &abs_path, &diag);
+    if (status != SAO_OK) {
+        return push_status_error(state, "load_local", status);
+    }
+    switch (kind) {
+    case script_ctx::load_local_result::module:
+        if (module != nullptr && push_script_module_box(state, std::move(module))) {
+            return 1;
+        }
+        lua_pushnil(state);
+        return 1;
+    case script_ctx::load_local_result::path_only: {
+        const std::string utf8 = wide_to_utf8(abs_path.c_str());
+        lua_pushlstring(state, utf8.data(), utf8.size());
+        return 1;
+    }
+    default:
+        // missing / unsupported — plugins nil-guard; the diagnostic mirrors
+        // the legacy graceful path through ctx.log.
+        if (!diag.empty()) {
+            sao::plugins::loader::sao_plugins_ctx_log(bridge->context, diag.c_str());
+        }
+        lua_pushnil(state);
+        return 1;
+    }
+}
+
+// create_compositor_layer(name, w, h, x=0, y=0, z=140, click_through=true,
+//                          high_fps=false, target_fps=0)
+int ctx_create_compositor_layer(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* name = luaL_checkstring(state, 2);
+    const auto width = static_cast<uint32_t>(luaL_checkinteger(state, 3));
+    const auto height = static_cast<uint32_t>(luaL_checkinteger(state, 4));
+    const auto x = static_cast<int32_t>(luaL_optinteger(state, 5, 0));
+    const auto y = static_cast<int32_t>(luaL_optinteger(state, 6, 0));
+    const auto z = static_cast<int32_t>(luaL_optinteger(state, 7, 140));
+    const bool click_through =
+        lua_isnoneornil(state, 8) || lua_toboolean(state, 8) != 0;
+    const bool high_fps = lua_toboolean(state, 9) != 0;
+    const auto target_fps = static_cast<uint32_t>(luaL_optinteger(state, 10, 0));
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
+        bridge->context, name, width, height, x, y, z, click_through, high_fps,
+        target_fps);
+    if (status != SAO_OK) {
+        return push_status_error(state, "create_compositor_layer", status);
+    }
+    lua_pushboolean(state, 1);
+    return 1;
+}
+
+// upload_compositor_frame(name, bgra_string, w, h[, x, y]) — x/y accepted for
+// v1 signature parity but the current ctx export has no position override.
+int ctx_upload_compositor_frame(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* name = luaL_checkstring(state, 2);
+    std::size_t bytes_length = 0;
+    const char* bytes = luaL_checklstring(state, 3, &bytes_length);
+    const auto width = static_cast<uint32_t>(luaL_checkinteger(state, 4));
+    const auto height = static_cast<uint32_t>(luaL_checkinteger(state, 5));
+    if (bytes == nullptr || bytes_length == 0) {
+        return push_status_error(state, "upload_compositor_frame",
+                                 SAO_ERR_INVALID_ARGUMENT);
+    }
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_upload_compositor_frame(
+        bridge->context, name, reinterpret_cast<const uint8_t*>(bytes), bytes_length,
+        width, height);
+    if (status != SAO_OK) {
+        return push_status_error(state, "upload_compositor_frame", status);
+    }
+    lua_pushboolean(state, 1);
+    return 1;
+}
+
+int ctx_set_compositor_layer_position(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* name = luaL_checkstring(state, 2);
+    const auto x = static_cast<int32_t>(luaL_checkinteger(state, 3));
+    const auto y = static_cast<int32_t>(luaL_checkinteger(state, 4));
+    const int32_t status =
+        sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_position(
+            bridge->context, name, x, y);
+    if (status != SAO_OK) {
+        return push_status_error(state, "set_compositor_layer_position", status);
+    }
+    lua_pushboolean(state, 1);
+    return 1;
+}
+
+int ctx_set_compositor_layer_visible(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* name = luaL_checkstring(state, 2);
+    luaL_checktype(state, 3, LUA_TBOOLEAN);
+    const bool visible = lua_toboolean(state, 3) != 0;
+    const int32_t status =
+        sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_visible(
+            bridge->context, name, visible);
+    if (status != SAO_OK) {
+        return push_status_error(state, "set_compositor_layer_visible", status);
+    }
+    lua_pushboolean(state, 1);
+    return 1;
+}
+
+// set_compositor_layer_input(name, handlers|nil)
+// handlers: {cursor_pos=fn, mouse_button=fn, cursor_leave=fn, scroll=fn} or the
+// same four functions passed positionally.  nil clears the layer's callbacks.
+int ctx_set_compositor_layer_input(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* name = luaL_checkstring(state, 2);
+    if (name == nullptr || name[0] == '\0') {
+        return push_status_error(state, "set_compositor_layer_input",
+                                 SAO_ERR_INVALID_ARGUMENT);
+    }
+    if (lua_isnoneornil(state, 3)) {
+        const int32_t status = release_compositor_input_locked(*bridge, state, name);
+        if (status != SAO_OK) {
+            return push_status_error(state, "set_compositor_layer_input", status);
+        }
+        const int32_t clear_status =
+            sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+                bridge->context, name, nullptr, nullptr, nullptr, nullptr, nullptr);
+        if (clear_status != SAO_OK && clear_status != SAO_ERR_HANDLE_INVALID) {
+            return push_status_error(state, "set_compositor_layer_input", clear_status);
+        }
+        lua_pushboolean(state, 1);
+        return 1;
+    }
+
+    constexpr const char* kInputFields[4] = {"cursor_pos", "mouse_button",
+                                             "cursor_leave", "scroll"};
+    auto dispatch = std::make_shared<compositor_input_dispatch>();
+    dispatch->key = name;
+    dispatch->sequence = bridge->next_resource_sequence++;
+    std::unordered_map<uintptr_t, std::shared_ptr<event_callback_record>> staged_records;
+    const bool table_form = lua_istable(state, 3);
+    for (std::size_t slot = 0; slot < 4; ++slot) {
+        if (table_form) {
+            raw_get_field(state, 3, kInputFields[slot]);
+        } else {
+            lua_pushvalue(state, static_cast<int>(3 + slot));
+        }
+        const int value_index = lua_absindex(state, -1);
+        if (lua_isnoneornil(state, value_index)) {
+            lua_pop(state, 1);
+            continue;
+        }
+        if (!lua_isfunction(state, value_index)) {
+            lua_pop(state, 1);
+            for (const auto& [_, record] : staged_records) {
+                release_callback_ref(state, *record);
+            }
+            return push_status_error(state, "set_compositor_layer_input handlers",
+                                     SAO_ERR_INVALID_ARGUMENT);
+        }
+        auto record = make_callback(*bridge, state, value_index);
+        lua_pop(state, 1);
+        dispatch->record_ids[slot] = record->dispatch_id;
+        staged_records.emplace(record->dispatch_id, record);
+    }
+    if (staged_records.empty()) {
+        return push_status_error(state, "set_compositor_layer_input",
+                                 SAO_ERR_INVALID_ARGUMENT);
+    }
+    // Swap out any existing dispatch first so a BUSY old record fails before
+    // the native registration changes hands.
+    const int32_t release_status =
+        release_compositor_input_locked(*bridge, state, name);
+    if (release_status != SAO_OK) {
+        for (const auto& [_, record] : staged_records) {
+            release_callback_ref(state, *record);
+        }
+        return push_status_error(state, "set_compositor_layer_input", release_status);
+    }
+    const int32_t status =
+        sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+            bridge->context, name, compositor_cursor_pos_dispatch,
+            compositor_mouse_button_dispatch, compositor_cursor_leave_dispatch,
+            compositor_scroll_dispatch, dispatch.get());
+    if (status != SAO_OK) {
+        for (const auto& [_, record] : staged_records) {
+            release_callback_ref(state, *record);
+        }
+        return push_status_error(state, "set_compositor_layer_input", status);
+    }
+    try {
+        bridge->compositor_records.insert(staged_records.begin(),
+                                          staged_records.end());
+        bridge->compositor_inputs.emplace(name, std::move(dispatch));
+    } catch (...) {
+        for (const auto& [_, record] : staged_records) {
+            bridge->compositor_records.erase(record->dispatch_id);
+            release_callback_ref(state, *record);
+        }
+        throw;
+    }
+    lua_pushboolean(state, 1);
+    return 1;
+}
+
+int ctx_destroy_compositor_layer(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    const char* name = luaL_checkstring(state, 2);
+    const int32_t release_status =
+        release_compositor_input_locked(*bridge, state, name == nullptr ? "" : name);
+    if (release_status != SAO_OK) {
+        return push_status_error(state, "destroy_compositor_layer", release_status);
+    }
+    const int32_t status =
+        sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(bridge->context,
+                                                                       name);
+    if (status != SAO_OK) {
+        return push_status_error(state, "destroy_compositor_layer", status);
+    }
+    lua_pushboolean(state, 1);
+    return 1;
+}
+
+// ── ctx.ui.* dispatch (single C closure per method via upvalue) ──────────
+int ctx_ui_dispatch(lua_State* state) noexcept {
+    const char* method = lua_tostring(state, lua_upvalueindex(1));
+    const int top = lua_gettop(state);
+    int first = 1;
+    // colon-call `ctx.ui:text(...)` puts the ui table at arg1.
+    if (top >= 1 && lua_rawequal(state, 1, lua_upvalueindex(2))) {
+        first = 2;
+    }
+    detail::json args;
+    std::string error;
+    const int count = top - first + 1;
+    if (count == 1 && lua_istable(state, first)) {
+        // One dict-like table reads as kwargs; an array-like table stays a
+        // single positional argument.
+        detail::json converted;
+        if (!detail::stack_to_json(state, first, converted, error)) {
+            return luaL_error(state, "ctx.ui.%s argument is not JSON serializable: %s",
+                              method == nullptr ? "?" : method, error.c_str());
+        }
+        args = converted.is_object() ? std::move(converted)
+                                   : detail::json::array({std::move(converted)});
+    } else {
+        args = detail::json::array();
+        for (int index = first; index <= top; ++index) {
+            detail::json value;
+            if (!detail::stack_to_json(state, index, value, error)) {
+                return luaL_error(state,
+                                  "ctx.ui.%s argument is not JSON serializable: %s",
+                                  method == nullptr ? "?" : method, error.c_str());
+            }
+            args.push_back(std::move(value));
+        }
+    }
+    detail::json node;
+    std::string build_error;
+    if (!sao::plugins::script_ctx::script_ui_build(
+            method == nullptr ? "" : method, args, node, build_error)) {
+        return luaL_error(state, "ctx.ui.%s failed: %s",
+                          method == nullptr ? "?" : method, build_error.c_str());
+    }
+    if (!detail::protected_push_json(state, node, error)) {
+        return luaL_error(state, "ctx.ui.%s result is not representable in Lua",
+                          method == nullptr ? "?" : method);
+    }
+    return 1;
+}
+
+// ── ctx.engine reflective surface ────────────────────────────────────────
+// Named functions bound from the sdk_binding engine catalog.  Each call is a
+// sdk_method_id::method_engine_call JSON request against the bridge-owned
+// SaoSdkContext; a nonzero transport or envelope status raises
+// "engine call <name> failed: <status>".
+
+std::string engine_lua_name(std::string_view name) {
+    std::string result(name);
+    std::replace(result.begin(), result.end(), '.', '_');
+    return result;
+}
+
+struct engine_call_failure final {
+    std::string message;
+};
+
+[[noreturn]] void raise_engine_call_failed(const char* name, int32_t status) {
+    throw engine_call_failure{std::string("engine call ") +
+                              (name == nullptr ? "?" : name) +
+                              " failed: " + std::to_string(status)};
+}
+
+// sdk_context_engine_callback_fn trampoline: user_data is the bridge_state*
+// (stable while the bridge object lives, live or retired).  Channel names are
+// resolved through bridge->engine_callbacks under the dedicated mutex; the
+// record's gate/state checks then mirror event_callback.
+void SAO_PLUGINS_CALL engine_channel_dispatch(const char* channel_utf8,
+                                              const uint8_t* payload_json_utf8,
+                                              size_t payload_size,
+                                              void* user_data) noexcept {
+    try {
+        auto* bridge = static_cast<bridge_state*>(user_data);
+        if (bridge == nullptr || channel_utf8 == nullptr || channel_utf8[0] == '\0')
+            return;
+        std::shared_ptr<event_callback_record> record;
+        {
+            // Short critical section: provider threads only copy the ref here,
+            // so sdk_ctx teardown never blocks behind an in-flight emission.
+            std::lock_guard lock(bridge->engine_callbacks_mutex);
+            const auto found = bridge->engine_callbacks.find(channel_utf8);
+            if (found == bridge->engine_callbacks.end())
+                return;
+            record = found->second;
+        }
+        if (record == nullptr || !enter_callback(*record))
+            return;
+        struct callback_guard final {
+            event_callback_record& callback;
+            ~callback_guard() {
+                leave_callback(callback);
+            }
+        } guard{*record};
+        lua_State* callback_state = record->state.load(std::memory_order_acquire);
+        if (callback_state == nullptr)
+            return;
+        detail::state_operation operation;
+        if (detail::acquire_state_operation(callback_state, operation) != SAO_OK)
+            return;
+        if (record->closing.load(std::memory_order_acquire) ||
+            record->state.load(std::memory_order_acquire) != callback_state ||
+            record->function_ref == LUA_NOREF) {
+            return;
+        }
+        callback_state = operation.state();
+        if (callback_state == nullptr)
+            return;
+        const int base = lua_gettop(callback_state);
+        lua_rawgeti(callback_state, LUA_REGISTRYINDEX, record->function_ref);
+        if (!lua_isfunction(callback_state, -1)) {
+            lua_settop(callback_state, base);
+            return;
+        }
+        lua_pushstring(callback_state, channel_utf8);
+        detail::json payload;
+        std::string conversion_error;
+        const char* payload_data = payload_json_utf8 == nullptr
+                                       ? "null"
+                                       : reinterpret_cast<const char*>(payload_json_utf8);
+        const std::size_t payload_length =
+            payload_json_utf8 == nullptr ? 4 : payload_size;
+        if (!detail::parse_json(payload_data, payload_length, payload, conversion_error) ||
+            !detail::protected_push_json(callback_state, payload, conversion_error, true)) {
+            lua_settop(callback_state, base);
+            return;
+        }
+        if (lua_pcall(callback_state, 2, 0, 0) != LUA_OK) {
+            detail::capture_state_error_locked(callback_state, -1);
+        }
+        lua_settop(callback_state, base);
+    } catch (...) {
+    }
+}
+
+// Serialize `request_json`, run the two-phase method_engine_call /
+// method_engine_list dispatch, and decode the {"status","result"} envelope.
+// Returns the `result` member; raises engine_call_failure on any nonzero
+// transport or envelope status and method_failure on decode errors.
+detail::json engine_run_call(
+    bridge_state* bridge, sao::plugins::sdk_binding::sdk_method_id method,
+    const char* display_name, detail::json&& request_json) {
+    if (bridge == nullptr || bridge->closing || bridge->context == nullptr) {
+        raise_engine_call_failed(display_name, SAO_ERR_HANDLE_INVALID);
+    }
+    if (!bridge->sdk_ctx_bound) {
+        // Lazy bind (csmini-style): register_ctx can run before the SDK
+        // runtime/plugin map entry is ready, so retry here at first use.
+        // sdk_ctx writes race-safe because engine calls serialize on the
+        // script mutex held by the caller's lifecycle slot.
+        try {
+            const char* plugin_id =
+                sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge->context);
+            if (plugin_id != nullptr && plugin_id[0] != '\0' &&
+                sao_sdk_bind_context(plugin_id, nullptr, &bridge->sdk_ctx) == SAO_SDK_OK) {
+                bridge->sdk_ctx_bound = true;
+                if (sao_sdk_context_bind_platform_services(&bridge->sdk_ctx) != SAO_SDK_OK) {
+                    sao_sdk_context_destroy(&bridge->sdk_ctx);
+                    bridge->sdk_ctx = SaoSdkContext{};
+                    bridge->sdk_ctx_bound = false;
+                }
+            }
+        } catch (...) {
+            bridge->sdk_ctx = SaoSdkContext{};
+            bridge->sdk_ctx_bound = false;
+        }
+        if (!bridge->sdk_ctx_bound) {
+            raise_engine_call_failed(display_name, SAO_ERR_HANDLE_INVALID);
+        }
+    }
+    std::string serialized;
+    std::string error;
+    if (!detail::serialize_json(request_json, serialized, error)) {
+        raise_engine_call_failed(display_name, SAO_ERR_INVALID_ARGUMENT);
+    }
+    std::vector<char> buffer;
+    std::size_t required = 0;
+    int32_t status = SAO_OK;
+    for (std::size_t attempt = 0; attempt < 8; ++attempt) {
+        sao::plugins::sdk_binding::sdk_context_call_request request{};
+        request.args_json_utf8 = serialized.c_str();
+        request.args_size = serialized.size();
+        // Callback-capable slots share this generic channel trampoline; the
+        // user_data anchor is the bridge and channel records sit in
+        // bridge->engine_callbacks keyed by channel name.
+        request.engine_callback = &engine_channel_dispatch;
+        request.callback_user_data = bridge;
+        request.out_result_json_utf8 = buffer.empty() ? nullptr : buffer.data();
+        request.out_capacity = buffer.size();
+        required = 0;
+        request.out_required = &required;
+        status = sao::plugins::sdk_binding::sao_plugins_sdk_context_dispatch(
+            &bridge->sdk_ctx, method, &request);
+        if (status == SAO_OK) {
+            if (buffer.empty() && required != 0 &&
+                required <= sao::plugins::sdk_binding::kMaximumBindingJsonBytes) {
+                buffer.assign(required, '\0');
+                continue;  // probe pass completed — run the fill pass
+            }
+            break;
+        }
+        if (status == SAO_ERR_BUFFER_TOO_SMALL && required > buffer.size() &&
+            required <= sao::plugins::sdk_binding::kMaximumBindingJsonBytes) {
+            buffer.assign(required, '\0');
+            continue;
+        }
+        break;
+    }
+    if (status != SAO_OK) {
+        raise_engine_call_failed(display_name, status);
+    }
+    detail::json envelope;
+    const std::size_t length =
+        buffer.empty()
+            ? 0
+            : (required != 0 && required <= buffer.size() ? required - 1
+                                                          : std::strlen(buffer.data()));
+    if (length == 0 ||
+        !detail::parse_json(buffer.data(), length, envelope, error)) {
+        throw method_failure{"engine call result", SAO_ERR_INVALID_ARGUMENT};
+    }
+    int64_t inner_status = 0;
+    if (envelope.is_object()) {
+        const auto found_status = envelope.find("status");
+        if (found_status != envelope.end() && found_status->is_number()) {
+            inner_status = found_status->get<int64_t>();
+        }
+    }
+    if (inner_status != 0) {
+        raise_engine_call_failed(display_name, static_cast<int32_t>(inner_status));
+    }
+    if (envelope.is_object()) {
+        const auto found_result = envelope.find("result");
+        if (found_result != envelope.end()) {
+            return *found_result;
+        }
+    }
+    return detail::json(nullptr);
+}
+
+int engine_push_result(lua_State* state, bridge_state* bridge,
+                       sao::plugins::sdk_binding::sdk_method_id method,
+                       const char* display_name, detail::json&& request_json) {
+    detail::json result =
+        engine_run_call(bridge, method, display_name, std::move(request_json));
+    std::string push_error;
+    if (!detail::protected_push_json(state, result, push_error, true)) {
+        throw method_failure{"engine call result", SAO_ERR_INVALID_ARGUMENT};
+    }
+    return 1;
+}
+
+// Fallback key for a catalog entry whose arg_names slot is null.
+std::string engine_arg_key(const sao::plugins::sdk_binding::sdk_engine_function_desc* desc,
+                           std::size_t slot) {
+    const char* name =
+        desc->arg_names != nullptr && slot < desc->arg_count ? desc->arg_names[slot] : nullptr;
+    if (name != nullptr && name[0] != '\0')
+        return std::string(name);
+    return "arg" + std::to_string(slot + 1);
+}
+
+// Convert the lua argument list into the engine "args" object: a single
+// dict-like table is kwargs, an array-like table or the remaining values are
+// positional and map onto desc->arg_names in order.
+detail::json engine_collect_args(lua_State* state, int first, int top,
+                                 const sao::plugins::sdk_binding::sdk_engine_function_desc* desc) {
+    const int count = top - first + 1;
+    detail::json args = detail::json::object();
+    std::string error;
+    if (count == 1 && lua_istable(state, first)) {
+        detail::json converted;
+        if (!detail::stack_to_json(state, first, converted, error)) {
+            throw method_failure{"engine call arguments", SAO_ERR_INVALID_ARGUMENT};
+        }
+        if (converted.is_object()) {
+            return converted;
+        }
+        if (converted.is_array()) {
+            if (converted.size() > desc->arg_count) {
+                throw method_failure{"engine call arguments", SAO_ERR_INVALID_ARGUMENT};
+            }
+            std::size_t index = 0;
+            for (const auto& element : converted) {
+                args[engine_arg_key(desc, index)] = element;
+                ++index;
+            }
+            return args;
+        }
+        return args;
+    }
+    for (int index = first; index <= top; ++index) {
+        const std::size_t slot = static_cast<std::size_t>(index - first);
+        if (slot >= desc->arg_count) {
+            throw method_failure{"engine call arguments", SAO_ERR_INVALID_ARGUMENT};
+        }
+        detail::json value;
+        if (!detail::stack_to_json(state, index, value, error)) {
+            throw method_failure{"engine call arguments", SAO_ERR_INVALID_ARGUMENT};
+        }
+        args[engine_arg_key(desc, slot)] = std::move(value);
+    }
+    return args;
+}
+
+// Wraps the {"name","args"} envelope; a kwargs-style "callback_channel" is
+// also hoisted to the top-level protocol field.
+int engine_call_push_result(lua_State* state, bridge_state* bridge, const char* name,
+                            detail::json&& args) {
+    detail::json request_json = detail::json::object();
+    request_json["name"] = name == nullptr ? "" : name;
+    if (args.is_object()) {
+        const auto found_channel = args.find("callback_channel");
+        if (found_channel != args.end() && found_channel->is_string()) {
+            request_json["callback_channel"] = *found_channel;
+        }
+    }
+    request_json["args"] = std::move(args);
+    return engine_push_result(
+        state, bridge, sao::plugins::sdk_binding::sdk_method_id::method_engine_call, name,
+        std::move(request_json));
+}
+
+int engine_invoke_named_impl(lua_State* state) {
+    auto* desc = static_cast<const sao::plugins::sdk_binding::sdk_engine_function_desc*>(
+        lua_touserdata(state, lua_upvalueindex(1)));
+    auto* bridge =
+        static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(2)));
+    if (desc == nullptr || desc->name == nullptr || bridge == nullptr) {
+        return push_status_error(state, "engine call", SAO_ERR_HANDLE_INVALID);
+    }
+    require_permission(state, detail::permission_engine_access, desc->name);
+    const int top = lua_gettop(state);
+    int first = 1;
+    // colon-call `ctx.engine:name(...)` puts the engine table at arg1.
+    if (top >= 1 && lua_rawequal(state, 1, lua_upvalueindex(3))) {
+        first = 2;
+    }
+    detail::json args = engine_collect_args(state, first, top, desc);
+    return engine_call_push_result(state, bridge, desc->name, std::move(args));
+}
+
+int engine_invoke_named(lua_State* state) noexcept {
+    try {
+        return engine_invoke_named_impl(state);
+    } catch (const engine_call_failure& failure) {
+        return luaL_error(state, "%s", failure.message.c_str());
+    } catch (const method_failure& failure) {
+        return luaL_error(state, "%s failed with status %d", failure.operation,
+                          failure.status);
+    } catch (...) {
+        return luaL_error(state, "engine call failed with status %d",
+                          static_cast<int>(SAO_ERR_OS_CALL_FAILED));
+    }
+}
+
+int engine_list_impl(lua_State* state) {
+    auto* bridge =
+        static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(1)));
+    if (bridge == nullptr) {
+        return push_status_error(state, "engine list", SAO_ERR_HANDLE_INVALID);
+    }
+    require_permission(state, detail::permission_engine_access, "engine list");
+    return engine_push_result(state, bridge,
+                              sao::plugins::sdk_binding::sdk_method_id::method_engine_list,
+                              "engine list", detail::json::object());
+}
+
+int engine_list_fn(lua_State* state) noexcept {
+    try {
+        return engine_list_impl(state);
+    } catch (const engine_call_failure& failure) {
+        return luaL_error(state, "%s", failure.message.c_str());
+    } catch (const method_failure& failure) {
+        return luaL_error(state, "%s failed with status %d", failure.operation,
+                          failure.status);
+    } catch (...) {
+        return luaL_error(state, "engine list failed with status %d",
+                          static_cast<int>(SAO_ERR_OS_CALL_FAILED));
+    }
+}
+
+int engine_on_impl(lua_State* state) {
+    auto* bridge =
+        static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(1)));
+    if (bridge == nullptr || bridge->closing || bridge->context == nullptr) {
+        return push_status_error(state, "engine on", SAO_ERR_HANDLE_INVALID);
+    }
+    require_permission(state, detail::permission_engine_access, "engine on");
+    int index = 1;
+    // colon-call `ctx.engine:on(channel, fn)` puts the engine table at arg1.
+    if (lua_gettop(state) >= 1 && lua_rawequal(state, 1, lua_upvalueindex(2))) {
+        index = 2;
+    }
+    const char* channel = luaL_checkstring(state, index);
+    if (channel == nullptr || channel[0] == '\0') {
+        return push_status_error(state, "engine on", SAO_ERR_INVALID_ARGUMENT);
+    }
+    luaL_checktype(state, index + 1, LUA_TFUNCTION);
+    auto record = make_callback(*bridge, state, index + 1);
+    record->key = channel;
+    std::shared_ptr<event_callback_record> replaced;
+    {
+        std::lock_guard lock(bridge->engine_callbacks_mutex);
+        const auto found = bridge->engine_callbacks.find(record->key);
+        if (found != bridge->engine_callbacks.end()) {
+            replaced = found->second;
+            bridge->engine_callbacks.erase(found);
+        }
+        bridge->engine_callbacks.emplace(record->key, record);
+    }
+    if (replaced != nullptr) {
+        // The map entry is already replaced; a busy old record restores it and
+        // drops the new registration instead of killing a live channel.
+        const int32_t stop = stop_callback(*replaced);
+        if (stop != SAO_OK) {
+            {
+                std::lock_guard lock(bridge->engine_callbacks_mutex);
+                bridge->engine_callbacks[record->key] = replaced;
+            }
+            release_callback_ref(state, *record);
+            return push_status_error(state, "engine on", stop);
+        }
+        release_callback_ref(state, *replaced);
+    }
+    lua_pushboolean(state, 1);
+    return 1;
+}
+
+int engine_on_fn(lua_State* state) noexcept {
+    try {
+        return engine_on_impl(state);
+    } catch (const method_failure& failure) {
+        return luaL_error(state, "%s failed with status %d", failure.operation,
+                          failure.status);
+    } catch (...) {
+        return luaL_error(state, "engine on failed with status %d",
+                          static_cast<int>(SAO_ERR_OS_CALL_FAILED));
+    }
+}
+
+// ctx.engine_call(name, args_table_or_nil) — raw passthrough for callers that
+// prefer the dotted name over the bound function.
+int ctx_engine_call(lua_State* state) {
+    auto* bridge = checked_bridge(state);
+    require_permission(state, detail::permission_engine_access, "engine_call");
+    const char* name = luaL_checkstring(state, 2);
+    if (name == nullptr || name[0] == '\0') {
+        return push_status_error(state, "engine_call", SAO_ERR_INVALID_ARGUMENT);
+    }
+    detail::json args = detail::json::object();
+    if (!lua_isnoneornil(state, 3)) {
+        if (!lua_istable(state, 3)) {
+            return push_status_error(state, "engine_call", SAO_ERR_INVALID_ARGUMENT);
+        }
+        std::string error;
+        detail::json converted;
+        if (!detail::stack_to_json(state, 3, converted, error) ||
+            !converted.is_object()) {
+            return push_status_error(state, "engine_call", SAO_ERR_INVALID_ARGUMENT);
+        }
+        args = std::move(converted);
+    }
+    return engine_call_push_result(state, bridge, name, std::move(args));
+}
+
+int ctx_engine_call_wrapped(lua_State* state) noexcept {
+    try {
+        return ctx_engine_call(state);
+    } catch (const engine_call_failure& failure) {
+        return luaL_error(state, "%s", failure.message.c_str());
+    } catch (const method_failure& failure) {
+        return luaL_error(state, "%s failed with status %d", failure.operation,
+                          failure.status);
+    } catch (...) {
+        return luaL_error(state, "engine_call failed with status %d",
+                          static_cast<int>(SAO_ERR_OS_CALL_FAILED));
+    }
+}
+
+// __index metamethod: methods table first, then live properties
+// (plugin_id / path / should_stop).
+int ctx_index(lua_State* state) noexcept {
+    lua_pushvalue(state, lua_upvalueindex(1));
+    lua_pushvalue(state, 2);
+    lua_rawget(state, -2);
+    if (!lua_isnil(state, -1))
+        return 1;
+    lua_pop(state, 2);
+    const char* key = lua_tostring(state, 2);
+    auto* bridge = static_cast<bridge_state*>(nullptr);
+    if (key != nullptr && lua_isuserdata(state, 1)) {
+        auto** slot = static_cast<bridge_state**>(
+            luaL_testudata(state, 1, "SaoPluginContext"));
+        if (slot != nullptr)
+            bridge = *slot;
+    }
+    if (bridge == nullptr || bridge->context == nullptr || key == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    if (std::strcmp(key, "plugin_id") == 0) {
+        const char* value =
+            sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge->context);
+        if (value == nullptr) {
+            lua_pushnil(state);
+        } else {
+            lua_pushstring(state, value);
+        }
+    } else if (std::strcmp(key, "path") == 0) {
+        const wchar_t* value =
+            sao::plugins::loader::sao_plugins_ctx_path(bridge->context);
+        const std::string utf8 = wide_to_utf8(value);
+        lua_pushlstring(state, utf8.data(), utf8.size());
+    } else if (std::strcmp(key, "should_stop") == 0) {
+        lua_pushboolean(
+            state,
+            sao::plugins::loader::sao_plugins_ctx_should_stop(bridge->context) ? 1 : 0);
+    } else {
+        lua_pushnil(state);
+    }
+    return 1;
+}
+
+// Names noted for ctx_surface (canonical Python surface spelling).
+const char* const kCtxSurfaceNames[] = {
+    "log", "time", "set_defaults", "get_setting", "setting", "set_setting",
+    "snapshot_value", "register_ui_panel", "register_menu_category",
+    "register_menu_surface", "register_action_handler", "subscribe",
+    "subscribe_once", "unsubscribe", "emit", "publish", "get_snapshot",
+    "recent_events", "register_render_hook", "unregister_render_hook",
+    "set_overlay", "clear_overlay", "request_redraw", "register_hotkey",
+    "unregister_hotkey", "set_interval", "set_timeout", "clear_timer", "notify",
+    "toast", "dismiss_notify", "register_engine", "get_engine", "open_file",
+    "open_window", "load_local", "ensure_requirements",
+    "create_compositor_layer", "upload_compositor_frame",
+    "set_compositor_layer_position", "set_compositor_layer_visible",
+    "set_compositor_layer_input", "destroy_compositor_layer", "engine",
+    "engine_call", "engine.list", "engine.on", "plugin_id",
+    "path", "should_stop", "ui", "ui.badge", "ui.bar", "ui.button", "ui.canvas",
+    "ui.card", "ui.ctext", "ui.divider", "ui.group", "ui.input", "ui.kv",
+    "ui.line", "ui.oval", "ui.panel", "ui.rect", "ui.rgba_frame", "ui.row",
+    "ui.section", "ui.spacer", "ui.slider", "ui.table", "ui.text", "ui.title",
+    nullptr,
+};
 
 template <int (*Function)(lua_State*)> int safe_method(lua_State* state) noexcept {
     const char* operation = nullptr;
@@ -1936,16 +3793,12 @@ void set_method(lua_State* state, const char* name, lua_CFunction function) {
     lua_setfield(state, -2, name);
 }
 
-void set_unsupported(lua_State* state, const char* name) {
-    lua_pushstring(state, name);
-    lua_pushcclosure(state, unsupported, 1);
-    lua_setfield(state, -2, name);
-}
-
 int register_ctx_body(lua_State* state) {
     auto* bridge = static_cast<bridge_state*>(lua_touserdata(state, 1));
     if (bridge == nullptr)
         return luaL_error(state, "invalid ctx bridge");
+    sao::plugins::script_ctx::ctx_surface_note_all(loader::engine_kind::lua,
+                                                 kCtxSurfaceNames);
     auto** slot = static_cast<bridge_state**>(lua_newuserdatauv(state, sizeof(bridge_state*), 0));
     *slot = bridge;
     if (luaL_newmetatable(state, "SaoPluginContext") != 0) {
@@ -1959,6 +3812,7 @@ int register_ctx_body(lua_State* state) {
         set_method(state, "snapshot_value", safe_method<ctx_snapshot_value>);
         set_method(state, "register_ui_panel", safe_method<ctx_register_ui_panel>);
         set_method(state, "register_menu_category", safe_method<ctx_register_menu_category>);
+        set_method(state, "register_menu_surface", safe_method<ctx_register_menu_surface>);
         set_method(state, "register_action_handler", safe_method<ctx_register_action_handler>);
         set_method(state, "subscribe", safe_method<ctx_subscribe>);
         set_method(state, "subscribe_once", safe_method<ctx_subscribe_once>);
@@ -1982,13 +3836,73 @@ int register_ctx_body(lua_State* state) {
         set_method(state, "dismiss_notify", safe_method<ctx_dismiss_notify>);
         set_method(state, "register_engine", safe_method<ctx_register_engine>);
         set_method(state, "get_engine", safe_method<ctx_get_engine>);
-        for (const char* name : {"register_menu_surface", "open_file", "open_window",
-                                 "load_local", "ensure_requirements"}) {
-            set_unsupported(state, name);
+        set_method(state, "open_file", safe_method<ctx_open_file>);
+        set_method(state, "open_window", safe_method<ctx_open_window>);
+        set_method(state, "load_local", safe_method<ctx_load_local>);
+        set_method(state, "ensure_requirements", safe_method<ctx_ensure_requirements>);
+        set_method(state, "create_compositor_layer",
+                   safe_method<ctx_create_compositor_layer>);
+        set_method(state, "upload_compositor_frame",
+                   safe_method<ctx_upload_compositor_frame>);
+        set_method(state, "set_compositor_layer_position",
+                   safe_method<ctx_set_compositor_layer_position>);
+        set_method(state, "set_compositor_layer_visible",
+                   safe_method<ctx_set_compositor_layer_visible>);
+        set_method(state, "set_compositor_layer_input",
+                   safe_method<ctx_set_compositor_layer_input>);
+        set_method(state, "destroy_compositor_layer",
+                   safe_method<ctx_destroy_compositor_layer>);
+        set_method(state, "engine_call", ctx_engine_call_wrapped);
+        // ctx.engine — named functions bound from the FULL reflective engine
+        // catalog (sdk_engine_catalog_at); '.' maps to '_'
+        // ("mem.read_u64" → mem_read_u64).  Availability probing stays lazy:
+        // the dispatch resolves it per call so missing providers fail closed
+        // instead of hiding catalog entries at bind time.
+        lua_newtable(state);
+        const int engine_table = lua_absindex(state, -1);
+        const std::size_t engine_count =
+            sao::plugins::sdk_binding::sdk_engine_catalog_size();
+        for (std::size_t index = 0; index < engine_count; ++index) {
+            const auto* desc = sao::plugins::sdk_binding::sdk_engine_catalog_at(index);
+            if (desc == nullptr || desc->name == nullptr)
+                continue;
+            lua_pushlightuserdata(
+                state, const_cast<sao::plugins::sdk_binding::sdk_engine_function_desc*>(desc));
+            lua_pushlightuserdata(state, bridge);
+            lua_pushvalue(state, engine_table);
+            lua_pushcclosure(state, engine_invoke_named, 3);
+            lua_setfield(state, engine_table, engine_lua_name(desc->name).c_str());
         }
-        lua_setfield(state, -2, "__index");
+        lua_pushlightuserdata(state, bridge);
+        lua_pushvalue(state, engine_table);
+        lua_pushcclosure(state, engine_list_fn, 2);
+        lua_setfield(state, engine_table, "list");
+        lua_pushlightuserdata(state, bridge);
+        lua_pushvalue(state, engine_table);
+        lua_pushcclosure(state, engine_on_fn, 2);
+        lua_setfield(state, engine_table, "on");
+        lua_setfield(state, -2, "engine");
+        // ctx.ui — sub-table of spec builders served by script_ui_build.
+        lua_newtable(state);
+        const int ui_table = lua_absindex(state, -1);
+        std::size_t ui_count = 0;
+        for (const char* const* name =
+                 sao::plugins::script_ctx::script_ui_methods(&ui_count);
+             ui_count != 0 && name != nullptr && *name != nullptr;
+             ++name, --ui_count) {
+            lua_pushstring(state, *name);
+            lua_pushvalue(state, ui_table);
+            lua_pushcclosure(state, ctx_ui_dispatch, 2);
+            lua_setfield(state, ui_table, *name);
+        }
+        lua_setfield(state, -2, "ui");
+        // __index = ctx_index(methods) — live props resolve through it.
+        lua_pushvalue(state, -1);
+        lua_pushcclosure(state, ctx_index, 1);
+        lua_setfield(state, -3, "__index");
         lua_pushliteral(state, "locked");
-        lua_setfield(state, -2, "__metatable");
+        lua_setfield(state, -3, "__metatable");
+        lua_pop(state, 1);
     }
     lua_setmetatable(state, -2);
     lua_pushvalue(state, -1);
@@ -2320,10 +4234,28 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
         const int32_t provider_status = unregister_all_entity_providers(*bridge);
         if (provider_status != SAO_OK)
             return provider_status;
+        // Compositor input dispatches hold one shared user_data each; drop
+        // them before the loader frees the ctx's layer resources and retire
+        // their callbacks with the rest of the bridge records.
+        for (const auto& [layer_name, dispatch] : bridge->compositor_inputs) {
+            dispatch->closing.store(true, std::memory_order_release);
+        }
+        bridge->retired_compositor_dispatches.reserve(
+            bridge->retired_compositor_dispatches.size() +
+            bridge->compositor_inputs.size());
+        for (const auto& [layer_name, dispatch] : bridge->compositor_inputs) {
+            bridge->retired_compositor_dispatches.push_back(dispatch);
+        }
+        bridge->compositor_inputs.clear();
         std::vector<std::shared_ptr<event_callback_record>> callbacks;
         callbacks.reserve(bridge->callbacks.size() + bridge->hotkeys.size() +
-                          bridge->timers.size() + bridge->render_hooks.size());
+                          bridge->timers.size() + bridge->render_hooks.size() +
+                          bridge->compositor_records.size() +
+                          bridge->engine_callbacks.size());
         for (const auto& [_, callback] : bridge->callbacks) {
+            callbacks.push_back(callback);
+        }
+        for (const auto& [_, callback] : bridge->compositor_records) {
             callbacks.push_back(callback);
         }
         for (const auto& [_, callback] : bridge->hotkeys) {
@@ -2334,6 +4266,14 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
         }
         for (const auto& [_, callback] : bridge->render_hooks) {
             callbacks.push_back(callback);
+        }
+        {
+            // Engine channel records are pure lua callbacks — they join the
+            // stop/release waves but never the loader resource unwind.
+            std::lock_guard engine_lock(bridge->engine_callbacks_mutex);
+            for (const auto& [_, callback] : bridge->engine_callbacks) {
+                callbacks.push_back(callback);
+            }
         }
         std::sort(callbacks.begin(), callbacks.end(), [](const auto& left, const auto& right) {
             return left->sequence > right->sequence;
@@ -2440,7 +4380,22 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
         bridge->hotkeys.clear();
         bridge->timers.clear();
         bridge->render_hooks.clear();
+        bridge->compositor_records.clear();
         bridge->passive_resources.clear();
+        {
+            // Emissions in flight past this point find an empty channel map
+            // and drop without taking the state lock.
+            std::lock_guard engine_lock(bridge->engine_callbacks_mutex);
+            bridge->engine_callbacks.clear();
+        }
+        // The bridge-owned SaoSdkContext dies before the loader context:
+        // engine callback records are already stopped and released, so a
+        // provider drain inside destroy cannot reach a live channel.
+        if (bridge->sdk_ctx_bound) {
+            sao_sdk_context_destroy(&bridge->sdk_ctx);
+            bridge->sdk_ctx = SaoSdkContext{};
+            bridge->sdk_ctx_bound = false;
+        }
         for (const auto& [_, reference] : bridge->engines) {
             luaL_unref(state, LUA_REGISTRYINDEX, reference);
         }
@@ -2463,6 +4418,12 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
         if (bridge->context_ref != LUA_NOREF && bridge->context_ref != LUA_REFNIL) {
             luaL_unref(state, LUA_REGISTRYINDEX, bridge->context_ref);
             bridge->context_ref = LUA_NOREF;
+        }
+        if (bridge->context != nullptr) {
+            std::lock_guard ctx_lock(g_ctx_state_mutex);
+            const auto mapped = g_ctx_state_map.find(bridge->context);
+            if (mapped != g_ctx_state_map.end() && mapped->second == state)
+                g_ctx_state_map.erase(mapped);
         }
         if (bridge->context_lease && bridge->context != nullptr) {
             sao::plugins::loader::plugin_context_release_host_lease(bridge->context);
@@ -2507,6 +4468,14 @@ void release_ctx_bridges_locked(lua_State* state) noexcept {
     }
 }
 
+int32_t register_runtime_bridge_provider() noexcept {
+    return sao::plugins::script_ctx::runtime_bridge_register(&kLuaEngineOps);
+}
+
+int32_t unregister_runtime_bridge_provider() noexcept {
+    return sao::plugins::script_ctx::runtime_bridge_unregister(&kLuaEngineOps);
+}
+
 } // namespace detail
 
 #endif
@@ -2549,7 +4518,32 @@ extern "C" SAO_PLUGINS_API
             }
             g_bridge_map.emplace(state, std::move(bridge));
         }
+        {
+            std::lock_guard ctx_lock(g_ctx_state_mutex);
+            g_ctx_state_map[context] = state;
+        }
         context_retained = false;
+        // Bridge-owned SaoSdkContext for the ctx.engine reflective surface.
+        // Binding is non-fatal: engine calls fail closed per call site when
+        // the context stays unbound.  The inner try/catch keeps any provider-
+        // side throw from failing the whole ctx registration (the script would
+        // then die in load_script before on_load ever runs).
+        try {
+            const char* plugin_id =
+                sao::plugins::loader::sao_plugins_ctx_plugin_id(context);
+            if (plugin_id != nullptr && plugin_id[0] != '\0' &&
+                sao_sdk_bind_context(plugin_id, nullptr, &bridge_ptr->sdk_ctx) == SAO_SDK_OK) {
+                bridge_ptr->sdk_ctx_bound = true;
+                if (sao_sdk_context_bind_platform_services(&bridge_ptr->sdk_ctx) != SAO_SDK_OK) {
+                    sao_sdk_context_destroy(&bridge_ptr->sdk_ctx);
+                    bridge_ptr->sdk_ctx = SaoSdkContext{};
+                    bridge_ptr->sdk_ctx_bound = false;
+                }
+            }
+        } catch (...) {
+            bridge_ptr->sdk_ctx = SaoSdkContext{};
+            bridge_ptr->sdk_ctx_bound = false;
+        }
         const int base = lua_gettop(state);
         if (detail::protected_trampoline(state, register_ctx_body, bridge_ptr, 0) != LUA_OK) {
             detail::capture_state_error_locked(state, -1);

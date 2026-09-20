@@ -256,6 +256,31 @@ void json_set_bool(asIScriptGeneric* generic) {
     });
 }
 
+// set_json(key, raw): inserts raw JSON text as a *parsed* value (objects,
+// arrays, numbers, ...), so generated engine wrappers can embed spec/descriptor
+// payloads without flattening them to strings.  Returns false when the raw
+// text fails the bounded shared parse — the key is left untouched (fail
+// closed) so callers can route through ctx.engine_call(..., raw_json) instead.
+void json_set_json(asIScriptGeneric* generic) {
+    json_callback_barrier("json raw update failed", [generic] {
+        auto* object = static_cast<json_value*>(generic->GetObject());
+        const auto* key = static_cast<const std::string*>(generic->GetArgAddress(0));
+        const auto* raw = static_cast<const std::string*>(generic->GetArgAddress(1));
+        bool ok = false;
+        if (object != nullptr && key != nullptr && raw != nullptr &&
+            shared_json_text_valid(*raw)) {
+            ordered_json parsed = ordered_json::parse(*raw, nullptr, false);
+            if (!parsed.is_discarded()) {
+                if (!object->value.is_object())
+                    object->value = ordered_json::object();
+                object->value[*key] = std::move(parsed);
+                ok = true;
+            }
+        }
+        generic->SetReturnByte(ok ? 1 : 0);
+    });
+}
+
 int32_t register_json(asIScriptEngine* engine) {
     if (engine->GetTypeInfoByName("json") != nullptr)
         return SAO_OK;
@@ -320,6 +345,11 @@ int32_t register_json(asIScriptEngine* engine) {
                                           asFUNCTION(json_set_bool), asCALL_GENERIC);
     if (!registration_ok(result))
         return SAO_ERR_OS_CALL_FAILED;
+    result = engine->RegisterObjectMethod("json",
+                                          "bool set_json(const string &in, const string &in)",
+                                          asFUNCTION(json_set_json), asCALL_GENERIC);
+    if (!registration_ok(result))
+        return SAO_ERR_OS_CALL_FAILED;
     result = engine->RegisterGlobalFunction("json@ json_parse(const string &in)",
                                             asFUNCTION(json_parse), asCALL_GENERIC);
     return registration_ok(result) ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
@@ -348,6 +378,11 @@ int32_t perform_stdlib_install(asIScriptEngine* engine) {
     if (engine->GetTypeInfoByName("datetime") == nullptr)
         RegisterScriptDateTime(engine);
 
+    // Canonical ctx.* surface — registered after dictionary/array/json exist.
+    const int32_t ctx_status = register_ctx_surface_bindings(engine);
+    if (ctx_status != SAO_OK)
+        return ctx_status;
+
     return engine->GetTypeInfoByName("string") != nullptr &&
                    engine->GetTypeInfoByName("PluginContext") != nullptr &&
                    engine->GetTypeInfoByName("json") != nullptr &&
@@ -361,6 +396,32 @@ int32_t perform_stdlib_install(asIScriptEngine* engine) {
 }
 
 } // namespace
+#endif
+
+#if defined(SAO_HAS_ANGELSCRIPT)
+
+// json@ bridging helpers for the ctx surface (json_value lives in the
+// anonymous namespace above — these are the only cross-TU entry points).
+void* json_ref_from_ordered(asIScriptEngine* engine,
+                            const nlohmann::ordered_json& value) noexcept {
+    (void)engine;
+    try {
+        std::string serialized;
+        if (!shared_json_value_valid(value, serialized))
+            return nullptr;
+        auto* object = new json_value();
+        object->value = value;
+        return object;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+const nlohmann::ordered_json* json_ref_value(const void* object) noexcept {
+    const auto* value = static_cast<const json_value*>(object);
+    return value == nullptr ? nullptr : &value->value;
+}
+
 #endif
 
 extern "C" SAO_PLUGINS_API

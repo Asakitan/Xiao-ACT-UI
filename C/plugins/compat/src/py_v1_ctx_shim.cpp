@@ -63,7 +63,7 @@ constexpr method_mapping kMethodMappings[] = {
     {"register_script", static_cast<uint16_t>(sdk_method_id::method_register_ui_panel)},
     {"register_render_hook", kUnknownMethod},
     {"set_overlay", static_cast<uint16_t>(sdk_method_id::method_set_overlay)},
-    {"clear_overlay", kUnknownMethod},
+    {"clear_overlay", static_cast<uint16_t>(sdk_method_id::method_clear_overlay)},
     {"register_hotkey", static_cast<uint16_t>(sdk_method_id::method_register_hotkey)},
     {"add_hotkey", static_cast<uint16_t>(sdk_method_id::method_register_hotkey)},
     {"register_engine", kUnknownMethod}, {"register", kUnknownMethod},
@@ -75,7 +75,7 @@ constexpr method_mapping kMethodMappings[] = {
     {"set_timeout", kUnknownMethod},
     {"clear_timer", static_cast<uint16_t>(sdk_method_id::method_clear_timer)},
     {"run_on_ui", kUnknownMethod}, {"notify", static_cast<uint16_t>(sdk_method_id::method_notify)},
-    {"dismiss_notify", kUnknownMethod}, {"toast", static_cast<uint16_t>(sdk_method_id::method_toast)},
+    {"dismiss_notify", static_cast<uint16_t>(sdk_method_id::method_dismiss_notify)}, {"toast", static_cast<uint16_t>(sdk_method_id::method_toast)},
     {"open_file", kUnknownMethod}, {"open_window", kUnknownMethod},
     {"create_compositor_layer", kUnknownMethod}, {"upload_compositor_frame", kUnknownMethod},
     {"set_compositor_layer_mmf_source", kUnknownMethod},
@@ -90,6 +90,8 @@ constexpr method_mapping kMethodMappings[] = {
     {"call_runtime", kUnknownMethod}, {"ensure_requirements", kUnknownMethod},
     {"load_local", kUnknownMethod}, {"register_thread", kUnknownMethod},
     {"set_owner_attr", kUnknownMethod}, {"owner_attr", kUnknownMethod},
+    {"engine_call", static_cast<uint16_t>(sdk_method_id::method_engine_call)},
+    {"engine_list", static_cast<uint16_t>(sdk_method_id::method_engine_list)},
 };
 
 constexpr const char* kSpecialMethods[] = {"metadata"};
@@ -144,6 +146,8 @@ bool real_dispatch_method(sdk_method_id method) noexcept {
     case sdk_method_id::method_set_defaults:
     case sdk_method_id::method_register_ui_panel:
     case sdk_method_id::method_set_overlay:
+    case sdk_method_id::method_clear_overlay:
+    case sdk_method_id::method_dismiss_notify:
     case sdk_method_id::method_register_hotkey:
     case sdk_method_id::method_request_redraw:
     case sdk_method_id::method_set_interval:
@@ -151,6 +155,8 @@ bool real_dispatch_method(sdk_method_id method) noexcept {
     case sdk_method_id::method_notify:
     case sdk_method_id::method_toast:
     case sdk_method_id::method_time:
+    case sdk_method_id::method_engine_call:
+    case sdk_method_id::method_engine_list:
         return true;
     default:
         return false;

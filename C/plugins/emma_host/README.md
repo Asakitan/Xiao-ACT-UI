@@ -40,6 +40,21 @@ C++17 stdlib (std::variant / std::unordered_map / std::function)。
 一样结果。这一点通过复用 ``examples/example_emma_plugin/plugin.emma``
 交叉验证。
 
+**反射引擎面** (``binding_engine.h`` 契约): ``ctx.engine`` 除既有的
+``get/require/register/has`` 插件注册表句柄外, 还为 ``sdk_engine_catalog_*``
+目录每一条目挂一个命名 callable (``mem.read_u64`` →
+``ctx.engine.mem_read_u64(...)``, 位置实参按 ``arg_names`` 映射, 单 dict
+且键全落在形参名内时按 kwargs 处理, 尾随多出的一个 string 实参为
+envelope 级 ``callback_channel``); ``ctx.engine.list()`` 返回目录数组,
+``ctx.engine.on(channel, cb)`` 注册/替换/``nil`` 注销 channel → callable
+的通用回调路由; ``ctx.engine_call(name, args)`` 是 raw passthrough 返回
+完整 ``{status,result}`` dict。以上全部经宿主自有 ``SaoSdkContext``
+(``sao_sdk_context_create`` + ``sao_sdk_context_bind_platform_services``,
+``sao::sdk`` 仅 PRIVATE 链接) 走
+``sao_plugins_sdk_context_dispatch``; 非零 status 按文件惯例抛
+``emma_exception``。emma 的 generic invoke surface 保持 UNSUPPORTED —
+这些是新挂的 concrete ctx 成员, 不走 generic invoke。
+
 **性能不追求**: Emma 定位是新手门槛, 不是关键路径。跑 render_panel() 的
 速度 emma << lua << angel << C# << python。想要性能选别的引擎。
 

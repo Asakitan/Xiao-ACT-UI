@@ -2,8 +2,10 @@
 #include "cs_sdk_bridge_internal.h"
 
 #include "sao/plugins/loader/loader_status.h"
+#include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/sdk_binding/binding_common.h"
 #include "sao/plugins/sdk_binding/binding_csharp.h"
+#include "sao/plugins/script_ctx/runtime_bridge.h"
 
 #include <memory>
 #include <mutex>
@@ -32,6 +34,32 @@ std::mutex g_pending_mutex;
 std::unordered_map<void*, pending_session> g_pending;
 std::mutex g_test_bindings_mutex;
 std::unordered_map<sdk_bridge_session*, plugin_binding_handle_t> g_test_bindings;
+
+// script_ctx runtime-bridge provider for load_local dispatch. The csharp
+// slot claims only "cs" (source-family extension) and always declines the
+// probe: no managed compile pipeline exists, so a .cs file resolves to the
+// graceful `unsupported` outcome with a diagnostic instead of a false
+// success. ".dll" is deliberately unlisted — binaries fall through to
+// `path_only` so the managed side can load them through AssemblyLoadContext
+// itself, which is exactly what the canonical ctx.load_local contract wants.
+const char* const kCsharpScriptExtensions[] = {"cs", nullptr};
+
+bool SAO_PLUGINS_CALL csharp_script_probe(loader::plugin_context_t*, const wchar_t*,
+                                         std::string& note, void*) noexcept {
+    note = "csharp source modules are not compilable in-process; "
+           "ctx.load_local returns the resolved path for managed loading";
+    return false;
+}
+
+int32_t SAO_PLUGINS_CALL csharp_script_load_module(
+    loader::plugin_context_t*, const wchar_t*, const std::string&,
+    std::shared_ptr<script_ctx::script_module>*, std::string*, void*) noexcept {
+    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+}
+
+script_ctx::script_engine_ops kCsharpScriptOps{"csharp", 80, kCsharpScriptExtensions,
+                                               csharp_script_probe, csharp_script_load_module,
+                                               nullptr};
 
 bool SAO_PLUGINS_CALL provider_available(void*) {
     return true;
@@ -145,11 +173,20 @@ void cshost_sdk_bridge_cancel(void* runtime) noexcept {
 
 int32_t cshost_register_sdk_binding_provider() noexcept {
     const auto table = provider_vtable();
-    return sdk_binding::sao_plugins_binding_register_language_host(&table);
+    const int32_t status = sdk_binding::sao_plugins_binding_register_language_host(&table);
+    if (status != SAO_OK)
+        return status;
+    const int32_t bridge_status = script_ctx::runtime_bridge_register(&kCsharpScriptOps);
+    if (bridge_status != SAO_OK && bridge_status != loader::SAO_PLUGINS_ERR_ALREADY_EXISTS)
+        return bridge_status;
+    return SAO_OK;
 }
 
 int32_t cshost_unregister_sdk_binding_provider() noexcept {
-    return sdk_binding::sao_plugins_binding_unregister_language_host(language_host_kind::csharp);
+    const int32_t bridge_status = script_ctx::runtime_bridge_unregister(&kCsharpScriptOps);
+    const int32_t status =
+        sdk_binding::sao_plugins_binding_unregister_language_host(language_host_kind::csharp);
+    return status != SAO_OK ? status : bridge_status;
 }
 
 int32_t cshost_sdk_bridge_test_start(void* runtime, void* loader_context, void* sdk_context,

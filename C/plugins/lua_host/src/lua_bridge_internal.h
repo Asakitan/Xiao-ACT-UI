@@ -22,4 +22,10 @@ int32_t teardown_ctx_bridge(lua_State* state) noexcept;
 int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept;
 void release_ctx_bridges_locked(lua_State* state) noexcept;
 
+// runtime_bridge provider for the `.lua` extension family (registered at
+// adapter level; the registry itself is process-wide and provider storage
+// lives in lua_module_bridge.cpp statics).
+int32_t register_runtime_bridge_provider() noexcept;
+int32_t unregister_runtime_bridge_provider() noexcept;
+
 } // namespace sao::plugins::lua_host::detail

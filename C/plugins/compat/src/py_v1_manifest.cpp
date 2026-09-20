@@ -430,10 +430,16 @@ std::string path_utf8(const std::filesystem::path& path) {
     return std::string(reinterpret_cast<const char*>(encoded.data()), encoded.size());
 }
 
+// u8path() overloads are deprecated in C++20; construct from u8string_view.
+std::filesystem::path path_from_utf8(std::string_view utf8) {
+    return std::filesystem::path(std::u8string_view(
+        reinterpret_cast<const char8_t*>(utf8.data()), utf8.size()));
+}
+
 bool valid_relative_entry(std::string_view value) {
     if (value.empty() || value.size() > 1024)
         return false;
-    const auto path = std::filesystem::u8path(value);
+    const auto path = path_from_utf8(value);
     if (path.is_absolute() || path.has_root_name() || path.has_root_directory())
         return false;
     for (const auto& part : path) {
@@ -973,7 +979,7 @@ sao_plugins_compat_load_manifest_file(const wchar_t* manifest_path,
             if (out_error_utf8 != nullptr) *out_error_utf8 = dup_c_string(e);
             return SAO_ERR_INVALID_ARGUMENT;
         }
-        const auto entry_path = plugin_root / std::filesystem::u8path(entry);
+        const auto entry_path = plugin_root / path_from_utf8(entry);
         std::error_code error;
         if (!std::filesystem::exists(entry_path, error)) {
             if (error)

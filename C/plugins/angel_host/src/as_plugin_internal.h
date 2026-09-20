@@ -62,8 +62,16 @@ struct as_plugin_s {
 
 using shared_plugin_state = std::shared_ptr<as_plugin_s>;
 
+// Generates the `namespace sao_engine` script section (as_engine_preamble.cpp):
+// walks the sdk_binding reflective-engine catalog and emits ctx.engine_call
+// wrappers.  Injected as the "sao_engine_preamble" AddScriptSection at module
+// load; wrappers take PluginContext@ ctx as their first parameter so the
+// section compiles with or without the sao_module_bridge `ctx` global.
+std::string sao_as_engine_preamble(asIScriptEngine* engine);
+
 int32_t register_plugin_state(const shared_plugin_state& plugin);
 shared_plugin_state acquire_plugin_state(as_plugin_handle_t plugin);
+shared_plugin_state acquire_plugin_state_by_bound_context(void* bound_context);
 shared_plugin_state retire_plugin_state(as_plugin_handle_t plugin);
 int32_t restore_plugin_state(const shared_plugin_state& plugin);
 void retain_plugin_error(as_plugin_s& plugin, const char* phase, int32_t status,
