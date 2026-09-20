@@ -36,11 +36,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import asyncio
+import binascii
 import json
 import os
 import re
 import secrets
 import shutil
+import stat
+import struct
 import sys
 import tempfile
 import threading
@@ -82,7 +85,22 @@ WORKSHOP_UPLOAD_MAX_BYTES = 256 * 1024 * 1024
 _WORKSHOP_SIGNATURE_ALG = "none"
 _PUBLISH_LOCKS: Dict[str, threading.RLock] = {}
 _PUBLISH_LOCKS_GUARD = threading.Lock()
+_NATIVE_VALIDATION_CACHE: Dict[
+    Tuple[str, str, str, int, int, int, str, str], Optional[str]
+] = {}
+_NATIVE_VALIDATION_CACHE_GUARD = threading.Lock()
 _PUBLICATION_FORMAT_VERSION = 1
+_NATIVE_UPDATE_TARGET = "windows-x64-native"
+_NATIVE_ZIP_UTF8_FLAG = 0x0800
+_NATIVE_ZIP_DOS_DATE = (20 << 9) | (1 << 5) | 1
+_NATIVE_ZIP_MAX_ENTRIES = 50000
+_NATIVE_ZIP_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+_NATIVE_ZIP_REQUIRED_FILES = frozenset({
+    "SaoAuto.exe",
+    "SaoAuto.provider.json",
+    "SaoAutoUpdateHelper.exe",
+    "manifest.json",
+})
 
 
 # ── config ─────────────────────────────────────────────────────────────
@@ -163,7 +181,8 @@ def _safe_plugin_id(v: str) -> str:
 
 
 def _safe_version(v: str) -> str:
-    if not v or not _VERSION_RE.match(v) or ".." in v or "/" in v or "\\\\" in v:
+    if (not isinstance(v, str) or not v or len(v) > 63 or
+            not _VERSION_RE.match(v) or ".." in v or "/" in v or "\\\\" in v):
         raise HTTPException(400, f"invalid version: {v!r}")
     return v
 
@@ -343,8 +362,335 @@ def _path_within(root: str, child: str) -> bool:
         return False
 
 
+def _regular_file_stat_without_reparse(root: str, path: str) -> Optional[os.stat_result]:
+    try:
+        root_abs = os.path.abspath(root)
+        path_abs = os.path.abspath(path)
+        if os.path.commonpath([root_abs, path_abs]) != root_abs or path_abs == root_abs:
+            return None
+        relative = os.path.relpath(path_abs, root_abs)
+        if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+            return None
+        current = root_abs
+        components = [current]
+        for component in relative.split(os.sep):
+            if not component or component in {os.curdir, os.pardir}:
+                return None
+            current = os.path.join(current, component)
+            components.append(current)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        for index, component_path in enumerate(components):
+            component_stat = os.stat(component_path, follow_symlinks=False)
+            if (os.path.islink(component_path) or
+                    getattr(component_stat, "st_file_attributes", 0) & reparse_flag):
+                return None
+            final = index == len(components) - 1
+            if final:
+                return component_stat if stat.S_ISREG(component_stat.st_mode) else None
+            if not stat.S_ISDIR(component_stat.st_mode):
+                return None
+        return None
+    except (OSError, ValueError):
+        return None
+
+
 def _valid_sha256(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def _native_zip_name(raw: bytes) -> Tuple[str, str, bool]:
+    if not raw or len(raw) > 32768 or raw.startswith(b"/") or b"\\" in raw or b"\0" in raw:
+        raise ValueError("unsafe archive path")
+    try:
+        name = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError("archive path is not valid UTF-8") from exc
+    directory = name.endswith("/")
+    logical = name[:-1] if directory else name
+    if not logical:
+        raise ValueError("unsafe archive path")
+    reserved = {"con", "prn", "aux", "nul", "clock$"}
+    for component in logical.split("/"):
+        if (not component or component in {".", ".."} or
+                component.endswith(".") or component.endswith(" ") or
+                len(component.encode("utf-8")) > 255):
+            raise ValueError("unsafe archive path")
+        stem = component.split(".", 1)[0].casefold()
+        if (stem in reserved or
+                len(stem) == 4 and stem[:3] in {"com", "lpt"} and stem[3] in "123456789"):
+            raise ValueError("unsafe archive path")
+        if any(ord(character) < 0x20 or ord(character) == 0x7f or
+               character in '<>:"|?*' for character in component):
+            raise ValueError("unsafe archive path")
+    return name, logical.casefold(), directory
+
+
+def _expected_native_manifest_bytes(
+    version: str, files: Dict[str, Tuple[int, str]]
+) -> bytes:
+    artifact_names = sorted(
+        (name for name in files if name != "manifest.json"),
+        key=lambda name: name.encode("utf-8"),
+    )
+    output = '{\n  "archive": "directory",\n  "artifacts": ['
+    for index, name in enumerate(artifact_names):
+        size, sha256_hex = files[name]
+        output += "\n" if index == 0 else ",\n"
+        output += (
+            f'    {{"path": "{name}", "sha256": "{sha256_hex}", '
+            f'"size": {size}}}'
+        )
+    if artifact_names:
+        output += "\n  "
+    output += (
+        '],\n  "schema": "sao.pack.manifest.v2",\n  "version": "'
+        + version
+        + '"\n}\n'
+    )
+    return output.encode("utf-8")
+
+
+def _validate_native_update_zip(path: str, expected_version: str) -> Optional[str]:
+    def reject(message: str) -> None:
+        raise ValueError(message)
+
+    def read_exact(stream, size: int) -> bytes:
+        data = stream.read(size)
+        if len(data) != size:
+            reject("archive is truncated")
+        return data
+
+    try:
+        with open(path, "rb") as stream:
+            archive_size = os.fstat(stream.fileno()).st_size
+            if archive_size < 22 or archive_size > UPDATE_UPLOAD_MAX_BYTES:
+                reject("archive size is outside ZIP32 limits")
+
+            stream.seek(archive_size - 22)
+            eocd = struct.unpack("<IHHHHIIH", read_exact(stream, 22))
+            if (eocd[0] != 0x06054B50 or eocd[1] != 0 or eocd[2] != 0 or
+                    eocd[3] != eocd[4] or eocd[7] != 0):
+                reject("invalid or multidisk ZIP end record")
+            entry_count = eocd[4]
+            central_size = eocd[5]
+            central_offset = eocd[6]
+            eocd_offset = archive_size - 22
+            if (entry_count == 0 or entry_count > _NATIVE_ZIP_MAX_ENTRIES or
+                    central_offset + central_size != eocd_offset):
+                reject("invalid ZIP central directory")
+
+            entries: List[Tuple[bytes, str, bool, int, int, int]] = []
+            names = set()
+            directory_names = set()
+            logical_names = []
+            previous_name = b""
+            expected_local_offset = 0
+            total_uncompressed = 0
+            cursor = central_offset
+            stream.seek(cursor)
+            for _ in range(entry_count):
+                if cursor > eocd_offset or eocd_offset - cursor < 46:
+                    reject("invalid ZIP central entry")
+                central = struct.unpack("<IHHHHHHIIIHHHHHII", read_exact(stream, 46))
+                (signature, version_made, version_needed, flags, method,
+                 dos_time, dos_date, crc32, compressed_size, uncompressed_size,
+                 name_length, extra_length, comment_length, entry_disk,
+                 internal_attributes, external_attributes, local_offset) = central
+                record_size = 46 + name_length + extra_length + comment_length
+                if (signature != 0x02014B50 or version_made != 20 or
+                        version_needed != 20 or flags != _NATIVE_ZIP_UTF8_FLAG or
+                        method != 0 or dos_time != 0 or dos_date != _NATIVE_ZIP_DOS_DATE or
+                        name_length == 0 or extra_length != 0 or comment_length != 0 or
+                        entry_disk != 0 or internal_attributes != 0 or
+                        compressed_size != uncompressed_size or
+                        local_offset != expected_local_offset or
+                        record_size > eocd_offset - cursor or
+                        total_uncompressed > UPDATE_UPLOAD_MAX_BYTES - uncompressed_size):
+                    reject("archive was not emitted by sao_pack --zip")
+                raw_name = read_exact(stream, name_length)
+                name, name_key, directory = _native_zip_name(raw_name)
+                if (name_key in names or previous_name and previous_name >= raw_name or
+                        external_attributes != (0x10 if directory else 0) or
+                        directory and (crc32 != 0 or compressed_size != 0 or
+                                       uncompressed_size != 0)):
+                    reject("unsafe, duplicate, or unsorted archive path")
+                names.add(name_key)
+                logical_names.append(name_key)
+                if directory:
+                    directory_names.add(name_key)
+                previous_name = raw_name
+                total_uncompressed += uncompressed_size
+                entries.append((raw_name, name, directory, crc32,
+                                uncompressed_size, local_offset))
+                expected_local_offset = local_offset + 30 + name_length + compressed_size
+                cursor += record_size
+            if cursor != eocd_offset or stream.tell() != eocd_offset:
+                reject("invalid ZIP central directory size")
+            for logical_name in logical_names:
+                components = logical_name.split("/")
+                for end in range(1, len(components)):
+                    if "/".join(components[:end]) not in directory_names:
+                        reject("archive omits an explicit parent directory entry")
+
+            files: Dict[str, Tuple[int, str]] = {}
+            manifest_bytes: Optional[bytes] = None
+            expected_local_offset = 0
+            for raw_name, name, directory, expected_crc, data_size, local_offset in entries:
+                if (local_offset != expected_local_offset or
+                    local_offset >= central_offset or
+                    central_offset - local_offset < 30):
+                    reject("ZIP local entry offset mismatch")
+                stream.seek(local_offset)
+                local = struct.unpack("<IHHHHHIIIHH", read_exact(stream, 30))
+                (signature, version_needed, flags, method, dos_time, dos_date,
+                 crc32, compressed_size, uncompressed_size,
+                 name_length, extra_length) = local
+                if (signature != 0x04034B50 or version_needed != 20 or
+                        flags != _NATIVE_ZIP_UTF8_FLAG or method != 0 or dos_time != 0 or
+                        dos_date != _NATIVE_ZIP_DOS_DATE or crc32 != expected_crc or
+                        compressed_size != data_size or uncompressed_size != data_size or
+                        name_length != len(raw_name) or extra_length != 0 or
+                        read_exact(stream, name_length) != raw_name or
+                        stream.tell() + data_size > central_offset):
+                    reject("ZIP local/central entry mismatch")
+
+                crc = 0
+                digest = hashlib.sha256()
+                remaining = data_size
+                manifest_parts: Optional[List[bytes]] = [] if name == "manifest.json" else None
+                if manifest_parts is not None and data_size > _NATIVE_ZIP_MAX_MANIFEST_BYTES:
+                    reject("package manifest is too large")
+                while remaining:
+                    chunk = read_exact(stream, min(remaining, 1024 * 1024))
+                    crc = binascii.crc32(chunk, crc)
+                    digest.update(chunk)
+                    if manifest_parts is not None:
+                        manifest_parts.append(chunk)
+                    remaining -= len(chunk)
+                if crc & 0xffffffff != expected_crc:
+                    reject("ZIP entry CRC mismatch")
+                expected_local_offset = stream.tell()
+                if directory:
+                    continue
+                files[name] = (data_size, digest.hexdigest())
+                if manifest_parts is not None:
+                    manifest_bytes = b"".join(manifest_parts)
+
+            if expected_local_offset != central_offset:
+                reject("archive layout is not deterministic sao_pack ZIP32")
+            if not _NATIVE_ZIP_REQUIRED_FILES.issubset(files):
+                reject("archive root is not an installed ship/bin package")
+            if not any(name.startswith("runtime/") for name in files):
+                reject("archive does not contain a runtime payload")
+            if manifest_bytes is None:
+                reject("package manifest is missing")
+
+            try:
+                def unique_object(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError("duplicate package manifest key")
+                        result[key] = value
+                    return result
+
+                manifest = json.loads(
+                    manifest_bytes.decode("utf-8", errors="strict"),
+                    object_pairs_hook=unique_object,
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("package manifest is invalid") from exc
+            if (not isinstance(manifest, dict) or
+                    set(manifest) != {"archive", "artifacts", "schema", "version"} or
+                    manifest.get("archive") != "directory" or
+                    manifest.get("schema") != "sao.pack.manifest.v2" or
+                    manifest.get("version") != expected_version or
+                    not isinstance(manifest.get("artifacts"), list)):
+                reject("package manifest contract mismatch")
+
+            artifacts = manifest["artifacts"]
+            expected_artifact_names = set(files) - {"manifest.json"}
+            if len(artifacts) != len(expected_artifact_names):
+                reject("package manifest artifact count mismatch")
+            seen_artifacts = set()
+            previous_artifact = ""
+            for artifact in artifacts:
+                if not isinstance(artifact, dict) or set(artifact) != {"path", "sha256", "size"}:
+                    reject("package manifest artifact is invalid")
+                artifact_path = artifact.get("path")
+                artifact_sha = artifact.get("sha256")
+                artifact_size = artifact.get("size")
+                if (not isinstance(artifact_path, str) or
+                        not isinstance(artifact_sha, str) or
+                        re.fullmatch(r"[0-9a-f]{64}", artifact_sha) is None or
+                        type(artifact_size) is not int or artifact_size < 0 or
+                        previous_artifact and previous_artifact >= artifact_path or
+                        artifact_path in seen_artifacts or artifact_path not in files or
+                        files[artifact_path] != (artifact_size, artifact_sha)):
+                    reject("package manifest artifact mismatch")
+                previous_artifact = artifact_path
+                seen_artifacts.add(artifact_path)
+            if seen_artifacts != expected_artifact_names:
+                reject("package manifest inventory mismatch")
+            if manifest_bytes != _expected_native_manifest_bytes(expected_version, files):
+                reject("package manifest bytes are not canonical")
+        return None
+    except OSError:
+        return "archive could not be read"
+    except (OverflowError, struct.error, ValueError) as exc:
+        return str(exc) or "invalid native update archive"
+
+
+def _published_native_archive_error(
+    path: str,
+    expected_version: str,
+    expected_sha256: str,
+    expected_size: int,
+    expected_url: str = "",
+    expected_notes: str = "",
+    use_cache: bool = True,
+) -> Optional[str]:
+    if (not isinstance(expected_version, str) or
+            re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None or
+            type(expected_size) is not int or expected_size <= 0 or
+            not isinstance(expected_url, str) or not isinstance(expected_notes, str)):
+        return "latest manifest fields are not canonical"
+    stat_result = _regular_file_stat_without_reparse(UPDATE_ROOT, path)
+    if stat_result is None:
+        return "artifact is not a regular file"
+    cache_key = (
+        os.path.abspath(path),
+        expected_version,
+        expected_sha256,
+        expected_size,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+        expected_url,
+        hashlib.sha256(expected_notes.encode("utf-8")).hexdigest(),
+    )
+    if use_cache:
+        with _NATIVE_VALIDATION_CACHE_GUARD:
+            if cache_key in _NATIVE_VALIDATION_CACHE:
+                return _NATIVE_VALIDATION_CACHE[cache_key]
+    try:
+        if stat_result.st_size != expected_size:
+            result = "artifact size does not match latest manifest"
+        elif _sha256_hex_of_file(path) != expected_sha256:
+            result = "artifact hash does not match latest manifest"
+        else:
+            result = _validate_native_update_zip(path, expected_version)
+    except OSError:
+        return "artifact could not be read"
+    final_stat = _regular_file_stat_without_reparse(UPDATE_ROOT, path)
+    if (final_stat is None or final_stat.st_size != stat_result.st_size or
+            final_stat.st_mtime_ns != stat_result.st_mtime_ns):
+        return "artifact changed during validation"
+    if use_cache:
+        with _NATIVE_VALIDATION_CACHE_GUARD:
+            if len(_NATIVE_VALIDATION_CACHE) >= 16:
+                _NATIVE_VALIDATION_CACHE.clear()
+            _NATIVE_VALIDATION_CACHE[cache_key] = result
+    return result
 
 
 def _valid_update_journal(journal: Dict[str, Any], channel: str, target: str,
@@ -432,11 +778,21 @@ def _recover_update_publication_unlocked(channel: str, target: str) -> None:
     try:
         expected_size = int(manifest.get("size", 0))
         expected_sha = str(manifest.get("sha256", ""))
-        valid_artifact = (
-            os.path.isfile(artifact)
-            and os.path.getsize(artifact) == expected_size
-            and _sha256_hex_of_file(artifact) == expected_sha
-        )
+        if target == _NATIVE_UPDATE_TARGET:
+            valid_artifact = _published_native_archive_error(
+                artifact,
+                str(manifest.get("version", "")),
+                expected_sha,
+                expected_size,
+                str(manifest.get("url", "")),
+                str(manifest.get("notes", "")),
+            ) is None
+        else:
+            valid_artifact = (
+                os.path.isfile(artifact)
+                and os.path.getsize(artifact) == expected_size
+                and _sha256_hex_of_file(artifact) == expected_sha
+            )
     except (OSError, ValueError):
         valid_artifact = False
     if valid_artifact:
@@ -457,6 +813,18 @@ def _publish_update_sync(
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     with _publication_lock(os.path.join(update_dir, "_publish.lock")):
         _recover_update_publication_unlocked(channel, target)
+        if target == _NATIVE_UPDATE_TARGET:
+            archive_error = _published_native_archive_error(
+                tmp_path,
+                str(manifest["version"]),
+                str(manifest["sha256"]),
+                int(manifest["size"]),
+                str(manifest["url"]),
+                str(manifest["notes"]),
+                use_cache=False,
+            )
+            if archive_error:
+                raise ValueError(f"native upload changed before publication: {archive_error}")
         journal_path = os.path.join(update_dir, ".publish-journal.json")
         _atomic_json_write(journal_path, {
             "format_version": _PUBLICATION_FORMAT_VERSION,
@@ -617,14 +985,59 @@ async def get_update_latest(channel: str, target: str, request: Request):
         raise HTTPException(500, "latest update manifest is unreadable") from exc
     if not isinstance(manifest, dict):
         raise HTTPException(500, "latest update manifest is invalid")
-    url = _resolve_latest_manifest_url(manifest.get("url", ""))
+    version = manifest.get("version")
+    raw_url = manifest.get("url")
+    sha256_hex = manifest.get("sha256")
+    size = manifest.get("size")
+    notes = manifest.get("notes")
+    try:
+        _safe_version(version)
+    except (HTTPException, TypeError) as exc:
+        raise HTTPException(500, "latest update manifest version is invalid") from exc
+    native_sha_is_not_canonical = (
+        target == _NATIVE_UPDATE_TARGET and
+        (not isinstance(sha256_hex, str) or
+         re.fullmatch(r"[0-9a-f]{64}", sha256_hex) is None)
+    )
+    if (not isinstance(raw_url, str) or not _valid_sha256(sha256_hex) or
+            native_sha_is_not_canonical or type(size) is not int or
+            size <= 0 or size > UPDATE_UPLOAD_MAX_BYTES or
+            not isinstance(notes, str)):
+        raise HTTPException(500, "latest update manifest fields are invalid")
+    url = _resolve_latest_manifest_url(raw_url)
+    expected_path = f"/update/{channel}/{target}/artifacts/update-{version}.zip"
+    expected_url = PUBLIC_BASE_URL.rstrip("/") + expected_path
+    parsed_url = urlsplit(url)
+    if (url != expected_url or parsed_url.path != expected_path or
+            parsed_url.query or parsed_url.fragment):
+        raise HTTPException(500, "latest update manifest artifact URL is invalid")
+    artifact_path = os.path.join(_update_artifacts_dir(channel, target), f"update-{version}.zip")
+    if target == _NATIVE_UPDATE_TARGET:
+        archive_error = await asyncio.to_thread(
+            _published_native_archive_error,
+            artifact_path,
+            version,
+            sha256_hex,
+            size,
+            raw_url,
+            notes,
+        )
+        if archive_error:
+            raise HTTPException(500, f"latest native update artifact is invalid: {archive_error}")
+    else:
+        try:
+            artifact_size = os.path.getsize(artifact_path)
+        except OSError as exc:
+            raise HTTPException(500, "latest update artifact is missing") from exc
+        if artifact_size != size:
+            raise HTTPException(500, "latest update artifact size is invalid")
     # 严格 5 字段返回
     return {
-        "version": str(manifest.get("version", "")),
+        "version": version,
         "url": url,
-        "sha256": str(manifest.get("sha256", "")),
-        "size": int(manifest.get("size", 0)),
-        "notes": str(manifest.get("notes", "")),
+        "sha256": sha256_hex,
+        "size": size,
+        "notes": notes,
     }
 
 
@@ -633,7 +1046,7 @@ async def get_update_artifact(channel: str, target: str, filename: str):
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(400, "invalid filename")
     p = os.path.join(_update_artifacts_dir(channel, target), filename)
-    if not os.path.isfile(p):
+    if _regular_file_stat_without_reparse(UPDATE_ROOT, p) is None:
         raise HTTPException(404, "artifact not found")
     return FileResponse(p, media_type="application/zip", filename=filename)
 
@@ -674,6 +1087,13 @@ async def publish_update(
     filename = f"update-{version}.zip"
     dest_path = os.path.join(art_dir, filename)
     tmp_path, total, sha256_hex = await _receive_upload(request, art_dir, filename, UPDATE_UPLOAD_MAX_BYTES)
+    if target == _NATIVE_UPDATE_TARGET:
+        archive_error = await asyncio.to_thread(
+            _validate_native_update_zip, tmp_path, version
+        )
+        if archive_error:
+            _remove_file(tmp_path)
+            raise HTTPException(400, f"invalid native update archive: {archive_error}")
 
     # C++ updater 用 max_body=256KB 拉 latest.json（updater.cpp:165）；这里 truncate notes
     # 保 200KB 上限，留 56KB 余量给其他字段 + JSON overhead。
