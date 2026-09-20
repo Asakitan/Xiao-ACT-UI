@@ -29,6 +29,15 @@
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
 #include "sao/plugins/csharp_host/cs_loader_adapter.h"
 #endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_CSMINI)
+#include "sao/plugins/csmini/csmini_host.h"
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
+#include "sao/plugins/python_host/py_host.h"
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYMINI)
+#include "sao/plugins/pymini/pymini_host.h"
+#endif
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
 #ifdef SAO_STATUS_OK
 #undef SAO_STATUS_OK
@@ -36,16 +45,20 @@
 #include "sao/sdk/sao_sdk.h"
 #include "sao/sdk/sao_sdk_platform_internal.h"
 #include "sao/ui/compositor.h"
+#include "sao/ui/input.h"
 #endif
+#include <Commdlg.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -85,6 +98,15 @@ struct sao_plugins_registry_body {
 #endif
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
     sao::plugins::csharp_host::cs_loader_adapter_owner_t csharp_owner{};
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_CSMINI)
+    sao::plugins::csmini::csmini_adapter_owner_t csmini_owner{};
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
+    sao::plugins::python_host::py_loader_adapter_owner_t python_owner{};
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYMINI)
+    sao::plugins::pymini::pymini_adapter_owner_t pymini_owner{};
 #endif
 };
 
@@ -168,6 +190,20 @@ struct LauncherPlatformTimer {
     bool cleanup_pending = false;
     bool unregistering = false;
 };
+
+struct LauncherPlatformHotkey {
+    LauncherPlatformSession* session = nullptr;
+    loader::hotkey_callback_fn callback = nullptr;
+    void* callback_user_data = nullptr;
+    uint64_t provider_token = 0;
+    sao_sdk_hotkey_id_t sdk_id = 0;
+    bool callback_active = false;
+    bool unregistering = false;
+};
+
+struct LauncherPlatformOverlay {
+    sao_sdk_overlay_token_t sdk_token = 0;
+};
 #endif
 
 struct LauncherPlatformSession {
@@ -188,6 +224,9 @@ struct LauncherPlatformSession {
     std::unordered_map<uint64_t, sao_sdk_notify_token_t> notifications;
     std::unordered_map<uint64_t, std::shared_ptr<LauncherPlatformCompositorLayer>>
         compositor_layers;
+    std::unordered_map<uint64_t, std::shared_ptr<LauncherPlatformHotkey>> hotkeys;
+    std::unordered_map<uint64_t, std::shared_ptr<LauncherPlatformOverlay>> overlays;
+    std::unordered_map<uint64_t, std::shared_ptr<std::wstring>> file_results;
     std::thread timer_cleanup_worker;
     bool timer_worker_stop = false;
     bool timer_worker_wake = false;
@@ -252,7 +291,9 @@ uint64_t nextPlatformTokenLocked(LauncherPlatformSession& session) noexcept {
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
         if (candidate != 0 && !session.timers.contains(candidate) &&
             !session.notifications.contains(candidate) &&
-            !session.compositor_layers.contains(candidate)) {
+            !session.compositor_layers.contains(candidate) &&
+            !session.hotkeys.contains(candidate) && !session.overlays.contains(candidate) &&
+            !session.file_results.contains(candidate)) {
             return candidate;
         }
 #else
@@ -430,6 +471,10 @@ int32_t unregisterPlatformTimer(LauncherPlatformSession& session, uint64_t provi
                                 bool missing_is_success = false);
 int32_t destroyPlatformCompositorLayerCore(LauncherPlatformSession& session,
                                            uint64_t provider_token);
+int32_t unregisterPlatformHotkeyInternal(LauncherPlatformSession& session,
+                                         uint64_t provider_token) noexcept;
+int32_t clearPlatformOverlayInternal(LauncherPlatformSession& session,
+                                     uint64_t provider_token) noexcept;
 
 void dispatchPlatformTimerCallback(const std::shared_ptr<LauncherPlatformTimer>& timer) noexcept {
     if (timer == nullptr || timer->session == nullptr)
@@ -760,6 +805,34 @@ destroyPlatformSession(void*, loader::plugin_context_platform_session_t provider
             const int32_t status = destroyPlatformCompositorLayerCore(*session, token);
             if (status != SAO_STATUS_OK)
                 return mapUiLoaderStatus(static_cast<sao_status_t>(status));
+        }
+        for (;;) {
+            uint64_t token = 0;
+            {
+                std::lock_guard lock(session->mutex);
+                if (session->hotkeys.empty())
+                    break;
+                token = session->hotkeys.begin()->first;
+            }
+            const int32_t status = unregisterPlatformHotkeyInternal(*session, token);
+            if (status != SAO_OK)
+                return status;
+        }
+        for (;;) {
+            uint64_t token = 0;
+            {
+                std::lock_guard lock(session->mutex);
+                if (session->overlays.empty())
+                    break;
+                token = session->overlays.begin()->first;
+            }
+            const int32_t status = clearPlatformOverlayInternal(*session, token);
+            if (status != SAO_OK)
+                return status;
+        }
+        {
+            std::lock_guard lock(session->mutex);
+            session->file_results.clear();
         }
         if (session->sdk_ready) {
             const int32_t status = mapSdkStatus(sao_sdk_context_try_destroy(&session->sdk_context));
@@ -1324,6 +1397,582 @@ destroyPlatformCompositorLayer(void*, loader::plugin_context_platform_session_t 
         return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
     }
 }
+
+// ── Hotkey capability (SDK input router binding) ─────────────────────
+
+bool parsePlatformHotkeyModifierToken(std::string_view token, uint32_t* out_bits) noexcept {
+    if (token == "CTRL" || token == "CONTROL" || token == "LCTRL" || token == "RCTRL") {
+        *out_bits = SAO_UI_MOD_CTRL;
+        return true;
+    }
+    if (token == "ALT" || token == "LALT" || token == "RALT") {
+        *out_bits = SAO_UI_MOD_ALT;
+        return true;
+    }
+    if (token == "SHIFT" || token == "LSHIFT" || token == "RSHIFT") {
+        *out_bits = SAO_UI_MOD_SHIFT;
+        return true;
+    }
+    if (token == "WIN" || token == "WINDOWS" || token == "META" || token == "SUPER" ||
+        token == "MOD" || token == "LWIN" || token == "RWIN") {
+        *out_bits = SAO_UI_MOD_WIN;
+        return true;
+    }
+    return false;
+}
+
+struct NamedVirtualKey {
+    std::string_view name;
+    uint32_t vk;
+};
+
+constexpr NamedVirtualKey kNamedVirtualKeys[] = {
+    {"BACKSPACE", VK_BACK},  {"BACK", VK_BACK},       {"BS", VK_BACK},
+    {"TAB", VK_TAB},         {"ENTER", VK_RETURN},    {"RETURN", VK_RETURN},
+    {"ESCAPE", VK_ESCAPE},   {"ESC", VK_ESCAPE},      {"SPACE", VK_SPACE},
+    {"DELETE", VK_DELETE},   {"DEL", VK_DELETE},      {"INSERT", VK_INSERT},
+    {"INS", VK_INSERT},      {"HOME", VK_HOME},       {"END", VK_END},
+    {"PAGEUP", VK_PRIOR},    {"PGUP", VK_PRIOR},      {"PAGEDOWN", VK_NEXT},
+    {"PGDN", VK_NEXT},       {"UP", VK_UP},           {"DOWN", VK_DOWN},
+    {"LEFT", VK_LEFT},       {"RIGHT", VK_RIGHT},
+    {"CAPSLOCK", VK_CAPITAL},{"CAPS", VK_CAPITAL},    {"NUMLOCK", VK_NUMLOCK},
+    {"SCROLLLOCK", VK_SCROLL},{"PAUSE", VK_PAUSE},    {"BREAK", VK_PAUSE},
+    {"PRINTSCREEN", VK_SNAPSHOT}, {"PRTSC", VK_SNAPSHOT},
+    {"APPS", VK_APPS},       {"MENU", VK_APPS},
+    {"MULTIPLY", VK_MULTIPLY},{"ADD", VK_ADD},        {"SEPARATOR", VK_SEPARATOR},
+    {"SUBTRACT", VK_SUBTRACT},{"DECIMAL", VK_DECIMAL},{"DIVIDE", VK_DIVIDE},
+    {"PLUS", VK_OEM_PLUS},   {"MINUS", VK_OEM_MINUS}, {"COMMA", VK_OEM_COMMA},
+    {"PERIOD", VK_OEM_PERIOD},
+};
+
+bool lookupVirtualKey(std::string_view token, uint32_t* out_vk) noexcept {
+    if (token.empty())
+        return false;
+    if (token.size() == 1) {
+        const char c = token[0];
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            *out_vk = static_cast<uint32_t>(c);
+            return true;
+        }
+        return false;
+    }
+    if (token.size() >= 2 && token.size() <= 3 && (token[0] == 'F')) {
+        const char* digits = token.data() + 1;
+        uint32_t index = 0;
+        bool valid = true;
+        for (size_t i = 1; i < token.size(); ++i) {
+            const char c = token[i];
+            if (c < '0' || c > '9') {
+                valid = false;
+                break;
+            }
+            index = index * 10u + static_cast<uint32_t>(c - '0');
+        }
+        (void)digits;
+        if (valid && index >= 1 && index <= 24) {
+            *out_vk = VK_F1 + (index - 1u);
+            return true;
+        }
+    }
+    if (token.size() > 6 && token.substr(0, 6) == "NUMPAD") {
+        const char c = token[6];
+        if (token.size() == 7 && c >= '0' && c <= '9') {
+            *out_vk = VK_NUMPAD0 + static_cast<uint32_t>(c - '0');
+            return true;
+        }
+    }
+    for (const auto& entry : kNamedVirtualKeys) {
+        if (token == entry.name) {
+            *out_vk = entry.vk;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool parsePlatformHotkeyString(const char* value, uint32_t* out_virtual_key,
+                               uint32_t* out_modifiers) noexcept {
+    if (value == nullptr || out_virtual_key == nullptr || out_modifiers == nullptr)
+        return false;
+    *out_virtual_key = 0;
+    *out_modifiers = 0;
+    std::string normalized;
+    normalized.reserve(64);
+    for (const char* it = value; *it != '\0' && normalized.size() < 64; ++it) {
+        const unsigned char c = static_cast<unsigned char>(*it);
+        normalized.push_back(static_cast<char>(std::toupper(c)));
+    }
+    uint32_t modifiers = 0;
+    uint32_t virtual_key = 0;
+    size_t start = 0;
+    while (start <= normalized.size()) {
+        const size_t end = normalized.find('+', start);
+        std::string_view token(normalized.data() + start,
+                               (end == std::string::npos ? normalized.size() : end) - start);
+        while (!token.empty() && (token.front() == ' ' || token.front() == '\t'))
+            token.remove_prefix(1);
+        while (!token.empty() && (token.back() == ' ' || token.back() == '\t'))
+            token.remove_suffix(1);
+        uint32_t bits = 0;
+        if (parsePlatformHotkeyModifierToken(token, &bits)) {
+            modifiers |= bits;
+        } else {
+            uint32_t vk = 0;
+            if (!lookupVirtualKey(token, &vk) || virtual_key != 0)
+                return false;
+            virtual_key = vk;
+        }
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    if (virtual_key == 0)
+        return false;
+    *out_virtual_key = virtual_key;
+    *out_modifiers = modifiers;
+    return true;
+}
+
+void SAO_SDK_CALL launcherPlatformHotkeyFired(sao_sdk_hotkey_id_t, void* user_data) {
+    auto* raw = static_cast<LauncherPlatformHotkey*>(user_data);
+    if (raw == nullptr || raw->session == nullptr)
+        return;
+    auto* session = raw->session;
+    std::shared_ptr<LauncherPlatformHotkey> entry;
+    loader::hotkey_callback_fn callback = nullptr;
+    void* callback_user_data = nullptr;
+    {
+        std::lock_guard lock(session->mutex);
+        const auto found = session->hotkeys.find(raw->provider_token);
+        if (found == session->hotkeys.end() || found->second.get() != raw ||
+            !session->accepting_callbacks || raw->unregistering) {
+            return;
+        }
+        entry = found->second;
+        if (entry->callback_active)
+            return;
+        entry->callback_active = true;
+        callback = entry->callback;
+        callback_user_data = entry->callback_user_data;
+        ++session->active_callbacks;
+    }
+    auto* previous = g_platform_callback_session;
+    g_platform_callback_session = session;
+    {
+        LoaderCallbackLease loader_callback(session);
+        if (loader_callback && callback != nullptr) {
+            try {
+                callback(callback_user_data);
+            } catch (...) {
+            }
+        }
+    }
+    g_platform_callback_session = previous;
+    {
+        std::lock_guard lock(session->mutex);
+        entry->callback_active = false;
+        if (session->active_callbacks > 0)
+            --session->active_callbacks;
+    }
+    session->idle.notify_all();
+}
+
+int32_t unregisterPlatformHotkeyInternal(LauncherPlatformSession& session,
+                                         uint64_t provider_token) noexcept {
+    if (g_platform_callback_session == &session)
+        return loader::SAO_PLUGINS_ERR_BUSY;
+    std::shared_ptr<LauncherPlatformHotkey> entry;
+    {
+        std::lock_guard lock(session.mutex);
+        const auto found = session.hotkeys.find(provider_token);
+        if (found == session.hotkeys.end())
+            return SAO_ERR_HANDLE_INVALID;
+        entry = found->second;
+        entry->unregistering = true;
+    }
+    const int32_t status =
+        mapSdkStatus(sao_sdk_unregister_hotkey(&session.sdk_context, entry->sdk_id));
+    {
+        std::lock_guard lock(session.mutex);
+        entry->unregistering = false;
+        if (status == SAO_OK || status == SAO_ERR_HANDLE_INVALID)
+            session.hotkeys.erase(provider_token);
+    }
+    session.idle.notify_all();
+    return status == SAO_ERR_HANDLE_INVALID ? SAO_OK : status;
+}
+
+int32_t SAO_PLUGINS_CALL registerPlatformHotkey(
+    void*, loader::plugin_context_platform_session_t provider_session, const char* hotkey_id_utf8,
+    const char* default_key_utf8, const char* label_utf8, loader::hotkey_callback_fn callback,
+    void* callback_user_data, loader::plugin_context_platform_token_t* out_provider_token) {
+    if (out_provider_token != nullptr)
+        *out_provider_token = 0;
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || hotkey_id_utf8 == nullptr || hotkey_id_utf8[0] == '\0' ||
+        callback == nullptr || out_provider_token == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    uint32_t virtual_key = 0;
+    uint32_t modifiers = 0;
+    if (!parsePlatformHotkeyString(default_key_utf8, &virtual_key, &modifiers))
+        return SAO_ERR_INVALID_ARGUMENT;
+    (void)label_utf8;
+    try {
+        auto entry = std::make_shared<LauncherPlatformHotkey>();
+        entry->session = session;
+        entry->callback = callback;
+        entry->callback_user_data = callback_user_data;
+        std::string binding_id;
+        binding_id.reserve(session->plugin_id.size() + 64u);
+        binding_id.append(session->plugin_id);
+        binding_id.push_back('.');
+        binding_id.append(hotkey_id_utf8);
+        SaoSdkHotkeySpec spec{};
+        spec.binding_id_utf8 = binding_id.c_str();
+        spec.virtual_key = virtual_key;
+        spec.modifiers = modifiers;
+        spec.enforce_ctrl_prefix = false;
+        spec.prevent_default = false;
+        spec.allow_repeat = true;
+        {
+            std::lock_guard lock(session->mutex);
+            if (!session->accepting_callbacks || !session->sdk_ready)
+                return loader::SAO_PLUGINS_ERR_BUSY;
+        }
+        const int32_t status = mapSdkStatus(sao_sdk_register_hotkey(
+            &session->sdk_context, &spec, launcherPlatformHotkeyFired, entry.get(),
+            &entry->sdk_id));
+        if (status != SAO_OK)
+            return status;
+        uint64_t provider_token = 0;
+        {
+            std::lock_guard lock(session->mutex);
+            if (session->accepting_callbacks) {
+                provider_token = nextPlatformTokenLocked(*session);
+                entry->provider_token = provider_token;
+                const auto [_, inserted] = session->hotkeys.emplace(provider_token, entry);
+                if (!inserted)
+                    provider_token = 0;
+            }
+        }
+        if (provider_token == 0) {
+            (void)sao_sdk_unregister_hotkey(&session->sdk_context, entry->sdk_id);
+            entry->sdk_id = 0;
+            return loader::SAO_PLUGINS_ERR_BUSY;
+        }
+        *out_provider_token = provider_token;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL
+unregisterPlatformHotkey(void*, loader::plugin_context_platform_session_t provider_session,
+                         loader::plugin_context_platform_token_t provider_token) {
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || provider_token == 0)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        return unregisterPlatformHotkeyInternal(*session, provider_token);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+// ── Overlay capability (render-registry spec bytes per surface) ──────
+
+int32_t clearPlatformOverlayInternal(LauncherPlatformSession& session,
+                                     uint64_t provider_token) noexcept {
+    sao_sdk_overlay_token_t sdk_token = 0;
+    {
+        std::lock_guard lock(session.mutex);
+        const auto found = session.overlays.find(provider_token);
+        if (found == session.overlays.end())
+            return SAO_ERR_HANDLE_INVALID;
+        sdk_token = found->second->sdk_token;
+    }
+    const int32_t status =
+        mapSdkStatus(sao_sdk_overlay_clear(&session.sdk_context, sdk_token));
+    if (status != SAO_OK && status != SAO_ERR_HANDLE_INVALID)
+        return status;
+    std::lock_guard lock(session.mutex);
+    session.overlays.erase(provider_token);
+    return SAO_OK;
+}
+
+int32_t SAO_PLUGINS_CALL
+setPlatformOverlay(void*, loader::plugin_context_platform_session_t provider_session,
+                   const char* surface_utf8, const char* spec_json_utf8,
+                   loader::plugin_context_platform_token_t* out_provider_token) {
+    if (out_provider_token != nullptr)
+        *out_provider_token = 0;
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || surface_utf8 == nullptr || surface_utf8[0] == '\0' ||
+        spec_json_utf8 == nullptr || out_provider_token == nullptr) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        {
+            std::lock_guard lock(session->mutex);
+            if (!session->accepting_callbacks || !session->sdk_ready)
+                return loader::SAO_PLUGINS_ERR_BUSY;
+        }
+        SaoSdkOverlaySpec spec{};
+        spec.surface_id_utf8 = surface_utf8;
+        spec.spec_json_utf8 = reinterpret_cast<const uint8_t*>(spec_json_utf8);
+        spec.spec_len = std::strlen(spec_json_utf8);
+        sao_sdk_overlay_token_t sdk_token = 0;
+        const int32_t status = mapSdkStatus(
+            sao_sdk_overlay_set(&session->sdk_context, &spec, &sdk_token));
+        if (status != SAO_OK)
+            return status;
+        auto entry = std::make_shared<LauncherPlatformOverlay>();
+        entry->sdk_token = sdk_token;
+        uint64_t provider_token = 0;
+        {
+            std::lock_guard lock(session->mutex);
+            if (session->accepting_callbacks) {
+                provider_token = nextPlatformTokenLocked(*session);
+                const auto [_, inserted] = session->overlays.emplace(provider_token, entry);
+                if (!inserted)
+                    provider_token = 0;
+            }
+        }
+        if (provider_token == 0) {
+            (void)sao_sdk_overlay_clear(&session->sdk_context, sdk_token);
+            return loader::SAO_PLUGINS_ERR_BUSY;
+        }
+        *out_provider_token = provider_token;
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL
+clearPlatformOverlay(void*, loader::plugin_context_platform_session_t provider_session,
+                     loader::plugin_context_platform_token_t provider_token) {
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || provider_token == 0)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        return clearPlatformOverlayInternal(*session, provider_token);
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL
+requestPlatformRedraw(void*, loader::plugin_context_platform_session_t provider_session,
+                      const char* surface_utf8, const char* /*reason_utf8*/) {
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || surface_utf8 == nullptr || surface_utf8[0] == '\0')
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        if (!session->sdk_ready)
+            return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+        return mapSdkStatus(
+            sao_sdk_request_redraw_surface(&session->sdk_context, surface_utf8));
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+// ── File-open dialog (comdlg32 GetOpenFileNameW) ─────────────────────
+
+struct OpenFileFilterPart {
+    std::wstring display;
+    std::wstring pattern;
+};
+
+bool nextJsonStringToken(const char*& cursor, std::string& out) noexcept {
+    while (*cursor != '\0' && *cursor != '"')
+        ++cursor;
+    if (*cursor != '"')
+        return false;
+    ++cursor;
+    out.clear();
+    while (*cursor != '\0' && *cursor != '"') {
+        if (*cursor == '\\' && cursor[1] != '\0') {
+            ++cursor;
+            switch (*cursor) {
+            case 'n':
+                out.push_back('\n');
+                break;
+            case 't':
+                out.push_back('\t');
+                break;
+            case 'r':
+                out.push_back('\r');
+                break;
+            default:
+                out.push_back(*cursor);
+                break;
+            }
+            ++cursor;
+            continue;
+        }
+        out.push_back(*cursor);
+        ++cursor;
+        if (out.size() > 4096)
+            return false;
+    }
+    if (*cursor != '"')
+        return false;
+    ++cursor;
+    return true;
+}
+
+std::wstring utf8ToWide(std::string_view value) noexcept {
+    if (value.empty() || value.size() > static_cast<size_t>(INT_MAX))
+        return {};
+    const int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                                           static_cast<int>(value.size()), nullptr, 0);
+    if (needed <= 0)
+        return {};
+    std::wstring result(static_cast<size_t>(needed), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                            static_cast<int>(value.size()), result.data(), needed) != needed) {
+        return {};
+    }
+    return result;
+}
+
+std::vector<OpenFileFilterPart> parseOpenFileFilters(const char* filters_json_utf8) noexcept {
+    std::vector<OpenFileFilterPart> parts;
+    if (filters_json_utf8 == nullptr || filters_json_utf8[0] == '\0') {
+        parts.push_back({utf8ToWide("All Files"), L"*.*"});
+        return parts;
+    }
+    const char* cursor = filters_json_utf8;
+    const char* const end = cursor + std::strlen(cursor);
+    std::string token;
+    std::string previous;
+    bool expect_value = false;
+    std::string pending_name;
+    while (cursor < end) {
+        const char c = *cursor;
+        if (c == '"') {
+            previous = token;
+            if (!nextJsonStringToken(cursor, token) || token.size() > 4096)
+                break;
+            const auto* probe = cursor;
+            while (probe < end && (*probe == ' ' || *probe == '\t' || *probe == '\r' ||
+                                   *probe == '\n')) {
+                ++probe;
+            }
+            expect_value = probe < end && *probe == ':';
+            if (!expect_value) {
+                if (!pending_name.empty()) {
+                    parts.push_back({utf8ToWide(pending_name), utf8ToWide(token)});
+                    pending_name.clear();
+                } else if (token.find('*') != std::string::npos) {
+                    parts.push_back({utf8ToWide(token), utf8ToWide(token)});
+                } else {
+                    pending_name = token;
+                }
+            }
+            continue;
+        }
+        if (c == ',') {
+            ++cursor;
+            continue;
+        }
+        ++cursor;
+    }
+    if (parts.empty())
+        parts.push_back({utf8ToWide("All Files"), L"*.*"});
+    return parts;
+}
+
+int32_t SAO_PLUGINS_CALL
+platformOpenFile(void*, loader::plugin_context_platform_session_t provider_session,
+                 const loader::plugin_context_open_file_spec* spec,
+                 const wchar_t** out_selected_path,
+                 loader::plugin_context_platform_token_t* out_provider_token) {
+    if (out_selected_path != nullptr)
+        *out_selected_path = nullptr;
+    if (out_provider_token != nullptr)
+        *out_provider_token = 0;
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || spec == nullptr ||
+        spec->struct_size < sizeof(*spec) || out_selected_path == nullptr ||
+        out_provider_token == nullptr) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        const auto filters = parseOpenFileFilters(spec->filters_json_utf8);
+        std::wstring filter_block;
+        filter_block.reserve(512);
+        for (const auto& part : filters) {
+            if (part.display.empty() || part.pattern.empty() ||
+                part.display.size() + part.pattern.size() + filter_block.size() > 2048) {
+                continue;
+            }
+            filter_block.append(part.display);
+            filter_block.push_back(L'\0');
+            filter_block.append(part.pattern);
+            filter_block.push_back(L'\0');
+        }
+        if (filter_block.empty()) {
+            filter_block.assign(L"All Files\0*.*\0", 16);
+        }
+        std::wstring title;
+        if (spec->title_utf8 != nullptr && spec->title_utf8[0] != '\0')
+            title = utf8ToWide(spec->title_utf8);
+        wchar_t buffer[MAX_PATH * 4]{};
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = reinterpret_cast<HWND>(spec->hwnd_owner);
+        ofn.lpstrFile = buffer;
+        ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+        ofn.lpstrFilter = filter_block.c_str();
+        ofn.nFilterIndex = 1;
+        ofn.lpstrTitle = title.empty() ? nullptr : title.c_str();
+        ofn.lpstrInitialDir =
+            spec->initial_dir != nullptr && spec->initial_dir[0] != L'\0' ? spec->initial_dir
+                                                                        : nullptr;
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+        if (!GetOpenFileNameW(&ofn)) {
+            const DWORD dialog_error = CommDlgExtendedError();
+            if (dialog_error == 0) {
+                return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_CANCELLED;
+            }
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_OS_CALL_FAILED;
+        }
+        auto result = std::make_shared<std::wstring>(buffer);
+        std::lock_guard lock(session->mutex);
+        if (!session->accepting_callbacks)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_BUSY;
+        const uint64_t provider_token = nextPlatformTokenLocked(*session);
+        const auto [_, inserted] = session->file_results.emplace(provider_token, result);
+        if (!inserted)
+            return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_ALREADY_EXISTS;
+        *out_selected_path = result->c_str();
+        *out_provider_token = provider_token;
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK;
+    } catch (...) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
+
+int32_t SAO_PLUGINS_CALL releasePlatformFileResult(
+    void*, loader::plugin_context_platform_session_t provider_session,
+    loader::plugin_context_platform_token_t provider_token) {
+    auto* session = static_cast<LauncherPlatformSession*>(provider_session);
+    if (session == nullptr || provider_token == 0)
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_INVALID_ARGUMENT;
+    try {
+        std::lock_guard lock(session->mutex);
+        return session->file_results.erase(provider_token) != 0
+                   ? loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_OK
+                   : loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_FOUND;
+    } catch (...) {
+        return loader::SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNKNOWN;
+    }
+}
 #endif
 
 loader::plugin_context_platform_provider makePlatformProvider() noexcept {
@@ -1347,6 +1996,13 @@ loader::plugin_context_platform_provider makePlatformProvider() noexcept {
     provider.set_compositor_layer_visible = setPlatformCompositorLayerVisible;
     provider.set_compositor_layer_input = setPlatformCompositorLayerInput;
     provider.destroy_compositor_layer = destroyPlatformCompositorLayer;
+    provider.register_hotkey = registerPlatformHotkey;
+    provider.unregister_hotkey = unregisterPlatformHotkey;
+    provider.set_overlay = setPlatformOverlay;
+    provider.clear_overlay = clearPlatformOverlay;
+    provider.request_redraw = requestPlatformRedraw;
+    provider.open_file = platformOpenFile;
+    provider.release_file_result = releasePlatformFileResult;
 #endif
     return provider;
 }
@@ -1625,6 +2281,51 @@ int32_t registerHostAdapters(
     [[maybe_unused]] sao_plugins_registry_body& owned,
     [[maybe_unused]] const sao::launcher::PluginsProviderConfiguration& configuration) noexcept {
     [[maybe_unused]] int32_t status = SAO_OK;
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYMINI)
+    // python engine_kind::python is served by the pymini composite adapter:
+    // native subset interpreter by default; manifest py_runtime:cpython /
+    // subset-overflow plugins delegate to sao_plugins_pyhost_* when a
+    // configured python_home probes available.
+    if (configuration.python_home.empty()) {
+        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_UNCONFIGURED;
+    } else if (sao::plugins::python_host::sao_plugins_pyhost_available(
+                   configuration.python_home.c_str())) {
+        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_READY;
+    } else {
+        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_UNAVAILABLE;
+    }
+    {
+        sao::plugins::pymini::pymini_adapter_config pymini_cfg{};
+        pymini_cfg.python_home =
+            owned.python_runtime_status == SAO_PLUGINS_PYTHON_RUNTIME_READY
+                ? configuration.python_home.c_str()
+                : nullptr;
+        status = sao::plugins::pymini::sao_plugins_pymini_register_loader_adapter(
+            &pymini_cfg, &owned.pymini_owner);
+        if (status != SAO_OK)
+            return status;
+        status = sao::plugins::pymini::sao_plugins_pymini_register_script_engine();
+        if (status != SAO_OK)
+            return status;
+    }
+#elif defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
+    // python is the reference script host: probe the embedded distribution first,
+    // then register the adapter so the lifecycle can dispatch engine_kind::python.
+    if (configuration.python_home.empty()) {
+        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_UNCONFIGURED;
+    } else if (sao::plugins::python_host::sao_plugins_pyhost_available(
+                   configuration.python_home.c_str())) {
+        sao::plugins::python_host::py_host_config python_host_config{};
+        python_host_config.python_home = configuration.python_home.c_str();
+        status = sao::plugins::python_host::sao_plugins_pyhost_register_loader_adapter(
+            &python_host_config, &owned.python_owner);
+        if (status != SAO_OK)
+            return status;
+        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_READY;
+    } else {
+        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_UNAVAILABLE;
+    }
+#endif
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_EMMA)
     status = sao::plugins::emma_host::sao_plugins_emma_register_loader_adapter(&owned.emma_owner);
     if (status != SAO_OK)
@@ -1644,7 +2345,23 @@ int32_t registerHostAdapters(
     if (status != SAO_OK)
         return status;
 #endif
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_CSMINI)
+    // csmini composite adapter owns engine_kind::csharp when built: the
+    // native C#-subset interpreter executes subset plugins directly; dotnet
+    // runtime probing stays off (dotnet_root=nullptr → fail-closed coreclr
+    // delegate).
+    {
+        sao::plugins::csmini::csmini_adapter_config csmini_cfg{};
+        csmini_cfg.dotnet_root = nullptr;
+        status = sao::plugins::csmini::sao_plugins_csmini_register_loader_adapter(
+            &csmini_cfg, &owned.csmini_owner);
+        if (status != SAO_OK)
+            return status;
+        status = sao::plugins::csmini::sao_plugins_csmini_register_script_engine();
+        if (status != SAO_OK)
+            return status;
+    }
+#elif defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
     bool available = false;
     status = sao::plugins::csharp_host::sao_plugins_cshost_is_available(&available);
     if (status != SAO_OK)
@@ -1739,7 +2456,17 @@ restoreReloadTargets(const std::vector<ReloadTarget>& targets,
 
 int32_t unregisterHostAdapters([[maybe_unused]] sao_plugins_registry_body& owned) noexcept {
     [[maybe_unused]] int32_t status = SAO_OK;
-#if defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_CSMINI)
+    // csmini registers instead of the csharp adapter under its own gate.
+    if (owned.csmini_owner != nullptr) {
+        status = sao::plugins::csmini::sao_plugins_csmini_unregister_loader_adapter(
+            owned.csmini_owner);
+        if (status != SAO_OK)
+            return status;
+        owned.csmini_owner = nullptr;
+        (void)sao::plugins::csmini::sao_plugins_csmini_unregister_script_engine();
+    }
+#elif defined(SAO_LAUNCHER_PROVIDER_HAS_CSHARP)
     if (owned.csharp_owner != nullptr) {
         status = sao::plugins::csharp_host::sao_plugins_cshost_unregister_loader_adapter(
             owned.csharp_owner);
@@ -1773,6 +2500,30 @@ int32_t unregisterHostAdapters([[maybe_unused]] sao_plugins_registry_body& owned
         if (status != SAO_OK)
             return status;
         owned.emma_owner = nullptr;
+    }
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYMINI)
+    // pymini registers under its own gate (the #elif in registerHostAdapters
+    // makes pymini/python_host mutually exclusive), so it unwinds under its
+    // own guard too — not nested inside HAS_PYTHON.
+    if (owned.pymini_owner != nullptr) {
+        status = sao::plugins::pymini::sao_plugins_pymini_unregister_loader_adapter(
+            owned.pymini_owner);
+        if (status != SAO_OK)
+            return status;
+        owned.pymini_owner = nullptr;
+        (void)sao::plugins::pymini::sao_plugins_pymini_unregister_script_engine();
+    }
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
+    // python registers first in registerHostAdapters, so it unwinds last.
+    if (owned.python_owner != nullptr) {
+        status = sao::plugins::python_host::sao_plugins_pyhost_unregister_loader_adapter(
+            owned.python_owner);
+        if (status != SAO_OK)
+            return status;
+        owned.python_owner = nullptr;
+        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_HOST_UNAVAILABLE;
     }
 #endif
     return SAO_OK;
@@ -1840,8 +2591,19 @@ std::vector<bool> runtimeDeferred(const sao_plugins_registry_body& body) {
     const bool python_ready = body.python_runtime_status == SAO_PLUGINS_PYTHON_RUNTIME_READY;
     for (size_t index = 0; index < body.manifests.size(); ++index) {
         const auto& manifest = body.manifests[index];
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYMINI)
+        // pymini 是 engine_kind::python 的本机 adapter:py_runtime 语义与
+        // adapter 的 decide_route 一致——"pymini"/auto/未声明走本机子集
+        // 解释器(auto 出子集时由 adapter 在 load 处 fail-closed 记为插件
+        // 失败而不是静默永久 defer);只有显式 "cpython" 且无 READY
+        // delegate 的 manifest 才 degrade-defer。
+        blocked[index] = !python_ready && manifest.native_entry.empty() &&
+                         manifest.language == loader::engine_kind::python &&
+                         manifest.py_runtime == "cpython";
+#else
         blocked[index] = !python_ready && manifest.native_entry.empty() &&
                          manifest.language == loader::engine_kind::python;
+#endif
     }
 
     bool changed = true;
@@ -1998,9 +2760,16 @@ extern "C" sao_status_t sao_plugins_activate_autostart(sao_plugins_registry* reg
         const auto deferred = runtimeDeferred(body);
         body.deferred_count =
             static_cast<uint32_t>(std::count(deferred.begin(), deferred.end(), true));
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYMINI)
+        // pymini 本身就是进程内本机引擎;python_launch_strategy 表达 python
+        // 引擎的发射形态,与是否有 CPython delegate 无关(逐插件 defer 在
+        // deferred_count 单独报告)。
+        body.python_launch_strategy = SAO_PLUGINS_PYTHON_LAUNCH_IN_PROCESS;
+#else
         body.python_launch_strategy = body.python_runtime_status == SAO_PLUGINS_PYTHON_RUNTIME_READY
                                           ? SAO_PLUGINS_PYTHON_LAUNCH_IN_PROCESS
                                           : SAO_PLUGINS_PYTHON_LAUNCH_DEFER_DEGRADED;
+#endif
         for (const auto handle : sorted) {
             const auto found = std::find(body.handles.begin(), body.handles.end(), handle);
             const auto index = static_cast<size_t>(std::distance(body.handles.begin(), found));

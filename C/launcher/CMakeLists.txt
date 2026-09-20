@@ -209,6 +209,15 @@ if (TARGET sao::license::sdk AND TARGET sao::license::client)
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(sao_launcher_license_provider PRIVATE
         sao::license::sdk sao::license::client sao_core winhttp crypt32 bcrypt)
+    if (TARGET sao_license_cli_dispatch_lib)
+        target_sources(sao_license_cli_dispatch_lib PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/provider_config.cpp)
+        target_include_directories(sao_license_cli_dispatch_lib PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(sao_license_cli_dispatch_lib PRIVATE
+            sao_launcher_license_provider nlohmann_json::nlohmann_json)
+    endif()
 endif()
 
 if (TARGET sao::plugins::loader)
@@ -216,7 +225,7 @@ if (TARGET sao::plugins::loader)
     target_include_directories(sao_launcher_plugins_provider PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_link_libraries(sao_launcher_plugins_provider PRIVATE
-        sao::plugins::loader)
+        sao::plugins::loader comdlg32)
     if (TARGET sao::sdk AND TARGET sao::ui)
         target_link_libraries(sao_launcher_plugins_provider PRIVATE
             sao::sdk sao::ui)
@@ -247,6 +256,24 @@ if (TARGET sao::plugins::loader)
             sao::plugins::csharp_host)
         target_compile_definitions(sao_launcher_plugins_provider PRIVATE
             SAO_LAUNCHER_PROVIDER_HAS_CSHARP=1)
+    endif()
+    if (TARGET sao::plugins::csmini)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::plugins::csmini)
+        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_CSMINI=1)
+    endif()
+    if (TARGET sao::plugins::python_host)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::plugins::python_host)
+        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_PYTHON=1)
+    endif()
+    if (TARGET sao::plugins::pymini)
+        target_link_libraries(sao_launcher_plugins_provider PRIVATE
+            sao::plugins::pymini)
+        target_compile_definitions(sao_launcher_plugins_provider PRIVATE
+            SAO_LAUNCHER_PROVIDER_HAS_PYMINI=1)
     endif()
     target_compile_definitions(sao_launcher_plugins_provider PRIVATE
         SAO_PLUGINS_BUILDING_DLL)

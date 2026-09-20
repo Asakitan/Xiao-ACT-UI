@@ -90,7 +90,7 @@ sao_status_t sao_shell_shutdown(void);
 typedef struct sao_license_result {
     int32_t valid;
     int64_t expires_utc; // Unix time; 0 for perpetual
-    char tier[32];       // "free" | "pro" | "team"
+    char tier[32];       // "pro" | "team"
     char hwid_hash[65];  // hex sha256
     char error_msg[256];
 } sao_license_result;
@@ -184,6 +184,9 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
 // The driver stage never rolls the platform back itself (it may run off the
 // owner thread); the owner-thread caller tears the context down on failure.
 sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_platform_ctx* ctx);
+// Interrupts an in-flight helper READY/identity wait owned by the driver
+// stage. The worker remains the sole owner of rollback and context mutation.
+sao_status_t sao_platform_cancel_bringup_drivers(sao_platform_ctx* ctx);
 sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_platform_ctx* ctx,
                                           sao_platform_ctx** ctx_out);
 // Capture shield: the anti-screencap chain (method availability, syscall/stub

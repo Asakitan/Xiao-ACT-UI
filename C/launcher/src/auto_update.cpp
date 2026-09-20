@@ -2,6 +2,7 @@
 #include "sao/launcher/single_instance.h"
 
 #include "sao/server/freetier/updater/updater.h"
+#include "sao/server/freetier/updater/handoff.h"
 #include "sao_core/sao_status.h"
 
 #include <process.h>
@@ -38,6 +39,7 @@ constexpr std::size_t kManifestSha256Capacity = 65u;
 constexpr std::uint64_t kMaximumUpdateBytes = 512ull * 1024ull * 1024ull;
 constexpr DWORD kHelperReadyTimeoutMs = 5u * 60u * 1000u;
 constexpr DWORD kHelperTerminationTimeoutMs = 2u * 1000u;
+constexpr DWORD kHelperCompletionTimeoutMs = 30u * 1000u;
 constexpr std::string_view kNativeUpdateManifestUrl =
     "https://x2.sjcmc.cn:15018/update/stable/windows-x64-native/latest.json";
 
@@ -228,6 +230,38 @@ bool same_origin(std::string_view left, std::string_view right) noexcept {
            equal_ascii_ignore_case(left_origin, right_origin);
 }
 
+bool fetch_validated_manifest(const UpdateProviderConfiguration& configuration,
+                              HANDLE cancel_event,
+                              sao_updater_manifest_t& manifest) noexcept {
+    manifest = {};
+    if (!configuration.enabled ||
+        configuration.manifest_url != kNativeUpdateManifestUrl ||
+        !is_exact_json_url(configuration.manifest_url) || is_cancelled(cancel_event) ||
+        sao_updater_fetch_manifest_pinned(
+            configuration.manifest_url.c_str(),
+            configuration.server_tls_spki_sha256.data(),
+            configuration.server_tls_spki_sha256.size(), &manifest) != SAO_OK ||
+        is_cancelled(cancel_event)) {
+        return false;
+    }
+
+    const std::size_t version_length =
+        bounded_length(manifest.version, kManifestVersionCapacity);
+    const std::size_t url_length = bounded_length(manifest.url, kManifestUrlCapacity);
+    const std::size_t sha256_length =
+        bounded_length(manifest.sha256, kManifestSha256Capacity);
+    if (version_length == 0u || version_length >= kManifestVersionCapacity ||
+        url_length == 0u || url_length >= kManifestUrlCapacity ||
+        sha256_length != kManifestSha256Capacity - 1u || manifest.size == 0u ||
+        manifest.size > kMaximumUpdateBytes) {
+        return false;
+    }
+
+    const std::string_view download_url(manifest.url, url_length);
+    const std::string_view sha256(manifest.sha256, sha256_length);
+    return same_origin(configuration.manifest_url, download_url) && is_sha256(sha256);
+}
+
 fs::path user_staging_root() {
     PWSTR known_folder = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &known_folder)) &&
@@ -255,7 +289,8 @@ constexpr wchar_t kStagingPreservationMarker[] = L".sao-preserved";
 constexpr wchar_t kStagingOwnerMarker[] = L".sao-update-owner";
 constexpr std::array<char, 10> kStagingPreservationMarkerBytes = {'p', 'r', 'e', 's', 'e',
                                                                   'r', 'v', 'e', 'd', '\n'};
-constexpr std::array<char, 6> kHelperReadyMarkerBytes = {'r', 'e', 'a', 'd', 'y', '\n'};
+constexpr wchar_t kHelperReadyMarker[] = L"helper.ready";
+constexpr wchar_t kHelperCompletionMarker[] = L"helper.complete";
 constexpr std::string_view kStagingOwnerMarkerPrefix = "SAO-UPDATE-STAGING-OWNER-1\n";
 constexpr std::size_t kMaximumStagingDirectories = 64u;
 constexpr std::size_t kMaximumStagingEntries = 16u;
@@ -348,12 +383,14 @@ bool staging_is_old_enough(const fs::path& staging) noexcept {
            now.QuadPart - written.QuadPart >= kStagingOrphanAge100ns;
 }
 
-bool helper_ready_temporary_leaf(std::wstring_view leaf) noexcept {
-    constexpr std::wstring_view prefix = L"helper.ready.tmp.";
-    if (!leaf.starts_with(prefix) || leaf.size() == prefix.size() ||
-        leaf.size() - prefix.size() > 10u) {
+bool handoff_temporary_leaf(std::wstring_view leaf) noexcept {
+    constexpr std::wstring_view ready_prefix = L"helper.ready.tmp.";
+    constexpr std::wstring_view complete_prefix = L"helper.complete.tmp.";
+    const std::wstring_view prefix = leaf.starts_with(ready_prefix)
+        ? ready_prefix
+        : (leaf.starts_with(complete_prefix) ? complete_prefix : std::wstring_view{});
+    if (prefix.empty() || leaf.size() == prefix.size() || leaf.size() - prefix.size() > 10u)
         return false;
-    }
     const std::wstring_view suffix = leaf.substr(prefix.size());
     return std::all_of(suffix.begin(), suffix.end(),
                        [](wchar_t value) { return value >= L'0' && value <= L'9'; });
@@ -361,9 +398,10 @@ bool helper_ready_temporary_leaf(std::wstring_view leaf) noexcept {
 
 bool known_staging_leaf(std::wstring_view leaf) noexcept {
     return leaf == L"SaoAutoUpdate.archive" || leaf == L"SaoAutoUpdate.archive.part" ||
-           leaf == L"SaoAutoUpdateHelper.exe" || leaf == L"helper.ready" ||
+           leaf == L"SaoAutoUpdateHelper.exe" || leaf == kHelperReadyMarker ||
+           leaf == kHelperCompletionMarker ||
            leaf == kStagingPreservationMarker || leaf == kStagingOwnerMarker ||
-           helper_ready_temporary_leaf(leaf);
+           handoff_temporary_leaf(leaf);
 }
 
 bool exact_marker_file(const fs::path& marker, std::span<const char> expected) noexcept {
@@ -395,6 +433,63 @@ bool exact_marker_file(const fs::path& marker, std::span<const char> expected) n
         std::equal(bytes.begin(), bytes.end(), expected.begin(), expected.end());
     const bool closed = CloseHandle(file) != FALSE;
     return valid && closed;
+}
+
+bool read_handoff_record(const fs::path& marker,
+                         sao_update_handoff_v1_t& record) noexcept {
+    record = {};
+    HANDLE file = CreateFileW(marker.c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                              OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return false;
+    FILE_ATTRIBUTE_TAG_INFO attributes{};
+    FILE_STANDARD_INFO standard{};
+    DWORD read = 0u;
+    const bool loaded =
+        GetFileInformationByHandleEx(file, FileAttributeTagInfo, &attributes,
+                                     sizeof(attributes)) != FALSE &&
+        (attributes.FileAttributes &
+         (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE)) == 0u &&
+        GetFileType(file) == FILE_TYPE_DISK &&
+        GetFileInformationByHandleEx(file, FileStandardInfo, &standard,
+                                     sizeof(standard)) != FALSE &&
+        standard.EndOfFile.QuadPart == static_cast<LONGLONG>(sizeof(record)) &&
+        ReadFile(file, &record, sizeof(record), &read, nullptr) != FALSE &&
+        read == sizeof(record);
+    const bool closed = CloseHandle(file) != FALSE;
+    if (!loaded || !closed)
+        return false;
+
+    const std::size_t version_length = bounded_length(
+        record.version, SAO_UPDATE_HANDOFF_VERSION_CAPACITY);
+    const std::size_t sha_length = bounded_length(
+        record.sha256, SAO_UPDATE_HANDOFF_SHA256_CAPACITY);
+    const bool reserved_zero = std::all_of(
+        std::begin(record.reserved), std::end(record.reserved),
+        [](std::uint8_t value) { return value == 0u; });
+    return record.struct_size == sizeof(record) &&
+        record.abi_version == SAO_UPDATE_HANDOFF_ABI_VERSION &&
+        record.phase >= SAO_UPDATE_HANDOFF_PHASE_READY &&
+        record.phase <= SAO_UPDATE_HANDOFF_PHASE_COMPLETE &&
+        record.parent_pid != 0u && record.helper_pid != 0u && record.flags == 0u &&
+        version_length > 0u && version_length < SAO_UPDATE_HANDOFF_VERSION_CAPACITY &&
+        sha_length == 64u && is_sha256(std::string_view(record.sha256, sha_length)) &&
+        reserved_zero;
+}
+
+bool handoff_matches(const sao_update_handoff_v1_t& record,
+                     std::string_view version, std::string_view sha256,
+                     DWORD parent_pid, DWORD helper_pid) noexcept {
+    const std::size_t version_length = bounded_length(
+        record.version, SAO_UPDATE_HANDOFF_VERSION_CAPACITY);
+    const std::size_t sha_length = bounded_length(
+        record.sha256, SAO_UPDATE_HANDOFF_SHA256_CAPACITY);
+    return record.parent_pid == parent_pid && record.helper_pid == helper_pid &&
+        version_length == version.size() && sha_length == sha256.size() &&
+        std::equal(version.begin(), version.end(), record.version) &&
+        equal_ascii_ignore_case(
+            sha256, std::string_view(record.sha256, sha_length));
 }
 
 bool exact_preservation_marker(const fs::path& marker) noexcept {
@@ -467,9 +562,16 @@ bool collect_known_staging_files(const fs::path& staging, std::vector<fs::path>&
                 !exact_staging_owner_marker(staging)) {
                 return false;
             }
-            if (iterator->path().filename().wstring() == L"helper.ready" &&
-                !exact_marker_file(iterator->path(), kHelperReadyMarkerBytes)) {
-                return false;
+            const std::wstring leaf = iterator->path().filename().wstring();
+            if (leaf == kHelperReadyMarker || leaf == kHelperCompletionMarker) {
+                sao_update_handoff_v1_t record{};
+                if (!read_handoff_record(iterator->path(), record) ||
+                    (leaf == kHelperReadyMarker &&
+                     record.phase != SAO_UPDATE_HANDOFF_PHASE_READY) ||
+                    (leaf == kHelperCompletionMarker &&
+                     record.phase == SAO_UPDATE_HANDOFF_PHASE_READY)) {
+                    return false;
+                }
             }
             files.push_back(iterator->path());
         }
@@ -522,11 +624,15 @@ bool delete_known_staging_directory(const fs::path& staging) noexcept {
 
 bool staging_is_safe_orphan(const fs::path& staging) {
     DWORD owner_pid = 0u;
+    sao_update_handoff_v1_t ready{};
+    const fs::path ready_path = staging / kHelperReadyMarker;
+    const bool ready_absent = path_is_absent(ready_path);
     if (!parse_staging_owner_pid(staging, owner_pid) || !staging_is_old_enough(staging) ||
         !owner_process_is_gone(owner_pid) || !exact_staging_owner_marker(staging) ||
         !path_is_absent(staging / kStagingPreservationMarker) ||
-        (!path_is_absent(staging / L"helper.ready") &&
-         !exact_marker_file(staging / L"helper.ready", kHelperReadyMarkerBytes))) {
+        (!ready_absent &&
+         (!read_handoff_record(ready_path, ready) ||
+          ready.phase != SAO_UPDATE_HANDOFF_PHASE_READY))) {
         return false;
     }
     return true;
@@ -607,6 +713,141 @@ bool write_staging_preservation_marker(const fs::path& staging) noexcept {
     }
 }
 
+bool acknowledge_completed_staging(const fs::path& staging, DWORD restart_owner_pid,
+                                   std::string_view expected_version,
+                                   std::string_view expected_sha256) noexcept {
+    try {
+        if (!exact_staging_owner_marker(staging))
+            return false;
+        const fs::path completion = staging / kHelperCompletionMarker;
+        if (path_is_absent(completion)) {
+            DWORD legacy_owner_pid = 0u;
+            const fs::path archive = staging / L"SaoAutoUpdate.archive";
+            if (expected_version != SAO_LAUNCHER_VERSION ||
+                !path_is_absent(staging / kHelperReadyMarker) ||
+                !path_is_absent(staging / kStagingPreservationMarker) ||
+                !parse_staging_owner_pid(staging, legacy_owner_pid) ||
+                !owner_process_is_gone(legacy_owner_pid) ||
+                sao_updater_verify_file_sha256_w(
+                    archive.c_str(), std::string(expected_sha256).c_str()) != SAO_OK) {
+                return false;
+            }
+            const ULONGLONG legacy_deadline = GetTickCount64() + kHelperCompletionTimeoutMs;
+            do {
+                if (delete_known_staging_directory(staging))
+                    return true;
+                Sleep(25u);
+            } while (GetTickCount64() < legacy_deadline);
+            return false;
+        }
+
+        const ULONGLONG deadline = GetTickCount64() + kHelperCompletionTimeoutMs;
+        sao_update_handoff_v1_t record{};
+        for (;;) {
+            if (!read_handoff_record(completion, record) ||
+                record.restart_pid != restart_owner_pid) {
+                return false;
+            }
+            const std::size_t version_length = bounded_length(
+                record.version, SAO_UPDATE_HANDOFF_VERSION_CAPACITY);
+            const std::size_t sha_length = bounded_length(
+                record.sha256, SAO_UPDATE_HANDOFF_SHA256_CAPACITY);
+            if (expected_version != SAO_LAUNCHER_VERSION ||
+                std::string_view(record.version, version_length) != expected_version ||
+                !equal_ascii_ignore_case(
+                    std::string_view(record.sha256, sha_length), expected_sha256)) {
+                return false;
+            }
+            if (record.phase == SAO_UPDATE_HANDOFF_PHASE_COMPLETE)
+                break;
+            if (record.phase != SAO_UPDATE_HANDOFF_PHASE_RESTARTING ||
+                record.status != SAO_UPDATE_HANDOFF_STATUS_PENDING ||
+                GetTickCount64() >= deadline) {
+                return false;
+            }
+            Sleep(25u);
+        }
+
+        if (record.status != 0u) {
+            (void)write_staging_preservation_marker(staging);
+            return false;
+        }
+        while (!owner_process_is_gone(record.helper_pid)) {
+            if (GetTickCount64() >= deadline)
+                return false;
+            Sleep(25u);
+        }
+        return delete_known_staging_directory(staging);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool has_completed_update_candidate() noexcept {
+    try {
+        const fs::path root = user_staging_root();
+        const DWORD attributes = GetFileAttributesW(root.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u ||
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u) {
+            return false;
+        }
+        std::error_code error;
+        std::size_t count = 0u;
+        for (fs::directory_iterator iterator(root, error);
+             iterator != fs::directory_iterator(); iterator.increment(error)) {
+            if (error || ++count > kMaximumStagingDirectories)
+                return false;
+            const fs::path& staging = iterator->path();
+            const DWORD staging_attributes = GetFileAttributesW(staging.c_str());
+            if (staging_attributes == INVALID_FILE_ATTRIBUTES ||
+                (staging_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u ||
+                (staging_attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u ||
+                !exact_staging_owner_marker(staging)) {
+                continue;
+            }
+            if (!path_is_absent(staging / kHelperCompletionMarker) ||
+                (!path_is_absent(staging / L"SaoAutoUpdate.archive") &&
+                 path_is_absent(staging / kHelperReadyMarker) &&
+                 path_is_absent(staging / kStagingPreservationMarker))) {
+                return true;
+            }
+        }
+    } catch (...) {
+    }
+    return false;
+}
+
+bool acknowledge_completed_updates(DWORD restart_owner_pid,
+                                    std::string_view expected_version,
+                                    std::string_view expected_sha256) noexcept {
+    try {
+        if (restart_owner_pid == 0u)
+            return false;
+        const fs::path root = user_staging_root();
+        const DWORD attributes = GetFileAttributesW(root.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u ||
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u) {
+            return false;
+        }
+        std::error_code error;
+        std::size_t count = 0u;
+        bool acknowledged = false;
+        for (fs::directory_iterator iterator(root, error);
+             iterator != fs::directory_iterator(); iterator.increment(error)) {
+            if (error || ++count > kMaximumStagingDirectories)
+                return acknowledged;
+            acknowledged = acknowledge_completed_staging(
+                iterator->path(), restart_owner_pid, expected_version, expected_sha256) ||
+                acknowledged;
+        }
+        return acknowledged;
+    } catch (...) {
+    }
+    return false;
+}
+
 class StagingCleanup {
   public:
     explicit StagingCleanup(fs::path path) : path_(std::move(path)) {}
@@ -648,8 +889,15 @@ std::wstring quote_argument(std::wstring_view value) {
     return result;
 }
 
-bool exact_ready_marker(const fs::path& marker) noexcept {
-    return exact_marker_file(marker, kHelperReadyMarkerBytes);
+bool exact_ready_marker(const fs::path& marker, std::string_view version,
+                        std::string_view sha256, DWORD parent_pid,
+                        DWORD helper_pid) noexcept {
+    sao_update_handoff_v1_t record{};
+    return read_handoff_record(marker, record) &&
+        record.phase == SAO_UPDATE_HANDOFF_PHASE_READY &&
+        record.status == SAO_UPDATE_HANDOFF_STATUS_PENDING &&
+        record.restart_pid == 0u &&
+        handoff_matches(record, version, sha256, parent_pid, helper_pid);
 }
 
 bool set_job_kill_on_close(HANDLE job, bool enabled) noexcept {
@@ -716,8 +964,9 @@ bool post_launcher_quit(DWORD launcher_thread_id, HANDLE cancel_event) noexcept 
 
 bool launch_helper(const fs::path& helper_path, const fs::path& archive_path,
                    const fs::path& target_dir, const fs::path& restart_exe, std::string_view sha256,
-                   DWORD replacement_owner_pid, bool bootstrap_parent, DWORD launcher_thread_id,
-                   HANDLE cancel_event, bool* preserve_staging_out) noexcept {
+                   std::string_view version, DWORD replacement_owner_pid,
+                   bool bootstrap_parent, DWORD launcher_thread_id, HANDLE cancel_event,
+                   bool* preserve_staging_out) noexcept {
     if (preserve_staging_out != nullptr)
         *preserve_staging_out = false;
     if (is_cancelled(cancel_event))
@@ -737,6 +986,8 @@ bool launch_helper(const fs::path& helper_path, const fs::path& archive_path,
     command += quote_argument(restart_exe.wstring());
     command += L" --sha256 ";
     command += quote_argument(std::wstring(sha256.begin(), sha256.end()));
+    command += L" --version ";
+    command += quote_argument(std::wstring(version.begin(), version.end()));
 
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
     if (job == nullptr)
@@ -777,7 +1028,9 @@ bool launch_helper(const fs::path& helper_path, const fs::path& archive_path,
             const DWORD process_result = WaitForSingleObject(process.hProcess, 50u);
             if (process_result == WAIT_OBJECT_0 || process_result == WAIT_FAILED)
                 break;
-            if (process_result == WAIT_TIMEOUT && exact_ready_marker(ready_marker)) {
+            if (process_result == WAIT_TIMEOUT &&
+                exact_ready_marker(ready_marker, version, sha256,
+                                   replacement_owner_pid, process.dwProcessId)) {
                 ready = post_launcher_quit(launcher_thread_id, cancel_event) &&
                         set_job_kill_on_close(job, false);
                 break;
@@ -798,9 +1051,7 @@ bool launch_helper(const fs::path& helper_path, const fs::path& archive_path,
 bool run_auto_update(const WorkerContext& context) noexcept {
     try {
         if (is_cancelled(context.cancel_event) || !context.configuration.enabled ||
-            context.base_dir.empty() || context.exe_path.empty() ||
-            context.configuration.manifest_url != kNativeUpdateManifestUrl ||
-            !is_exact_json_url(context.configuration.manifest_url)) {
+            context.base_dir.empty() || context.exe_path.empty()) {
             return false;
         }
         prune_staging_directories();
@@ -808,39 +1059,20 @@ bool run_auto_update(const WorkerContext& context) noexcept {
             return false;
 
         sao_updater_manifest_t manifest{};
-        if (sao_updater_fetch_manifest_pinned(context.configuration.manifest_url.c_str(),
-                                              context.configuration.server_tls_spki_sha256.data(),
-                                              context.configuration.server_tls_spki_sha256.size(),
-                                              &manifest) != SAO_OK ||
-            is_cancelled(context.cancel_event)) {
+        if (!fetch_validated_manifest(context.configuration, context.cancel_event, manifest)) {
             return false;
         }
 
         const std::size_t version_length =
             bounded_length(manifest.version, kManifestVersionCapacity);
-        const std::size_t url_length = bounded_length(manifest.url, kManifestUrlCapacity);
         const std::size_t sha256_length = bounded_length(manifest.sha256, kManifestSha256Capacity);
-        if (version_length == 0u || version_length >= kManifestVersionCapacity) {
-            return false;
-        }
-        if (url_length == 0u && sha256_length == 0u && manifest.size == 0u) {
-            return false;
-        }
-        if (url_length == 0u || url_length >= kManifestUrlCapacity ||
-            sha256_length != kManifestSha256Capacity - 1u) {
-            return false;
-        }
 
         const std::string_view version(manifest.version, version_length);
-        const std::string_view download_url(manifest.url, url_length);
         const std::string_view sha256(manifest.sha256, sha256_length);
         const std::string version_copy(version);
-        if (sao_updater_compare_semver(version_copy.c_str(), SAO_LAUNCHER_VERSION) <= 0 ||
-            !same_origin(context.configuration.manifest_url, download_url) || !is_sha256(sha256) ||
-            manifest.size == 0u || manifest.size > kMaximumUpdateBytes ||
-            is_cancelled(context.cancel_event)) {
+        (void)acknowledge_completed_updates(context.replacement_owner_pid, version, sha256);
+        if (sao_updater_compare_semver(version_copy.c_str(), SAO_LAUNCHER_VERSION) <= 0)
             return false;
-        }
 
         const fs::path staging = create_staging_directory();
         if (staging.empty())
@@ -872,8 +1104,9 @@ bool run_auto_update(const WorkerContext& context) noexcept {
             return false;
         }
         bool preserve_staging = false;
-        if (launch_helper(helper, archive, target, restart, sha256, context.replacement_owner_pid,
-                          context.bootstrap_parent, context.launcher_thread_id,
+        if (launch_helper(helper, archive, target, restart, sha256, version,
+                  context.replacement_owner_pid, context.bootstrap_parent,
+                  context.launcher_thread_id,
                           context.cancel_event, &preserve_staging)) {
             cleanup.defer_cleanup();
             return true;
@@ -893,6 +1126,36 @@ unsigned __stdcall auto_update_worker(void* raw_context) noexcept {
 }
 
 } // namespace
+
+bool acknowledgeCompletedAutoUpdate(const UpdateProviderConfiguration& configuration,
+                                    const std::wstring& base_dir,
+                                    const std::wstring& exe_path) noexcept {
+    try {
+        if (!configuration.enabled || base_dir.empty() || exe_path.empty() ||
+            !exact_install_entry(base_dir, exe_path) || !has_completed_update_candidate()) {
+            return false;
+        }
+        bool bootstrap_parent = false;
+        const DWORD restart_owner_pid = replacement_owner_pid(base_dir, bootstrap_parent);
+        if (restart_owner_pid == 0u)
+            return false;
+
+        sao_updater_manifest_t manifest{};
+        if (!fetch_validated_manifest(configuration, nullptr, manifest))
+            return false;
+        const std::size_t version_length =
+            bounded_length(manifest.version, kManifestVersionCapacity);
+        const std::size_t sha256_length =
+            bounded_length(manifest.sha256, kManifestSha256Capacity);
+        const std::string_view version(manifest.version, version_length);
+        const std::string_view sha256(manifest.sha256, sha256_length);
+        if (version != SAO_LAUNCHER_VERSION)
+            return false;
+        return acknowledge_completed_updates(restart_owner_pid, version, sha256);
+    } catch (...) {
+        return false;
+    }
+}
 
 bool startAutoUpdate(UpdateProviderConfiguration configuration, std::wstring base_dir,
                      std::wstring exe_path, DWORD launcher_thread_id, HANDLE* cancel_event_out,

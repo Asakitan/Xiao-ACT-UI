@@ -14,6 +14,8 @@
 #include <winhttp.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +31,7 @@ namespace {
 
 using SteadyClock = std::chrono::steady_clock;
 constexpr size_t kMaximumLicenseRequestBytes = 1024u * 1024u;
+std::atomic<uint32_t> g_http_timeout_ms{12000U};
 
 using WinHttpOpenFn = HINTERNET(WINAPI*)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
 using WinHttpConnectFn = HINTERNET(WINAPI*)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
@@ -397,7 +400,8 @@ int32_t httpTransport(const char* endpoint,
         return SAO_ERR_INVALID_ARGUMENT;
     }
     const auto request_size = static_cast<DWORD>(request_length);
-    const auto deadline = now() + std::chrono::seconds(12);
+    const auto deadline = now() + std::chrono::milliseconds(
+        g_http_timeout_ms.load(std::memory_order_relaxed));
     const auto& api = winHttpApi();
     const int wide_size = MultiByteToWideChar(
         CP_UTF8, MB_ERR_INVALID_CHARS, endpoint, -1, nullptr, 0);
@@ -570,7 +574,6 @@ int32_t httpTransport(const char* endpoint,
 
 const char* tierName(sao_license_tier_t tier) {
     switch (tier) {
-        case SAO_LICENSE_TIER_FREE: return "free";
         case SAO_LICENSE_TIER_PAID: return "pro";
         case SAO_LICENSE_TIER_INTERNAL: return "team";
         default: return "";
@@ -700,6 +703,27 @@ void refresh_entitlement_mask() {
 
 } // namespace
 
+extern "C" int32_t sao_license_provider_set_http_timeout_ms(uint32_t timeout_ms) {
+    if (timeout_ms == 0U || timeout_ms > 3600000U) return SAO_ERR_INVALID_ARGUMENT;
+    g_http_timeout_ms.store(timeout_ms, std::memory_order_relaxed);
+    return SAO_OK;
+}
+
+extern "C" int32_t sao_license_provider_initialize(void) {
+    try {
+        const auto configuration =
+            sao::launcher::launcherProviderConfigurationSnapshot().license;
+        if (!configuration.enabled || configuration.endpoint.empty()) {
+            return SAO_LICENSE_ERR_NOT_INITIALIZED;
+        }
+        sao_license_client_set_provider(&provider, nullptr);
+        sao_license_client_set_http_transport(&httpTransport, nullptr);
+        return sao_license_sdk_init();
+    } catch (...) {
+        return SAO_STATUS_LICENSE_INVALID;
+    }
+}
+
 extern "C" sao_status_t sao_license_verify(sao_license_result* out) {
     if (out == nullptr) return SAO_STATUS_INVALID_ARGUMENT;
     *out = {};
@@ -711,11 +735,14 @@ extern "C" sao_status_t sao_license_verify(sao_license_result* out) {
                   "license endpoint unavailable", _TRUNCATE);
         return SAO_STATUS_LICENSE_INVALID;
     }
-    sao_license_client_set_provider(&provider, nullptr);
-    sao_license_client_set_http_transport(&httpTransport, nullptr);
-    int32_t status = sao_license_sdk_init();
+    int32_t status = sao_license_provider_initialize();
     if (status == SAO_OK) status = sao_license_sdk_refresh();
-    if (status == SAO_LICENSE_ERR_NO_TOKEN) status = SAO_OK;
+    if (status == SAO_LICENSE_ERR_NO_TOKEN) {
+        strncpy_s(out->error_msg, sizeof(out->error_msg),
+                  "no license token; activate with sao_license_activate_cli first",
+                  _TRUNCATE);
+        return SAO_STATUS_LICENSE_INVALID;
+    }
     sao_license_tier_t tier = SAO_LICENSE_TIER_UNKNOWN;
     uint64_t expiry_ms = 0;
     std::array<uint8_t, 32> hwid{};
@@ -747,7 +774,8 @@ extern "C" sao_status_t sao_license_verify(sao_license_result* out) {
         out->hwid_hash[index * 2] = digits[hwid[index] >> 4U];
         out->hwid_hash[index * 2 + 1] = digits[hwid[index] & 0x0fU];
     }
-    if (tier != SAO_LICENSE_TIER_FREE &&
+    if ((tier == SAO_LICENSE_TIER_PAID ||
+         tier == SAO_LICENSE_TIER_INTERNAL) &&
         configuration.heartbeat_interval_ms != 0 &&
         sao_license_client_start_heartbeat(
             configuration.heartbeat_interval_ms) != SAO_OK) {
@@ -769,6 +797,7 @@ extern "C" sao_status_t sao_license_shutdown(void) {
     sao_license_sdk_shutdown();
     sao_license_client_set_http_transport(nullptr, nullptr);
     sao_license_client_set_provider(nullptr, nullptr);
+    g_http_timeout_ms.store(12000U, std::memory_order_relaxed);
     return SAO_STATUS_OK;
 }
 
@@ -919,8 +948,8 @@ extern "C" int32_t sao_license_provider_auto_start(void) {
         if (sao_license_sdk_get_tier(&tier) != SAO_OK) {
             return SAO_STATUS_LICENSE_INVALID;
         }
-        if (tier != SAO_LICENSE_TIER_UNKNOWN &&
-            tier != SAO_LICENSE_TIER_FREE &&
+        if ((tier == SAO_LICENSE_TIER_PAID ||
+             tier == SAO_LICENSE_TIER_INTERNAL) &&
             configuration.heartbeat_interval_ms != 0 &&
             sao_license_client_start_heartbeat(
                 configuration.heartbeat_interval_ms) != SAO_OK) {

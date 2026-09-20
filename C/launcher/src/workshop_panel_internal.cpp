@@ -795,7 +795,7 @@ class Owner::Impl final {
         {
             std::lock_guard lock(mutex_);
             if (!online_ && panel_ == nullptr)
-                return SAO_STATUS_ERR_NOT_INITIALIZED;
+                return SAO_STATUS_OK;
             if (retiring_)
                 return SAO_UI_PANEL_STATUS_ERR_BUSY;
             panel = panel_;

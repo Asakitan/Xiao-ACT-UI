@@ -6,6 +6,39 @@ with system-only imports. The original launcher remains the logical CMake target
 authenticated encrypted runtime bundle. Both processes are native and contain no
 CPython runtime.
 
+## Startup diagnostics and native dispatch
+
+Product startup, including Debug, selects the native lifecycle without loading
+historical rollout/dual-run configuration. It does not hand off to the retired
+Python application on startup failure. Compatibility APIs and the explicit
+acceptance-only dispatch remain separate; optional Python plugins are unchanged.
+
+The bundle target also stages its authenticated output into
+`bin/<config>/runtime/ff22701a59858ebf`, beside the build bootstrap. `SaoBootstrap`
+depends on that target and, when present, `SaoRtIoHelper`, whose existing build
+steps stage its executable, identity sidecar and runtime dependencies. Neither
+bundle inputs nor helper dependencies lead back to the bootstrap in the static
+source graph. Install still consumes the canonical `runtime-bundle` output.
+A bare bootstrap without this file exits 10 before payload launch.
+
+`--log-level=trace` reports launcher failure stages. The existing
+`SAO_LAUNCHER_STARTUP_DIAGNOSTICS=1` additionally reports helper READY details on
+stderr. Session-63 observed helper `-20/stage16/reason26/error31`, a process
+mitigation failure, distinct from the bundle layout failure and Python handoff.
+The strict-handle request now sets both required strict-handle bits. A standalone
+Win32 observation still found ASLR request 0x0F read back as 0x0B while the host's
+BottomUp/HighEntropy settings were OFF; that observation does not establish a
+unique root cause. These source fixes neither alter host settings nor weaken
+readback requirements. After the user restored the original local toolchain shim
+and JSON config, all presets reconfigured with explicit path overrides.
+Debug/RelWithDebInfo builds and both optimized release acceptances passed;
+all three ship trees were refreshed. Six build/ship `--version` queries exit 0
+with `0.2.1`, and staged bundle hashes match the canonical outputs.
+Fresh ordinary launches still exit 4: Debug now reaches provider installation but
+reports `-4080/stage8/reason22/error6667`; Release/Hardened retain the mitigation
+failure above. Host settings and recovery records were not changed. See
+`../docs/session-log/session-63-startup-diagnostics.md`.
+
 ## Public bootstrap lifecycle
 
 1. Resolve the install root from the bootstrap module path and open
@@ -32,6 +65,47 @@ the payload or any DLL.
 The updater may explicitly break away from the job, waits for the outer bootstrap
 PID, and restarts the installed `SaoAuto.exe`. The bundle handle is closed before
 payload launch so the update transaction can replace it.
+
+## Native auto-update lifecycle
+
+Update downloads are owned under `%LocalAppData%/SaoAuto/update-staging/run-*`.
+The launcher binds each run to an exact owner marker, downloaded archive,
+manifest version/SHA-256, installed outer entry, helper process, and outer
+bootstrap parent identity; unknown leaves, reparse paths, malformed markers, or
+identity drift fail closed.
+
+Launcher and helper share `sao_update_handoff_v1_t`, a fixed 192-byte ABI-v1
+record containing phase/status, parent/helper/restart PIDs, version, SHA-256, and
+zeroed reserved bytes. `helper.ready` publishes `READY/PENDING` before ownership
+transfer. After the installed entry passes its bounded `--version` probe, the
+helper creates the real outer bootstrap suspended; `helper.complete` publishes
+`RESTARTING/PENDING` before resume and terminal `COMPLETE/status` after commit,
+transaction cleanup, and marker removal.
+Every read revalidates exact file/struct size, ABI, legal phase, nonzero
+parent/helper PIDs, zero flags/reserved, and version/SHA shape. READY additionally
+matches the expected parent/helper PIDs and zero restart PID. Modern completion
+instead matches the restarted outer-bootstrap PID and current version/SHA,
+allows only `RESTARTING/PENDING` before `COMPLETE`, then requires status zero and
+helper exit; it does not exact-match completion parent/helper PIDs to old READY.
+
+The lifecycle is bounded: READY admission is five minutes, launcher-owned helper
+termination is two seconds, restarted-launcher completion acknowledgement is thirty
+seconds, helper parent exit is two minutes, and the installed-entry `--version` health
+probe is thirty seconds. A failed probe rolls back replaced leaves,
+removes transaction-created leaves, preserves files absent from the package, and
+publishes the terminal failure status. A successful transaction commits the
+overlay and leaves the restarted product to acknowledge completion.
+
+`App::run()` calls `acknowledgeCompletedAutoUpdate()` after working-directory and
+provider configuration but before license, security, platform, or plugin bring-up
+can fail. Modern completion must match the restarted outer-bootstrap PID and
+current version/SHA; helpers that predate `helper.complete` are reconciled only
+when the exact owner marker is valid, the old owner is gone, READY/preservation
+markers are absent, the archive SHA/current version match, and all leaves are known.
+The production `0.2.1` migration
+from a genuine `0.2.0` launcher/helper completed with exit 0, matched the current
+ship bootstrap hash, and left no staging, transaction, helper, or fixture process
+residue.
 
 ## Developer Preview
 
@@ -100,6 +174,15 @@ Publication preserves `prepare -> UI -> commit/resync`: malformed or missing
 root routes fail before the UI sink, a UI failure does not consume route
 tokens, and a commit race resynchronizes the winner snapshot. Script hosts do
 not receive route tokens and never call Entity UI directly.
+
+The loader catalog is consumed only while overall plugin runtime authority is `ready`.
+For overall non-ready/degraded runtime state, publication substitutes an empty catalog,
+closes stale invocation state, clears the previous revision/content token and
+published catalog, and republishes the built-in fail-closed surface. Built-in
+roots remain exactly `Control`, `Tools`, `Plugins`, `Skins`, and `About`; the
+`Control` root independently owns exactly ten child rows. Python runtime status
+(`READY`, `UNCONFIGURED`, `UNAVAILABLE`, or `HOST_UNAVAILABLE`) is projected
+separately; Python degradation alone does not set overall plugin degradation.
 
 ## File layout
 
@@ -196,24 +279,44 @@ meta-target and the corresponding pipeline step is compiled out.
 `sao_runtime_pack`, `sao_runtime_bundle`, `sao_runtime_bundle_audit`, and
 `sao_release_acceptance`.
 
-The complete Debug build passes and its ship was refreshed to the 22-PE/76-file
-direct surface. RelWithDebInfo and Hardened retain their earlier v4.17 acceptance
-snapshots; their RTIO driver bundle predates the direct R5 asset.
+Session-63 restored the local build inputs and refreshed all three ship trees.
+Debug/RelWithDebInfo full builds and both optimized release acceptances passed;
+Hardened was built through the acceptance target's product dependency closure,
+not a separate full `ALL_BUILD`. Debug ship staging also passed. Each ship has
+22 direct PEs / 76 files, and all six build/ship version probes returned
+`SaoAuto 0.2.1` with exit 0. Current bundle sizes and SHA-256 are recorded in
+`../docs/session-log/session-63-startup-diagnostics.md`; they agree across each
+preset's canonical, adjacent and ship copies. Ordinary startup still exits 4
+in every preset, and optimized C4702 warnings remain.
+
+The earlier session-58b RelWithDebInfo release acceptance produced the
+22-PE/76-file direct surface used for the production `0.2.1` package. That package
+is 62,162,440 bytes with SHA-256
+`1dab8e44cee5a6c3738d7d4da45c15b5566ffbf1ce8c812f6a6be61fa9c887f1`;
+its public bootstrap, verified after the live migration, has SHA-256
+`cf762fff390249698d18ed504b57fa6794bc7758a922885905689eb79df25670`.
+The table below preserves earlier configuration snapshots, not the refreshed
+session-63 bundle identities or the production archive identity. Local rebuilds
+are not evidence of a newly published archive.
 The release gate runs `sao_runtime_pack --verify-inputs` to match the current
 17 plaintext PEs against all 21 authenticated leaf/destination/payload/size/hash
 records. Bootstrap keeps exact extracted-file guards, rechecks every published
 file against the authenticated manifest, and owns helper cleanup before lock release.
 The v4.17 `SaoAuto.exe --version` probes established verify, decrypt, normal
-Windows payload launch, exit-code propagation, and cleanup. The session-34 Debug
-bundle has not yet rerun key-layout or `--version` after its asset refresh.
+Windows payload launch, exit-code propagation, and cleanup. Session-58b adds a
+real old-client production update followed by `SaoAuto 0.2.1` exit 0 and an empty
+update-staging/process census. At the session-34 cutoff, Debug had not rerun
+key-layout or `--version` after its asset refresh; session-63 version results
+above apply to the newly rebuilt bundle, not that historical file.
 
-| Configuration | Bootstrap | Runtime bundle |
+| Historical configuration snapshot | Bootstrap | Runtime bundle |
 | --- | --- | --- |
 | Debug | 2,445,312 bytes; SHA-256 `c3cc5bfb4f2d13658833aeb3066e784caa9963ab4b8dc3299b402d0e4b5fe455` | 74,635,856 bytes; SHA-256 `4046f800eff3c3650f5bdc090c9a36980428b6e8b9557f5f922318bbea410eb1` |
 | RelWithDebInfo | 323,072 bytes; SHA-256 `165aad5f2fdb44f2c016bbe1461f13cb5baaeba355467a62f37e5efdd4e6b48a` | 26,625,616 bytes; SHA-256 `6ffa6a8493850d10a7d4e933a9fe5c7d7eaaf37d0634c9c6608dacec421df4d3` |
 | Hardened | 326,656 bytes; SHA-256 `24984ded8ed990ef6aca619c9a7a95880187059402481696ba848518491af376` | 26,861,648 bytes; SHA-256 `32d3cb510387bbf51764723826680734431215850fcc979a6dcafa3a5306b82c` |
 
-The refreshed `windows-debug/ship` directory matches its current build bootstrap
-and bundle hashes, has the 22-PE/76-file surface, and passed the five-driver bundle
-audit. Release and Hardened require fresh acceptance before they can carry the
-direct-R5 artifact claim.
+The session-34 Debug ship matched that historical build's bootstrap/bundle hashes
+and passed its five-driver bundle audit. Session-63 has since refreshed Debug and
+completed fresh Release/Hardened acceptance; the former pending-Hardened claim
+is historical. These packaging results do not establish ordinary startup or
+driver retirement; the final empty process census proves process absence only.

@@ -1023,6 +1023,13 @@ struct Owner::Impl {
         const sao_status_t owner_status = require_owner_thread();
         if (owner_status != SAO_STATUS_OK)
             return owner_status;
+        {
+            std::lock_guard lock(mutex);
+            if (panel == nullptr && body == nullptr)
+                return SAO_STATUS_OK;
+            if (panel == nullptr || body == nullptr)
+                return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
         return publish_cached_state(false);
     }
 

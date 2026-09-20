@@ -335,7 +335,7 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
 
     const bool topmost_ready = authority.topmost_status == TopmostPublicationStatus::ready;
     const bool controls_ready = authority.controls == ControlPublicationStatus::ready;
-    const std::array<SaoUiMenuItem, 11> control_rows{{
+    const std::array<SaoUiMenuItem, 10> control_rows{{
         {topmost_ready ? (topmost ? "置顶: ON" : "置顶: OFF")
                        : "置顶: DEGRADED (平台 authority 不可观测)",
          "",
@@ -844,8 +844,8 @@ sao_status_t refresh(sao_ui_entity_shell_handle_t shell,
     try {
         entity_provider_catalog::OwnedEntityProviderCatalog catalog;
         sao_status_t status = SAO_STATUS_OK;
-        const bool plugin_runtime_degraded = state.builtin_authority.plugin_runtime ==
-                                             PluginRuntimePublicationStatus::degraded_internal;
+        const bool plugin_runtime_degraded =
+            state.builtin_authority.plugin_runtime != PluginRuntimePublicationStatus::ready;
         if (plugin_runtime_degraded) {
             catalog = {};
         } else {

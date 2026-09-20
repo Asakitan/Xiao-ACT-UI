@@ -9,12 +9,12 @@
 
 #define SAO_VER_MAJOR 0
 #define SAO_VER_MINOR 2
-#define SAO_VER_PATCH 0
+#define SAO_VER_PATCH 1
 #define SAO_VER_BUILD 0
 
-#define SAO_VER_STRING     "0.2.0.0"
-#define SAO_VER_FILE       0, 2, 0, 0
-#define SAO_VER_PRODUCT    0, 2, 0, 0
+#define SAO_VER_STRING     "0.2.1.0"
+#define SAO_VER_FILE       0, 2, 1, 0
+#define SAO_VER_PRODUCT    0, 2, 1, 0
 
 #define SAO_VER_COMPANY    "SAO Auto Project"
 #define SAO_VER_PRODUCT_NM "SAO Auto"

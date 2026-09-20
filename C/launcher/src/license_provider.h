@@ -13,9 +13,7 @@
 //   launcher/include/sao/launcher/init_pipeline.h — sao_status_t
 //   license/sdk/include/sao/license/sdk/license_types.h — SAO_LICENSE_FEATURE_*
 //
-// Concurrency: entitlement callbacks run on the license client's worker
-// thread; they must not block, own locks, or call back into the license
-// surface.
+// Callbacks run on the notifying caller or heartbeat worker; avoid blocking.
 
 #include <stdint.h>
 
@@ -37,8 +35,7 @@ typedef enum sao_license_feature_id_t {
 
 // Entitlement-change callback. `new_mask` is a bitmask of the
 // sao_license_feature_id_t ids currently entitled; `user_data` is the
-// opaque value passed at subscribe time. Called on the license client's
-// worker thread — must not block.
+// opaque value passed at subscribe time.
 typedef void (*sao_license_entitlement_changed_fn)(
     uint32_t new_mask, void* user_data);
 
@@ -75,6 +72,12 @@ typedef struct sao_license_provider_status {
 
 // Fill `*out` with the current provider status. Returns 0 on success.
 int32_t sao_license_provider_status(sao_license_provider_status_t* out);
+
+// Installs pinned transport/config and loads local state without remote verification.
+int32_t sao_license_provider_initialize(void);
+
+// Applies to subsequent requests; 1..3600000 milliseconds, default 12000.
+int32_t sao_license_provider_set_http_timeout_ms(uint32_t timeout_ms);
 
 // Start the provider independently of the init pipeline gate. Installs
 // the WinHTTP transport + config regardless of whether the configuration

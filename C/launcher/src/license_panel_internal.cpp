@@ -185,8 +185,6 @@ std::string license_status_description(int32_t status) {
 
 std::string tier_name(sao_license_tier_t tier) {
     switch (tier) {
-    case SAO_LICENSE_TIER_FREE:
-        return "free";
     case SAO_LICENSE_TIER_PAID:
         return "pro";
     case SAO_LICENSE_TIER_INTERNAL:
@@ -302,7 +300,6 @@ json status_strip_node(std::string label, std::string message, std::string_view 
 }
 
 std::string tier_display(std::string_view tier) {
-    if (tier == "free") return "Free / 免费";
     if (tier == "pro") return "Pro / 专业";
     if (tier == "team") return "Team / 团队";
     return "Unknown / 未知";
@@ -400,14 +397,12 @@ std::string build_panel_spec(const Snapshot& snapshot) {
 
     json activation = json::array();
     activation.push_back(text_node("Activation key / 激活码", "muted", 22));
-    activation.push_back(text_node("已有激活码可在下方输入；也可以选择使用免费版。", "muted", 34));
+    activation.push_back(text_node("请在下方输入激活码完成授权激活。", "muted", 34));
     activation.push_back(input_node("license.key_input", snapshot.license_key, kKeyInputAction));
     json activation_actions = json::array();
     activation_actions.push_back(button_node("license.activate", snapshot.busy ? "激活中…" : "激活",
                                              kActivateAction, json::object(), "primary",
                                              snapshot.busy));
-    activation_actions.push_back(button_node("license.skip", "使用免费版", kSkipAction,
-                                             json::object(), "ghost", snapshot.busy));
     activation.push_back(row_node(std::move(activation_actions)));
     if (snapshot.busy)
         activation.push_back(text_node("Verifying with license server... / 正在验证授权服务器...", "warn", 22));
@@ -1425,7 +1420,7 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
             return publish();
         }
 
-        if (action_id == kActivateAction || action_id == kSkipAction) {
+        if (action_id == kActivateAction) {
             std::string key;
             {
                 std::lock_guard lock(state_->mutex);
@@ -1434,16 +1429,7 @@ sao_status_t Owner::dispatch_action(std::string_view action_id,
                 key = state_->license_key;
             }
             sao_status_t action_status = SAO_STATUS_OK;
-            if (action_id == kSkipAction) {
-                std::lock_guard lock(state_->mutex);
-                state_->activated = true;
-                state_->tier = "free";
-                state_->expiry_ms = 0U;
-                state_->status_text = "Skipped - using free tier.";
-                state_->error_text.clear();
-                state_->last_status = SAO_STATUS_OK;
-                state_->publish_pending = true;
-            } else if (key.empty()) {
+            if (key.empty()) {
                 std::lock_guard lock(state_->mutex);
                 state_->error_text = "Please enter an activation key.";
                 state_->status_text.clear();

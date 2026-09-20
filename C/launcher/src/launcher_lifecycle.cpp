@@ -81,10 +81,17 @@ sao_status_t prepareLauncherLifecycle(
         return SAO_STATUS_OK;
     }
 
+#if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
     const sao_status_t config_status =
         sao_launcher_dual_run_config_v2_load(&decision.dual_config_v2);
     if (config_status != SAO_STATUS_OK)
         return config_status;
+#else
+    // Native products must not dispatch to the retired Python application
+    // because an old rollout/dual-run file is still present on this machine.
+    sao_launcher_dual_run_config_v2_default(&decision.dual_config_v2);
+    decision.dual_config_v2.legacy.mode = SAO_DUAL_RUN_MODE_CPP_ONLY;
+#endif
     decision.dual_config = decision.dual_config_v2.legacy;
     LARGE_INTEGER started{};
     if (QueryPerformanceCounter(&started)) {
@@ -99,12 +106,13 @@ sao_status_t prepareLauncherLifecycle(
         return SAO_STATUS_OK;
     }
 
-    std::array<char, 128> anon_id{};
+    [[maybe_unused]] std::array<char, 128> anon_id{};
 #if defined(SAO_LAUNCHER_HAS_TELEMETRY_CLIENT)
     decision.telemetry_started = initializeTelemetry(anon_id);
 #endif
 
     decision.selected_mode = decision.dual_config.mode;
+#if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
     const sao_status_t status = sao_rollout_dispatch(
         anon_id[0] ? anon_id.data() : nullptr,
         &decision.dual_config, &decision.selected_mode);
@@ -117,6 +125,7 @@ sao_status_t prepareLauncherLifecycle(
 #endif
         return status;
     }
+#endif
 
     decision.dual_config.mode = decision.selected_mode;
     decision.dual_config_v2.legacy.mode = decision.selected_mode;
@@ -165,7 +174,9 @@ void completeLauncherLifecycle(
                 decision.selected_mode, exit_code,
                 failure_hint ? failure_hint : "launcher");
         }
+#if defined(SAO_LAUNCHER_ACCEPTANCE_TESTING)
         (void)sao_rollout_check_auto_retreat(nullptr);
+#endif
         decision.active = false;
     }
 

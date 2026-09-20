@@ -2,6 +2,7 @@
 
 #include "sao/core/status.h"
 
+#include <atomic>
 #include <cstdint>
 
 namespace sao::launcher::entity_builtin_action {
@@ -62,7 +63,9 @@ struct Authority {
 
 struct State {
     bool topmost = false;
-    bool streaming_mode = false;
+    // Written by SDK/plugin threads via apply_streaming_mode while the owner
+    // thread reads it inside authorization_status — must be atomic.
+    std::atomic<bool> streaming_mode = false;
     bool streaming_entitled = false;
     bool controls_degraded = false;
     sao_status_t last_status = SAO_STATUS_OK;

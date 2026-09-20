@@ -27,8 +27,24 @@ extern "C" sao_status_t sao_launcher_settings_panel_set_owner(void* owner_opaque
 // thread; foreign calls latch a pending flag for the next owner-thread pass.
 // Matches init_pipeline's forward declaration (no noexcept).
 extern "C" sao_status_t sao_launcher_settings_config_external_refresh(void);
+
+// Boot-time VT hypervisor switch state, surfaced on the Advanced section.
+// The owning process binds a query fn during platform bring-up; the panel
+// never touches launcher internals directly (the ui-off stub build keeps a
+// no-op so the link survives).
+struct VtHypervisorState {
+    int32_t enabled;          // persisted switch read at this boot
+    int32_t state;            // kVtHypervisorState* result of the driver stage
+    sao_status_t last_status; // non-zero failure detail when state == failed
+};
+inline constexpr int32_t kVtHypervisorStateOff = 0;
+inline constexpr int32_t kVtHypervisorStateActive = 1;
+inline constexpr int32_t kVtHypervisorStateFailed = 2;
+using VtStateQueryFn = sao_status_t (*)(void* user, VtHypervisorState* out) noexcept;
+sao_status_t settings_panel_bind_vt_state_query(VtStateQueryFn fn, void* user) noexcept;
 sao_status_t set_compositor_for_testing(sao_ui_compositor_handle_t compositor) noexcept;
-sao_status_t dispatch_action_for_testing(std::string_view action_id, std::string_view payload_json = {}) noexcept;
+sao_status_t dispatch_action_for_testing(std::string_view action_id,
+                                         std::string_view payload_json = {}) noexcept;
 sao_status_t close_for_testing() noexcept;
 sao_status_t take_offline_for_testing() noexcept;
 void drain_deferred_cleanup_for_owner() noexcept;

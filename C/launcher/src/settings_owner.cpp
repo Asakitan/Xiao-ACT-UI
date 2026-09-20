@@ -22,6 +22,12 @@ namespace {
 
 std::atomic<std::uint64_t> g_temp_counter{0};
 
+// Nested notify_change dispatch loops currently in flight on THIS thread
+// (a callback may re-enter through set_value -> notify_change).  Lets
+// unsubscribe_change wait for FOREIGN dispatch loops only: waiting on the
+// global count would deadlock against our own in-flight contribution.
+thread_local std::size_t g_settings_change_dispatch_depth = 0;
+
 struct PathRegistry final {
     std::mutex mutex;
     std::vector<std::wstring> paths;
@@ -942,8 +948,15 @@ sao_status_t SettingsOwner::unsubscribe_change(change_callback_fn callback,
         subscribers_.erase(existing);
         // A copied snapshot may still be dispatching this callback on a
         // mutating thread; drain it before returning so the caller can free
-        // user_data safely (mirrors the entitlement surface).
-        subscribers_cv_.wait(lock, [this] { return subscribers_dispatching_ == 0U; });
+        // user_data safely (mirrors the entitlement surface). When WE are
+        // inside dispatch callbacks on this thread, our own nested notifies
+        // already count toward subscribers_dispatching_ — wait only for
+        // foreign dispatch loops to drain; this keeps the free-safety
+        // guarantee without deadlocking on our own in-flight count.
+        const std::size_t self_depth = g_settings_change_dispatch_depth;
+        subscribers_cv_.wait(lock, [this, self_depth] {
+            return subscribers_dispatching_ <= self_depth;
+        });
         return SAO_STATUS_OK;
     } catch (...) {
         return SAO_STATUS_ERR_UNKNOWN;
@@ -959,6 +972,7 @@ void SettingsOwner::notify_change() noexcept {
                 return;
             }
             ++subscribers_dispatching_;
+            ++g_settings_change_dispatch_depth;
             callbacks = subscribers_;
         }
         for (const auto& entry : callbacks) {
@@ -972,6 +986,9 @@ void SettingsOwner::notify_change() noexcept {
         }
         {
             std::lock_guard lock(subscribers_mutex_);
+            if (g_settings_change_dispatch_depth != 0U) {
+                --g_settings_change_dispatch_depth;
+            }
             if (subscribers_dispatching_ != 0U) {
                 --subscribers_dispatching_;
             }
@@ -981,6 +998,9 @@ void SettingsOwner::notify_change() noexcept {
         }
     } catch (...) {
         std::lock_guard lock(subscribers_mutex_);
+        if (g_settings_change_dispatch_depth != 0U) {
+            --g_settings_change_dispatch_depth;
+        }
         if (subscribers_dispatching_ != 0U) {
             --subscribers_dispatching_;
         }

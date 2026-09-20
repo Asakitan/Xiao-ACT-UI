@@ -111,6 +111,7 @@ struct Options {
     bool intro{};
     bool intro_audition{};
     bool outro{};
+    bool menu_motion{};
     std::filesystem::path workspace{std::filesystem::current_path()};
     std::filesystem::path backend;
     std::filesystem::path settings;
@@ -233,6 +234,8 @@ Options options() {
             value.intro = true;
         else if (arg == L"--outro")
             value.outro = true;
+        else if (arg == L"--menu-motion")
+            value.menu_motion = true;
         else if (arg == L"--intro-audition") {
             value.intro = true;
             value.intro_audition = true;
@@ -280,7 +283,7 @@ Options options() {
                 "root|settings|hotkeys|plugins|workshop|process|license|user|about|link-start] "
                 "[--offline] [--backend EXE|--local-backend] [--intro|--intro-audition|--outro] [--workspace PATH] "
                 "[--settings PATH] [--frame-out BMP_PATH|- --frame-ms MILLISECONDS --offline] "
-                "[--frame-count COUNT]");
+                "[--frame-count COUNT] [--menu-motion]");
     }
     if (value.outro && value.intro)
         throw std::runtime_error("--outro cannot be combined with --intro, --intro-audition, or --page link-start");
@@ -299,6 +302,9 @@ Options options() {
         throw std::runtime_error("Continuous frames require --frame-out -");
     if (value.frame_ms + (value.frame_count - 1) * 1000 / 60 > 60000)
         throw std::runtime_error("Frame sequence must finish within 60000ms");
+    if (value.menu_motion && (!value.offline || value.backend_explicit || value.frame_out.empty() || value.intro ||
+                             value.outro || value.initial_surface != InitialSurface::root))
+        throw std::runtime_error("Menu motion requires offline root frame export without backend/intro/outro");
     return value;
 }
 
@@ -1020,9 +1026,75 @@ struct Host {
 #endif
     }
 
+    int32_t menu_motion_ms{};
+    size_t menu_motion_event{};
+
+    void advance_menu_motion(int32_t elapsed_ms) {
+        if (!config.menu_motion)
+            return;
+        menu_motion_ms += elapsed_ms;
+        static constexpr std::array<int32_t, 15> times{
+            140, 220, 800, 900, 940, 1160, 1270, 1800, 2250, 2500, 3650, 4300, 5100, 5700, 6400};
+        const auto pointer = [this](uint32_t message, int32_t x, int32_t y) {
+            SaoUiEntityShellSnapshot snapshot{};
+            require(sao_ui_entity_shell_get_snapshot(entity, &snapshot));
+            require(sao_ui_compositor_dispatch_mouse(compositor, message,
+                snapshot.origin_x + snapshot.menu_x + x,
+                snapshot.origin_y + snapshot.menu_y + y,
+                message == WM_MOUSEMOVE ? -1 : 0, 0));
+        };
+        const auto root = [&pointer](int32_t slot) {
+            pointer(WM_MOUSEMOVE, 75, 75 + slot * 70);
+            pointer(WM_LBUTTONDOWN, 75, 75 + slot * 70);
+            pointer(WM_LBUTTONUP, 75, 75 + slot * 70);
+        };
+        while (menu_motion_event < times.size() && menu_motion_ms >= times[menu_motion_event]) {
+            switch (menu_motion_event) {
+            case 0: case 1: require(sao_ui_entity_shell_home(entity)); break;
+            case 2: pointer(WM_MOUSEMOVE, 75, 75); break;
+            case 3: pointer(WM_LBUTTONDOWN, 75, 75); break;
+            case 4: pointer(WM_LBUTTONUP, 75, 75); break;
+            case 5: root(1); break;
+            case 6: root(3); break;
+            case 7: case 9: require(sao_ui_theme_set_active_id(SAO_UI_THEME_DARK)); break;
+            case 8: case 13: require(sao_ui_theme_set_active_id(SAO_UI_THEME_LIGHT)); break;
+            case 10: root(0); break;
+            case 11:
+                pointer(WM_MOUSEMOVE, 210, 75);
+                pointer(WM_LBUTTONDOWN, 210, 75);
+                pointer(WM_LBUTTONUP, 210, 75);
+                break;
+            case 12: {
+                sao_ui_panel_handle_t panel{};
+                require(sao_ui_panel_find_by_id(compositor, sao::launcher::settings::kSettingsPanelId, &panel));
+                SaoPanelState state{};
+                require(sao_ui_panel_get_state(panel, &state));
+                if (!state.visible)
+                    throw std::runtime_error("Menu motion Settings panel did not open");
+                SaoUiEntityShellSnapshot snapshot{};
+                require(sao_ui_entity_shell_get_snapshot(entity, &snapshot));
+                const int32_t x = snapshot.origin_x + state.x + state.width - 16;
+                const int32_t y = snapshot.origin_y + state.y + 16;
+                require(sao_ui_compositor_dispatch_mouse(compositor, WM_MOUSEMOVE, x, y, -1, 0));
+                require(sao_ui_compositor_dispatch_mouse(compositor, WM_LBUTTONDOWN, x, y, 0, 0));
+                require(sao_ui_compositor_dispatch_mouse(compositor, WM_LBUTTONUP, x, y, 0, 0));
+                require(sao_ui_panel_get_state(panel, &state));
+                if (state.visible)
+                    throw std::runtime_error("Menu motion Settings panel did not close");
+                break;
+            }
+            case 14: require(sao_ui_entity_shell_handle_key(entity, VK_ESCAPE, 0)); break;
+            default: break;
+            }
+            std::fprintf(stderr, "MENU_MOTION event=%zu time=%d\n", menu_motion_event, menu_motion_ms);
+            ++menu_motion_event;
+        }
+    }
+
     void export_frame() {
         for (int32_t remaining = config.frame_ms; remaining > 0;) {
-            const int32_t step = std::min(remaining, intro != nullptr ? 16 : 1000);
+            const int32_t step = std::min(remaining, intro != nullptr || config.menu_motion ? 16 : 1000);
+            advance_menu_motion(step);
             if (entity != nullptr)
                 require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
             if (intro != nullptr) {
@@ -1039,6 +1111,7 @@ struct Host {
         for (int32_t index = 0; index < config.frame_count; ++index) {
             if (index > 0) {
                 const int32_t step = index * 1000 / 60 - (index - 1) * 1000 / 60;
+                advance_menu_motion(step);
                 if (entity != nullptr)
                     require(sao_ui_entity_shell_tick(entity, static_cast<uint32_t>(step)));
                 sync_backdrop(static_cast<uint32_t>(step));

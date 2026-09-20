@@ -32,7 +32,6 @@ inline constexpr char kActivateAction[] = "license.activate";
 inline constexpr char kCopyHwidAction[] = "license.copy_hwid";
 inline constexpr char kRefreshAction[] = "license.refresh";
 inline constexpr char kKeyInputAction[] = "license.key_input";
-inline constexpr char kSkipAction[] = "license.skip";
 inline constexpr char kDeactivateAction[] = "license.deactivate";
 inline constexpr char kRenewAction[] = "license.renew";
 

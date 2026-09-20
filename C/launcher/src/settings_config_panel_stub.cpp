@@ -13,6 +13,12 @@ sao_status_t rebind_owner_for_testing(void* owner_opaque) noexcept {
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 }
 
+sao_status_t settings_panel_bind_vt_state_query(VtStateQueryFn fn, void* user) noexcept {
+    (void)fn;
+    (void)user;
+    return SAO_STATUS_OK;
+}
+
 sao_status_t settings_panel_set_owner(void* owner_opaque) noexcept {
     (void)owner_opaque;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;

@@ -11,7 +11,28 @@
 
 #include <windows.h>
 
+#include <cstdio>
+
 namespace sao::launcher {
+
+namespace {
+
+void traceShutdownFailure(const char* stage, int attempt) noexcept {
+    wchar_t enabled[2]{};
+    if (GetEnvironmentVariableW(L"SAO_LAUNCHER_STARTUP_DIAGNOSTICS", enabled, 2u) == 0u) {
+        return;
+    }
+    char line[192]{};
+    const int length = sprintf_s(line, sizeof(line), "SAO_SHUTDOWN stage=%s attempt=%d\r\n",
+                                 stage, attempt);
+    HANDLE output = GetStdHandle(STD_ERROR_HANDLE);
+    if (output == nullptr || output == INVALID_HANDLE_VALUE || length <= 0)
+        return;
+    DWORD written = 0u;
+    (void)WriteFile(output, line, static_cast<DWORD>(length), &written, nullptr);
+}
+
+} // namespace
 
 bool takeUiOffline(AppState& state) noexcept {
     if (!state.ui_online) return true;
@@ -102,11 +123,23 @@ void releaseOwnedSingleInstanceMutex(HANDLE& mutex) noexcept {
 bool runFullShutdown(AppState& state, bool& security_initialized) noexcept {
     constexpr int kMaximumAttempts = 3;
     for (int attempt = 0; attempt < kMaximumAttempts; ++attempt) {
-        if (takeUiOffline(state) && shutdownPlugins(state) &&
-            tearDownPlatform(state) && shutdownSecurity(security_initialized) &&
-            shutdownShell(state) && shutdownLicense(state)) {
+        const char* failed_stage = nullptr;
+        if (!takeUiOffline(state))
+            failed_stage = "ui";
+        else if (!shutdownPlugins(state))
+            failed_stage = "plugins";
+        else if (!tearDownPlatform(state))
+            failed_stage = "platform";
+        else if (!shutdownSecurity(security_initialized))
+            failed_stage = "security";
+        else if (!shutdownShell(state))
+            failed_stage = "shell";
+        else if (!shutdownLicense(state))
+            failed_stage = "license";
+        if (failed_stage == nullptr) {
             return true;
         }
+        traceShutdownFailure(failed_stage, attempt + 1);
         if (attempt + 1 < kMaximumAttempts)
             serviceShutdownRetry(state);
     }

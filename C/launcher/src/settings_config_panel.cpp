@@ -33,7 +33,7 @@
 // config TU — both are SaoAuto-only (sao_ui_preview links neither), so the
 // SAO_LINKED_LICENSE define is the capability marker.
 #if defined(SAO_LINKED_LICENSE) && __has_include("license_provider.h") &&                          \
-    __has_include("sao/launcher/provider_config.h")
+                                                 __has_include("sao/launcher/provider_config.h")
 #define SAO_SETTINGS_HAS_LICENSE_PROVIDER 1
 #include "license_provider.h"
 #include "sao/launcher/provider_config.h"
@@ -43,8 +43,8 @@
 // plugin_manager_panel_internal.cpp.
 #if (defined(SAO_LINKED_PLUGINS) || defined(SAO_LAUNCHER_PLUGIN_MANAGER_WITH_LOADER)) &&           \
     __has_include("sao/plugins/loader/plugin_lifecycle.h") &&                                      \
-    __has_include("sao/plugins/loader/plugin_registry.h") &&                                       \
-    __has_include("sao/plugins/loader/plugin_manifest.h")
+                  __has_include("sao/plugins/loader/plugin_registry.h") &&                         \
+                                __has_include("sao/plugins/loader/plugin_manifest.h")
 #define SAO_SETTINGS_HAS_PLUGIN_LOADER 1
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #include "sao/plugins/loader/plugin_manifest.h"
@@ -81,9 +81,10 @@
 #if defined(_WIN32) && defined(SAO_SETTINGS_PANEL_UI)
 // dialog_file_picker.cpp exports this Win32 open-file dialog but ships no
 // public header; declare it here (cdecl, same as SAO_UI_CALL).
-extern "C" sao_status_t __cdecl sao_ui_dialog_file_picker_show(
-    const char* title_utf8, const char* filter_utf8, char* out_path_utf8,
-    size_t out_capacity);
+extern "C" sao_status_t __cdecl sao_ui_dialog_file_picker_show(const char* title_utf8,
+                                                               const char* filter_utf8,
+                                                               char* out_path_utf8,
+                                                               size_t out_capacity);
 #endif
 
 namespace sao::launcher::settings {
@@ -95,9 +96,9 @@ constexpr std::size_t kMaximumSpecBytes = 256U * 1024U;
 constexpr std::uintmax_t kMaximumProfileBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kFilePickerPathBytes = 8192U;
 constexpr std::array<std::string_view, 12> kSections{
-    "Overview / 概览",  "Appearance / 外观", "Behavior / 行为", "Audio / 音频",
-    "Advanced / 高级",  "Profiles / 配置",   "Hotkeys / 快捷键", "Plugins / 插件",
-    "License / 授权",   "Account / 账户",    "Files / 文件",    "Other / 其他"};
+    "Overview / 概览", "Appearance / 外观", "Behavior / 行为",  "Audio / 音频",
+    "Advanced / 高级", "Profiles / 配置",   "Hotkeys / 快捷键", "Plugins / 插件",
+    "License / 授权",  "Account / 账户",    "Files / 文件",     "Other / 其他"};
 
 // Sections whose content the spec generator fills with dedicated cards
 // instead of the generic per-key loop.
@@ -111,7 +112,11 @@ constexpr int kSectionOther = 11;
 // Bools the panel may write live. Everything else renders read-only so a
 // switch never pretends to control a value the runtime only honours at boot
 // (topmost, sao_screencap_protection) or another owner applies (nervgear).
-constexpr std::array<std::string_view, 2> kEditableBools{"sound_enabled", "streaming_mode"};
+// vt_hypervisor_enabled is a persisted boot-time switch: writing it is safe
+// (it only affects the next launch's driver strategy), so it is editable
+// here even though the running runtime does not hot-load VT.
+constexpr std::array<std::string_view, 3> kEditableBools{"sound_enabled", "streaming_mode",
+                                                         "vt_hypervisor_enabled"};
 
 struct PanelState final {
     std::mutex mutex;
@@ -151,6 +156,10 @@ struct PanelState final {
     bool committed_owner_dirty{};
     std::string profile_preview;
     std::size_t selected_section{};
+    // Launcher-bound VT hypervisor state query; null when the owner never
+    // registered one (preview builds, operator runs, early teardown).
+    VtStateQueryFn vt_query_fn{};
+    void* vt_query_user{};
 };
 
 PanelState& state() {
@@ -290,13 +299,13 @@ bool is_numeric_control(std::string_view key) {
 }
 
 bool is_editable_bool(std::string_view key) {
-    return std::find(kEditableBools.begin(), kEditableBools.end(), key) !=
-           kEditableBools.end();
+    return std::find(kEditableBools.begin(), kEditableBools.end(), key) != kEditableBools.end();
 }
 
 int section_index(std::string_view key, const Json& value) {
     if (key == "streaming_mode" || key == "sao_screencap_protection" ||
-        key_contains(key, "anti_screencap") || key_contains(key, "capture"))
+        key == "vt_hypervisor_enabled" || key_contains(key, "anti_screencap") ||
+        key_contains(key, "capture"))
         return 4;
     if (key == "panel_themes" || key_contains(key, "theme") || key_contains(key, "appearance") ||
         key_contains(key, "display"))
@@ -350,19 +359,32 @@ std::string humanize_key(std::string_view key) {
 }
 
 std::string setting_label(std::string_view key) {
-    if (key == "topmost") return "Topmost window / 窗口置顶";
-    if (key == "nervgear_mode") return "NervGear mode / NervGear 模式";
+    if (key == "vt_hypervisor_enabled")
+        return "VT hypervisor / VT 虚拟机层";
+    if (key == "topmost")
+        return "Topmost window / 窗口置顶";
+    if (key == "nervgear_mode")
+        return "NervGear mode / NervGear 模式";
     if (key == "sao_screencap_protection")
         return "Screen-capture protection / 防截屏保护";
-    if (key == "user_guide_presented") return "User guide presented / 已显示用户指南";
-    if (key == "hotkeys") return "Hotkeys / 快捷键";
-    if (key == "game_cache") return "Game cache / 游戏缓存";
-    if (key == "sound_volume") return "Audio volume / 音频音量";
-    if (key == "tts_volume") return "Speech volume / 语音音量";
-    if (key == "overlay_opacity") return "Overlay opacity / 覆盖层不透明度";
-    if (key == "plugins_enabled") return "Enabled plugins / 已启用插件";
-    if (key == "license_tier") return "License tier / 许可证等级";
-    if (key == "theme_id") return "Theme identifier / 主题标识";
+    if (key == "user_guide_presented")
+        return "User guide presented / 已显示用户指南";
+    if (key == "hotkeys")
+        return "Hotkeys / 快捷键";
+    if (key == "game_cache")
+        return "Game cache / 游戏缓存";
+    if (key == "sound_volume")
+        return "Audio volume / 音频音量";
+    if (key == "tts_volume")
+        return "Speech volume / 语音音量";
+    if (key == "overlay_opacity")
+        return "Overlay opacity / 覆盖层不透明度";
+    if (key == "plugins_enabled")
+        return "Enabled plugins / 已启用插件";
+    if (key == "license_tier")
+        return "License tier / 许可证等级";
+    if (key == "theme_id")
+        return "Theme identifier / 主题标识";
     return humanize_key(key) + " (" + std::string(key) + ")";
 }
 
@@ -382,15 +404,33 @@ std::string draft_feedback(std::string label, std::string value) {
 Json build_theme_row(const settings_theme::PanelTheme theme) {
     Json children = Json::array();
     children.push_back(text_node("Panel appearance / 界面外观", "value", 28));
-    children.push_back(Json{{"type", "dropdown"},
-                            {"id", "settings.theme"},
-                            {"action", "settings.theme.select"},
-                            {"selected_id", theme == settings_theme::PanelTheme::light ? 0 : 1},
-                            {"items", Json::array({
-                                          {{"id", 0}, {"label", "Light / 浅色"}, {"value", "light"}},
-                                          {{"id", 1}, {"label", "Dark / 深色"}, {"value", "dark"}},
-                                      })}});
+    children.push_back(
+        Json{{"type", "dropdown"},
+             {"id", "settings.theme"},
+             {"action", "settings.theme.select"},
+             {"selected_id", theme == settings_theme::PanelTheme::light ? 0 : 1},
+             {"items", Json::array({
+                           {{"id", 0}, {"label", "Light / 浅色"}, {"value", "light"}},
+                           {{"id", 1}, {"label", "Dark / 深色"}, {"value", "dark"}},
+                       })}});
     return row_node(std::move(children));
+}
+
+// Live VT hypervisor state via the launcher-bound query fn.  The function
+// pointer + user are copied out under the mutex and invoked after release so
+// the bridge can never re-enter panel state on the spec-build path.
+bool query_vt_hypervisor_state(VtHypervisorState* out) noexcept {
+    VtStateQueryFn fn = nullptr;
+    void* user = nullptr;
+    {
+        std::lock_guard lock(state().mutex);
+        fn = state().vt_query_fn;
+        user = state().vt_query_user;
+    }
+    if (out == nullptr || fn == nullptr)
+        return false;
+    *out = VtHypervisorState{};
+    return fn(user, out) == SAO_STATUS_OK;
 }
 
 // Runtime truth for sound controls when the settings document never stored
@@ -430,11 +470,14 @@ Json open_panel_button(std::string_view name, std::string label) {
 #if defined(SAO_SETTINGS_HAS_LICENSE_PROVIDER) && SAO_SETTINGS_HAS_LICENSE_PROVIDER
 std::string license_tier_label(int32_t tier) {
     switch (tier) {
-    case 0: return "Unknown / 未知";
-    case 1: return "Free / 免费";
-    case 2: return "Paid / 付费";
-    case 3: return "Internal / 内部";
-    default: return "Tier " + std::to_string(tier);
+    case 0:
+        return "Unknown / 未知";
+    case 2:
+        return "Paid / 付费";
+    case 3:
+        return "Internal / 内部";
+    default:
+        return "Tier " + std::to_string(tier);
     }
 }
 
@@ -476,8 +519,7 @@ Json hotkeys_section(const Json& snapshot) {
                     description = it.key();
                 rows.push_back(row_node(Json::array({
                     text_node(description, "value", 28),
-                    badge_node(sao::launcher::hotkey::format_combo_utf8(vk, modifiers),
-                               "accent"),
+                    badge_node(sao::launcher::hotkey::format_combo_utf8(vk, modifiers), "accent"),
                 })));
                 ++shown;
             }
@@ -492,8 +534,8 @@ Json hotkeys_section(const Json& snapshot) {
                                      std::to_string(total - 8U) + " 个。",
                                  "muted", 28));
     }
-    rows.push_back(row_node(Json::array({
-        open_panel_button("hotkeys", "打开快捷键面板 / Open hotkey panel")})));
+    rows.push_back(row_node(
+        Json::array({open_panel_button("hotkeys", "打开快捷键面板 / Open hotkey panel")})));
     return Json::array({card_node("Hotkeys / 快捷键", std::move(rows), "cyan")});
 }
 
@@ -522,19 +564,17 @@ Json plugins_section() {
                 else if (state == Loader::lifecycle_state::failed)
                     ++failed;
             }
-            rows.push_back(text_node(std::to_string(manifests.size()) + " plugins, " +
-                                         std::to_string(enabled) + " enabled, " +
-                                         std::to_string(active) + " active, " +
-                                         std::to_string(failed) + " failed. / 共 " +
-                                         std::to_string(manifests.size()) + " 个插件，" +
-                                         std::to_string(enabled) + " 启用，" +
-                                         std::to_string(active) + " 运行中，" +
-                                         std::to_string(failed) + " 失败。",
-                                     "value", 40));
+            rows.push_back(text_node(
+                std::to_string(manifests.size()) + " plugins, " + std::to_string(enabled) +
+                    " enabled, " + std::to_string(active) + " active, " + std::to_string(failed) +
+                    " failed. / 共 " + std::to_string(manifests.size()) + " 个插件，" +
+                    std::to_string(enabled) + " 启用，" + std::to_string(active) + " 运行中，" +
+                    std::to_string(failed) + " 失败。",
+                "value", 40));
             if (failed != 0U)
                 rows.push_back(text_node(
-                    "Some plugins failed; open the manager for details. / 有插件加载失败。",
-                    "warn", 30));
+                    "Some plugins failed; open the manager for details. / 有插件加载失败。", "warn",
+                    30));
         }
     } catch (...) {
         rows.push_back(text_node("Plugin snapshot failed. / 插件状态读取失败。", "warn", 32));
@@ -543,8 +583,8 @@ Json plugins_section() {
     rows.push_back(text_node(
         "Plugin loader is not linked in this build. / 此构建未链接插件加载器。", "muted", 32));
 #endif
-    rows.push_back(row_node(Json::array({
-        open_panel_button("plugins", "打开插件管理 / Open plugin manager")})));
+    rows.push_back(row_node(
+        Json::array({open_panel_button("plugins", "打开插件管理 / Open plugin manager")})));
     return Json::array({card_node("Plugins / 插件", std::move(rows), "cyan")});
 }
 
@@ -568,8 +608,8 @@ Json license_section() {
                                                        : "Heartbeat off / 心跳停止",
                        provider.heartbeat_running != 0 ? "ok" : "warn"),
         })));
-        rows.push_back(text_node("Expiry / 到期: " + expiry_label(provider.expiry_ms),
-                                 "muted", 30));
+        rows.push_back(
+            text_node("Expiry / 到期: " + expiry_label(provider.expiry_ms), "muted", 30));
     } else {
         rows.push_back(
             text_node("License provider is not running. / 许可服务未运行。", "muted", 32));
@@ -578,8 +618,8 @@ Json license_section() {
     rows.push_back(text_node(
         "License provider is not linked in this build. / 此构建未链接许可提供方。", "muted", 32));
 #endif
-    rows.push_back(row_node(Json::array({
-        open_panel_button("license", "打开授权面板 / Open license panel")})));
+    rows.push_back(
+        row_node(Json::array({open_panel_button("license", "打开授权面板 / Open license panel")})));
     return Json::array({card_node("License / 授权", std::move(rows), "cyan")});
 }
 
@@ -593,9 +633,8 @@ Json account_section() {
         const bool have_status =
             sao_license_provider_status(&provider) == 0 && provider.initialized != 0;
         rows.push_back(text_node("License endpoint / 许可端点", "value", 28));
-        rows.push_back(text_node(config.license.endpoint.empty()
-                                     ? "not configured / 未配置"
-                                     : config.license.endpoint,
+        rows.push_back(text_node(config.license.endpoint.empty() ? "not configured / 未配置"
+                                                                 : config.license.endpoint,
                                  "muted", 34));
         rows.push_back(text_node("Hardware ID / 硬件标识", "value", 28));
         rows.push_back(text_node(have_status && provider.hwid_masked[0] != '\0'
@@ -606,8 +645,8 @@ Json account_section() {
         rows.push_back(text_node("Account snapshot failed. / 账户信息读取失败。", "warn", 32));
     }
 #else
-    rows.push_back(text_node(
-        "Account details unavailable in this build. / 此构建不提供账户信息。", "muted", 32));
+    rows.push_back(text_node("Account details unavailable in this build. / 此构建不提供账户信息。",
+                             "muted", 32));
 #endif
     return Json::array({card_node("Account / 账户", std::move(rows), "cyan")});
 }
@@ -628,16 +667,15 @@ Json files_section(std::string_view settings_path_utf8) {
         text_node(profiles_path_utf8.empty() ? "unknown / 未知" : profiles_path_utf8, "muted", 34),
     });
 #if defined(_WIN32)
-    settings_children.push_back(row_node(Json::array({button_node(
-        "settings.files.reveal.settings", "在资源管理器中显示 / Reveal in Explorer",
-        "settings.files.reveal", {{"target", "settings"}}, "ghost")})));
-    profiles_children.push_back(row_node(Json::array({button_node(
-        "settings.files.reveal.profiles", "打开配置目录 / Open profiles folder",
-        "settings.files.reveal", {{"target", "profiles"}}, "ghost")})));
+    settings_children.push_back(row_node(Json::array(
+        {button_node("settings.files.reveal.settings", "在资源管理器中显示 / Reveal in Explorer",
+                     "settings.files.reveal", {{"target", "settings"}}, "ghost")})));
+    profiles_children.push_back(row_node(Json::array(
+        {button_node("settings.files.reveal.profiles", "打开配置目录 / Open profiles folder",
+                     "settings.files.reveal", {{"target", "profiles"}}, "ghost")})));
 #endif
     rows.push_back(card_node("Settings file / 设置文件", std::move(settings_children), "cyan"));
-    rows.push_back(
-        card_node("Profiles folder / 配置目录", std::move(profiles_children), "cyan"));
+    rows.push_back(card_node("Profiles folder / 配置目录", std::move(profiles_children), "cyan"));
     rows.push_back(card_node(
         "Import / Export 导入导出",
         Json::array({
@@ -669,12 +707,14 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
         status_code == SAO_STATUS_OK ? (dirty ? "gold" : "ok") : "danger";
     Json overview = Json::array();
     overview.push_back(row_node(Json::array({text_node("偏好设置", "title", 40),
-        badge_node(status_code != SAO_STATUS_OK ? "操作失败" : dirty ? "未保存" : "已保存", overview_accent),
-        text_node(std::string(status), "muted", 28)})));
-    overview.push_back(text_node(
-        dirty ? "更改已实时预览。应用以保存，或丢弃草稿恢复原值。"
-              : "让 SAO 适合你的工作方式。选择分类调整外观、行为与声音。",
-        dirty ? "warn" : "muted", 28));
+                                             badge_node(status_code != SAO_STATUS_OK ? "操作失败"
+                                                        : dirty                      ? "未保存"
+                                                                                     : "已保存",
+                                                        overview_accent),
+                                             text_node(std::string(status), "muted", 28)})));
+    overview.push_back(text_node(dirty ? "更改已实时预览。应用以保存，或丢弃草稿恢复原值。"
+                                       : "让 SAO 适合你的工作方式。选择分类调整外观、行为与声音。",
+                                 dirty ? "warn" : "muted", 28));
 
     settings_theme::PanelTheme theme = settings_theme::PanelTheme::light;
     if (const auto panel_themes = snapshot.find("panel_themes");
@@ -692,12 +732,14 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
 
     bool has_sound_enabled = false;
     bool has_sound_volume = false;
+    bool has_vt_hypervisor = false;
     if (snapshot.is_object()) {
         for (auto it = snapshot.begin(); it != snapshot.end(); ++it) {
             const std::string key = it.key();
             const Json& value = it.value();
             has_sound_enabled = has_sound_enabled || key == "sound_enabled";
             has_sound_volume = has_sound_volume || key == "sound_volume";
+            has_vt_hypervisor = has_vt_hypervisor || key == "vt_hypervisor_enabled";
             // Dedicated sections own these keys; the generic loop skips them.
             if (key == "panel_themes" || key == "hotkeys")
                 continue;
@@ -708,11 +750,14 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
             if (value.is_boolean()) {
                 const bool on = value.get<bool>();
                 if (is_editable_bool(key)) {
-                    section_children[index].push_back(row_node(Json::array({
+                    Json controls = Json::array({
                         button_node("settings.bool." + key, display_key, kSettingsActionToggle,
                                     {{"key", key}}, on ? "primary" : "ghost", on),
                         badge_node(on ? "On / 开" : "Off / 关", on ? "ok" : "muted"),
-                    })));
+                    });
+                    if (key == "vt_hypervisor_enabled")
+                        controls.push_back(badge_node("启动时生效 / boot-time", "muted"));
+                    section_children[index].push_back(row_node(std::move(controls)));
                 } else {
                     // Read-only: the value is real but no live writer exists
                     // for this key, so render a badge instead of a switch.
@@ -726,18 +771,18 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
                 const double numeric_value = value.get<double>();
                 const double effective_value =
                     std::isfinite(numeric_value) ? std::clamp(numeric_value, 0.0, 100.0) : 0.0;
-                Json controls = Json::array(
-                    {text_node(display_key, "value", 28),
-                     Json{{"type", "slider"},
-                          {"id", "settings.volume." + key},
-                          {"action", "settings.volume.set"},
-                          {"payload", {{"key", key}}},
-                          {"value", effective_value / 100.0},
-                          {"show_value_label", false}},
-                     badge_node(percent_label(numeric_value), "accent")});
+                Json controls = Json::array({text_node(display_key, "value", 28),
+                                             Json{{"type", "slider"},
+                                                  {"id", "settings.volume." + key},
+                                                  {"action", "settings.volume.set"},
+                                                  {"payload", {{"key", key}}},
+                                                  {"value", effective_value / 100.0},
+                                                  {"show_value_label", false}},
+                                             badge_node(percent_label(numeric_value), "accent")});
                 section_children[index].push_back(row_node(std::move(controls)));
             } else {
-                section_children[index].push_back(text_node(display_key + ": " + summary(value), "muted", 32));
+                section_children[index].push_back(
+                    text_node(display_key + ": " + summary(value), "muted", 32));
             }
         }
     }
@@ -747,26 +792,57 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     if (!has_sound_enabled) {
         const bool enabled = runtime_sound_enabled();
         section_children[3].push_back(row_node(Json::array({
-            button_node("settings.bool.sound_enabled", "UI sound / 界面音效",
-                        kSettingsActionToggle, {{"key", "sound_enabled"}},
-                        enabled ? "primary" : "ghost", enabled),
+            button_node("settings.bool.sound_enabled", "UI sound / 界面音效", kSettingsActionToggle,
+                        {{"key", "sound_enabled"}}, enabled ? "primary" : "ghost", enabled),
             badge_node(enabled ? "On / 开" : "Off / 关", enabled ? "ok" : "muted"),
             badge_node("默认 Default", "muted"),
         })));
     }
     if (!has_sound_volume) {
         const double volume = runtime_sound_volume();
-        Json controls = Json::array(
-            {text_node("Sound volume / 音效音量", "value", 28),
-             Json{{"type", "slider"},
-                  {"id", "settings.volume.sound_volume"},
-                  {"action", "settings.volume.set"},
-                  {"payload", {{"key", "sound_volume"}}},
-                  {"value", volume / 100.0},
-                  {"show_value_label", false}},
-             badge_node(percent_label(volume), "accent"),
-             badge_node("默认 Default", "muted")});
+        Json controls = Json::array({text_node("Sound volume / 音效音量", "value", 28),
+                                     Json{{"type", "slider"},
+                                          {"id", "settings.volume.sound_volume"},
+                                          {"action", "settings.volume.set"},
+                                          {"payload", {{"key", "sound_volume"}}},
+                                          {"value", volume / 100.0},
+                                          {"show_value_label", false}},
+                                     badge_node(percent_label(volume), "accent"),
+                                     badge_node("默认 Default", "muted")});
         section_children[3].push_back(row_node(std::move(controls)));
+    }
+
+    // VT hypervisor (Advanced): the switch lives entirely in the persisted
+    // document, so an absent key means Off-by-default rather than a missing
+    // control.  Toggling writes the key into the draft; it takes effect on
+    // the next launch alongside the helper's AUTO/NATIVE bootstrap split.
+    if (!has_vt_hypervisor) {
+        Json controls = Json::array(
+            {button_node("settings.bool.vt_hypervisor_enabled", "VT hypervisor / VT 虚拟机层",
+                         kSettingsActionToggle, {{"key", "vt_hypervisor_enabled"}}, "ghost", false),
+             badge_node("Off / 关", "muted"), badge_node("启动时生效 / boot-time", "muted"),
+             badge_node("默认 Default", "muted")});
+        section_children[4].push_back(row_node(std::move(controls)));
+    }
+    VtHypervisorState vt_state{};
+    if (query_vt_hypervisor_state(&vt_state)) {
+        const char* accent = vt_state.state == kVtHypervisorStateActive   ? "ok"
+                             : vt_state.state == kVtHypervisorStateFailed ? "danger"
+                                                                          : "muted";
+        const char* label = vt_state.state == kVtHypervisorStateActive   ? "Active / 已激活"
+                            : vt_state.state == kVtHypervisorStateFailed ? "Degraded / 降级"
+                                                                         : "Off / 未加载";
+        Json card_rows = Json::array({row_node(Json::array(
+            {text_node("Runtime state / 运行状态", "value", 28), badge_node(label, accent)}))});
+        if (vt_state.state == kVtHypervisorStateFailed)
+            card_rows.push_back(
+                text_node("status=" + std::to_string(vt_state.last_status), "warn", 26));
+        card_rows.push_back(
+            text_node("开启后在下次启动时尝试加载 VT 链；关闭后下次启动仅加载 R1/R3/R5 驱动。"
+                      " / The switch is read once at launch; changes apply on the next start.",
+                      "muted", 26));
+        section_children[4].push_back(
+            card_node("VT hypervisor / VT 虚拟机层", std::move(card_rows), accent));
     }
 
     Json sound_samples = Json::array();
@@ -845,17 +921,17 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
             text_node("No other settings. / 无其他设置项。", "muted", 30));
 
     Json actions = Json::array();
-    actions.push_back(button_node("settings.defaults", "恢复默认",
-                                  "settings.defaults", Json::object(), "ghost"));
-    actions.push_back(button_node("settings.refresh", "刷新", kSettingsActionRefresh,
-                                  Json::object(), "ghost"));
+    actions.push_back(
+        button_node("settings.defaults", "恢复默认", "settings.defaults", Json::object(), "ghost"));
+    actions.push_back(
+        button_node("settings.refresh", "刷新", kSettingsActionRefresh, Json::object(), "ghost"));
     actions.push_back(Json{{"type", "spacer"}, {"weight", 1.0}, {"height", 1}});
-    actions.push_back(button_node("settings.cancel", "丢弃草稿", "settings.cancel",
-                                  Json::object(), "ghost", false, !dirty));
-    actions.push_back(button_node("settings.close", "关闭", kSettingsActionClose,
-                                  Json::object(), "ghost"));
-    actions.push_back(button_node("settings.apply", "应用更改", "settings.apply",
-                                  Json::object(), "primary", false, !dirty));
+    actions.push_back(button_node("settings.cancel", "丢弃草稿", "settings.cancel", Json::object(),
+                                  "ghost", false, !dirty));
+    actions.push_back(
+        button_node("settings.close", "关闭", kSettingsActionClose, Json::object(), "ghost"));
+    actions.push_back(button_node("settings.apply", "应用更改", "settings.apply", Json::object(),
+                                  "primary", false, !dirty));
     Json footer = row_node(std::move(actions));
     footer["id"] = "settings-footer";
     footer["dock"] = "bottom";
@@ -877,8 +953,8 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
         navigation.push_back(button_node(
             "settings.section." + std::to_string(index), std::string(kSections[index]),
             "settings.section.select", {{"section", index}},
-                index == selected_section ? "nav-active" : "nav", index == selected_section));
-            Json rail = section_node("PREFERENCES", std::move(navigation), "gold");
+            index == selected_section ? "nav-active" : "nav", index == selected_section));
+    Json rail = section_node("PREFERENCES", std::move(navigation), "gold");
     rail["id"] = "settings-category-rail";
     rail["width"] = 208;
     rail["min_width"] = 176;
@@ -886,18 +962,24 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     rail["weight"] = 0;
     rail["scroll"] = {{"axis", "vertical"}, {"bar", "auto"}, {"wheel", true}};
     if (section_children[0].empty()) {
-        section_children[0] = Json::array({
-            text_node("从常用设置开始，或在左侧选择完整分类。", "muted", 32),
-            card_node("外观与显示", Json::array({
-                text_node("调整浅色、深色与各面板的显示偏好。", "muted", 32),
-                button_node("settings.overview.appearance", "打开外观设置", "settings.section.select", {{"section", 1}}, "ghost") })),
-            card_node("音效与提示", Json::array({
-                text_node("管理界面提示音、音量和试听；更改会即时预览。", "muted", 32),
-                button_node("settings.overview.audio", "打开音频设置", "settings.section.select", {{"section", 3}}, "ghost") })),
-            card_node("配置与草稿", Json::array({
-                text_node("切换分类不会丢弃草稿；使用底部操作应用或撤销更改。", "muted", 42),
-                button_node("settings.overview.profiles", "管理配置", "settings.section.select", {{"section", 5}}, "ghost") }))
-        });
+        section_children[0] = Json::array(
+            {text_node("从常用设置开始，或在左侧选择完整分类。", "muted", 32),
+             card_node(
+                 "外观与显示",
+                 Json::array({text_node("调整浅色、深色与各面板的显示偏好。", "muted", 32),
+                              button_node("settings.overview.appearance", "打开外观设置",
+                                          "settings.section.select", {{"section", 1}}, "ghost")})),
+             card_node("音效与提示",
+                       Json::array(
+                           {text_node("管理界面提示音、音量和试听；更改会即时预览。", "muted", 32),
+                            button_node("settings.overview.audio", "打开音频设置",
+                                        "settings.section.select", {{"section", 3}}, "ghost")})),
+             card_node(
+                 "配置与草稿",
+                 Json::array(
+                     {text_node("切换分类不会丢弃草稿；使用底部操作应用或撤销更改。", "muted", 42),
+                      button_node("settings.overview.profiles", "管理配置",
+                                  "settings.section.select", {{"section", 5}}, "ghost")}))});
     }
     if (section_children[selected_section].empty())
         section_children[selected_section].push_back(
@@ -905,8 +987,8 @@ std::string make_spec(const Json& snapshot, std::string_view status, sao_status_
     if (selected_section == 0U && !path.empty())
         section_children[0].push_back(text_node("设置位置  " + std::string(path), "muted", 40));
     Json content = section_node(std::string(kSections[selected_section]),
-                             std::move(section_children[selected_section]),
-                             selected_section == 5U ? "gold" : "cyan");
+                                std::move(section_children[selected_section]),
+                                selected_section == 5U ? "gold" : "cyan");
     content["id"] = "settings-category-content";
     content["min_width"] = 320;
     content["weight"] = 1.0;
@@ -1393,8 +1475,8 @@ void SAO_UI_CALL export_picker_result(sao_status_t picker_status, const char* pa
             owner = state().owner;
         }
         Json document;
-        auto owner_lease = owner == nullptr ? settings_owner::SettingsOwner::Lease{}
-                                            : owner->acquire_lease();
+        auto owner_lease =
+            owner == nullptr ? settings_owner::SettingsOwner::Lease{} : owner->acquire_lease();
         if (!owner_lease || owner_lease->snapshot(document) != SAO_STATUS_OK)
             status = SAO_STATUS_ERR_NOT_INITIALIZED;
         std::string envelope;
@@ -1402,15 +1484,13 @@ void SAO_UI_CALL export_picker_result(sao_status_t picker_status, const char* pa
             status = settings_codec::encode(document, envelope);
         if (status == SAO_STATUS_OK) {
             try {
-                std::ofstream output(
-                    std::filesystem::path(std::u8string(
-                        reinterpret_cast<const char8_t*>(path_utf8))),
-                    std::ios::binary | std::ios::trunc);
+                std::ofstream output(std::filesystem::path(std::u8string(
+                                         reinterpret_cast<const char8_t*>(path_utf8))),
+                                     std::ios::binary | std::ios::trunc);
                 if (!output) {
                     status = SAO_STATUS_ERR_OS_CALL_FAILED;
                 } else {
-                    output.write(envelope.data(),
-                                 static_cast<std::streamsize>(envelope.size()));
+                    output.write(envelope.data(), static_cast<std::streamsize>(envelope.size()));
                     if (!output)
                         status = SAO_STATUS_ERR_OS_CALL_FAILED;
                 }
@@ -1567,10 +1647,9 @@ void SAO_UI_CALL profile_dialog_callback(SaoUiDialogButton pressed, const char* 
         const sao_status_t validation_status = profile_path(name, validated_path);
         const bool saved = validation_status == SAO_STATUS_OK && save_profile(name);
         refresh_profile_names();
-        update_status(saved ? SAO_STATUS_OK
-                            : validation_status != SAO_STATUS_OK
-                                ? validation_status
-                                : SAO_STATUS_ERR_OS_CALL_FAILED,
+        update_status(saved                                ? SAO_STATUS_OK
+                      : validation_status != SAO_STATUS_OK ? validation_status
+                                                           : SAO_STATUS_ERR_OS_CALL_FAILED,
                       saved ? "Profile saved" : "Profile save failed");
     }
     (void)publish();
@@ -1656,20 +1735,20 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         static constexpr std::array<std::string_view, 7> kRoutablePanels{
             "settings", "hotkeys", "plugins", "license", "workshop", "process", "memory"};
-        if (std::find(kRoutablePanels.begin(), kRoutablePanels.end(),
-                      std::string_view(name)) == kRoutablePanels.end())
+        if (std::find(kRoutablePanels.begin(), kRoutablePanels.end(), std::string_view(name)) ==
+            kRoutablePanels.end())
             return publish_after_draft_mutation(SAO_STATUS_ERR_NOT_FOUND,
                                                 "Unknown panel. / 未知面板。");
 #if defined(SAO_SETTINGS_HAS_PANEL_OPEN) && SAO_SETTINGS_HAS_PANEL_OPEN
         const sao_sdk_status_t sdk_status = sao_sdk_platform_open_panel(name.c_str());
-        const sao_status_t mapped =
-            sdk_status == SAO_SDK_OK ? SAO_STATUS_OK
-            : sdk_status == SAO_SDK_ERR_NOT_FOUND ? SAO_STATUS_ERR_NOT_FOUND
-            : sdk_status == SAO_SDK_ERR_NOT_INITIALIZED ? SAO_STATUS_ERR_NOT_INITIALIZED
-                                                        : SAO_STATUS_ERR_UNKNOWN;
-        return publish_after_draft_mutation(
-            mapped, mapped == SAO_STATUS_OK ? "Opened " + name + ". / 已打开。"
-                                            : "Panel unavailable. / 面板不可用。");
+        const sao_status_t mapped = sdk_status == SAO_SDK_OK              ? SAO_STATUS_OK
+                                    : sdk_status == SAO_SDK_ERR_NOT_FOUND ? SAO_STATUS_ERR_NOT_FOUND
+                                    : sdk_status == SAO_SDK_ERR_NOT_INITIALIZED
+                                        ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                        : SAO_STATUS_ERR_UNKNOWN;
+        return publish_after_draft_mutation(mapped, mapped == SAO_STATUS_OK
+                                                        ? "Opened " + name + ". / 已打开。"
+                                                        : "Panel unavailable. / 面板不可用。");
 #else
         return publish_after_draft_mutation(
             SAO_STATUS_ERR_CAPABILITY_MISSING,
@@ -1701,8 +1780,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             HINSTANCE result;
             if (target == "settings") {
                 const std::wstring params = L"/select,\"" + wide + L"\"";
-                result = ::ShellExecuteW(nullptr, L"open", L"explorer.exe", params.c_str(),
-                                         nullptr, SW_SHOWNORMAL);
+                result = ::ShellExecuteW(nullptr, L"open", L"explorer.exe", params.c_str(), nullptr,
+                                         SW_SHOWNORMAL);
             } else {
                 result = ::ShellExecuteW(nullptr, L"explore", wide.c_str(), nullptr, nullptr,
                                          SW_SHOWDEFAULT);
@@ -1722,9 +1801,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
 #if defined(SAO_SETTINGS_PANEL_UI) && SAO_SETTINGS_HAS_FILE_PICKER
         sao_ui_file_picker_handle_t picker = ensure_file_picker();
         if (picker == nullptr)
-            return publish_after_draft_mutation(
-                SAO_STATUS_ERR_NOT_INITIALIZED,
-                "File picker unavailable. / 文件选择器不可用。");
+            return publish_after_draft_mutation(SAO_STATUS_ERR_NOT_INITIALIZED,
+                                                "File picker unavailable. / 文件选择器不可用。");
         std::string initial_utf8;
         {
             settings_owner::SettingsOwner* owner = nullptr;
@@ -1811,17 +1889,19 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 state().draft_dirty = false;
                 state().committed_owner_dirty = false;
             }
-            return publish_after_draft_mutation(
-                status, "Draft applied and saved. / 草稿已应用并保存。");
+            return publish_after_draft_mutation(status,
+                                                "Draft applied and saved. / 草稿已应用并保存。");
         }
         const sao_status_t save_status = status;
-        const sao_status_t rollback_status = rollback_draft_mutation(
-            owner_lease, committed, committed_owner_dirty, false);
+        const sao_status_t rollback_status =
+            rollback_draft_mutation(owner_lease, committed, committed_owner_dirty, false);
         return publish_after_draft_mutation(
             rollback_status == SAO_STATUS_OK ? save_status : rollback_status,
             rollback_status == SAO_STATUS_OK
-                ? "Save failed; committed settings were restored and the draft was cleared. / 保存失败；已恢复提交值并清除草稿。"
-                : "Save failed and committed settings could not be fully restored. / 保存失败，且提交值未能完整恢复。");
+                ? "Save failed; committed settings were restored and the draft was cleared. / "
+                  "保存失败；已恢复提交值并清除草稿。"
+                : "Save failed and committed settings could not be fully restored. / "
+                  "保存失败，且提交值未能完整恢复。");
     }
 
     if (action == "settings.cancel") {
@@ -1841,9 +1921,10 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         if (status == SAO_STATUS_OK)
             status = restore_runtime_settings(committed);
         return publish_after_draft_mutation(
-            status, status == SAO_STATUS_OK
-                        ? "Draft discarded; committed settings restored. / 草稿已丢弃；已恢复提交值。"
-                        : "Discard failed; review the current values. / 丢弃失败；请检查当前值。");
+            status,
+            status == SAO_STATUS_OK
+                ? "Draft discarded; committed settings restored. / 草稿已丢弃；已恢复提交值。"
+                : "Discard failed; review the current values. / 丢弃失败；请检查当前值。");
     }
 
     if (action == "settings.defaults") {
@@ -1856,16 +1937,16 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         if (status == SAO_STATUS_OK) {
             const sao_status_t runtime_status = restore_runtime_settings(Json::object());
             if (runtime_status != SAO_STATUS_OK) {
-                const sao_status_t rollback_status = rollback_draft_mutation(
-                    owner_lease, snapshot, owner_dirty_before, dirty);
+                const sao_status_t rollback_status =
+                    rollback_draft_mutation(owner_lease, snapshot, owner_dirty_before, dirty);
                 status = first_error(runtime_status, rollback_status);
             }
         }
         return publish_after_draft_mutation(
-            status,
-            status == SAO_STATUS_OK
-                ? "Defaults loaded into the draft. Apply to save or discard to restore committed settings. / 默认值已载入草稿；应用以保存，丢弃以恢复提交值。"
-                : "Defaults could not be loaded into the draft. / 默认值未能载入草稿。");
+            status, status == SAO_STATUS_OK
+                        ? "Defaults loaded into the draft. Apply to save or discard to restore "
+                          "committed settings. / 默认值已载入草稿；应用以保存，丢弃以恢复提交值。"
+                        : "Defaults could not be loaded into the draft. / 默认值未能载入草稿。");
     }
 
     if (action == kSettingsActionToggle) {
@@ -1877,9 +1958,15 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
         const auto current = snapshot.find(key);
         if (current != snapshot.end() && !current->is_boolean())
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid setting");
-        if (current == snapshot.end() && key != "sound_enabled" && key != "streaming_mode")
+        if (current == snapshot.end() && key != "sound_enabled" && key != "streaming_mode" &&
+            key != "vt_hypervisor_enabled")
             return publish_after_draft_mutation(SAO_STATUS_ERR_INVALID_ARGUMENT, "Invalid setting");
-        const bool next = current == snapshot.end() ? key == "sound_enabled" : !current->get<bool>();
+        // Absent-key semantics: sound and VT render an Off->On/Default row
+        // whose press stores `true`; streaming renders a Default-On fallback
+        // whose press stores `false`.  The persisted key is created on first
+        // toggle either way.
+        const bool next =
+            current == snapshot.end() ? key != "streaming_mode" : !current->get<bool>();
         status = owner_lease->set_value(key, next);
         if (status == SAO_STATUS_OK) {
             sync_draft_snapshot(owner_lease);
@@ -1891,8 +1978,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 const sao_status_t runtime_status = sao_ui_sound_set_enabled(next);
                 sao::launcher::refreshUserGuideSoundPolicy();
                 if (runtime_status != SAO_STATUS_OK) {
-                    const sao_status_t rollback_status = rollback_draft_mutation(
-                        owner_lease, snapshot, owner_dirty_before, dirty);
+                    const sao_status_t rollback_status =
+                        rollback_draft_mutation(owner_lease, snapshot, owner_dirty_before, dirty);
                     status = first_error(runtime_status, rollback_status);
                 } else if (next) {
                     (void)sao_ui_sound_play(SAO_UI_SOUND_CLICK, 50);
@@ -1900,8 +1987,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             } else if (key == "streaming_mode") {
                 const sao_status_t runtime_status = apply_streaming_mode_runtime(next);
                 if (runtime_status != SAO_STATUS_OK) {
-                    const sao_status_t rollback_status = rollback_draft_mutation(
-                        owner_lease, snapshot, owner_dirty_before, dirty);
+                    const sao_status_t rollback_status =
+                        rollback_draft_mutation(owner_lease, snapshot, owner_dirty_before, dirty);
                     status = first_error(runtime_status, rollback_status);
                 }
             }
@@ -1931,8 +2018,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                     sao_ui_sound_set_volume(static_cast<int32_t>(next));
                 sao::launcher::refreshUserGuideSoundPolicy();
                 if (runtime_status != SAO_STATUS_OK) {
-                    const sao_status_t rollback_status = rollback_draft_mutation(
-                        owner_lease, snapshot, owner_dirty_before, dirty);
+                    const sao_status_t rollback_status =
+                        rollback_draft_mutation(owner_lease, snapshot, owner_dirty_before, dirty);
                     status = first_error(runtime_status, rollback_status);
                 }
             }
@@ -1978,8 +2065,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 const sao_status_t runtime_status =
                     sao_ui_sound_set_volume(static_cast<int32_t>(next));
                 if (runtime_status != SAO_STATUS_OK) {
-                    const sao_status_t rollback_status = rollback_draft_mutation(
-                        owner_lease, snapshot, owner_dirty_before, dirty);
+                    const sao_status_t rollback_status =
+                        rollback_draft_mutation(owner_lease, snapshot, owner_dirty_before, dirty);
                     status = first_error(runtime_status, rollback_status);
                 }
             }
@@ -1994,19 +2081,17 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
     if (action == "settings.files.import") {
 #if defined(_WIN32) && defined(SAO_SETTINGS_PANEL_UI)
         char picked[kFilePickerPathBytes]{};
-        const sao_status_t pick_status =
-            sao_ui_dialog_file_picker_show("Import settings / 导入设置",
-                                           "Settings file|*.json|All files|*.*", picked,
-                                           sizeof(picked));
+        const sao_status_t pick_status = sao_ui_dialog_file_picker_show(
+            "Import settings / 导入设置", "Settings file|*.json|All files|*.*", picked,
+            sizeof(picked));
         if (pick_status == SAO_STATUS_ERR_CANCELLED)
-            return publish_after_draft_mutation(SAO_STATUS_OK,
-                                                "Import cancelled. / 已取消导入。");
+            return publish_after_draft_mutation(SAO_STATUS_OK, "Import cancelled. / 已取消导入。");
         if (pick_status != SAO_STATUS_OK)
             return publish_after_draft_mutation(pick_status,
                                                 "File picker failed. / 文件选择失败。");
         try {
-            const std::filesystem::path file(std::u8string(
-                reinterpret_cast<const char8_t*>(picked)));
+            const std::filesystem::path file(
+                std::u8string(reinterpret_cast<const char8_t*>(picked)));
             std::error_code file_error;
             const std::uintmax_t file_size = std::filesystem::file_size(file, file_error);
             if (file_error)
@@ -2050,15 +2135,16 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                     state().draft_initialized = true;
                     state().draft_dirty = true;
                 } else {
-                    const sao_status_t rollback_status = rollback_draft_mutation(
-                        owner_lease, live_snapshot, owner_was_dirty, dirty);
+                    const sao_status_t rollback_status =
+                        rollback_draft_mutation(owner_lease, live_snapshot, owner_was_dirty, dirty);
                     status = first_error(runtime_status, rollback_status);
                 }
             }
             return publish_after_draft_mutation(
                 status,
                 status == SAO_STATUS_OK
-                    ? "Settings imported into the draft. Apply to save or discard to restore committed settings. / 设置已导入草稿；应用以保存，丢弃以恢复提交值。"
+                    ? "Settings imported into the draft. Apply to save or discard to restore "
+                      "committed settings. / 设置已导入草稿；应用以保存，丢弃以恢复提交值。"
                     : "Import failed. / 导入失败。");
         } catch (const std::bad_alloc&) {
             return publish_after_draft_mutation(SAO_STATUS_ERR_UNKNOWN,
@@ -2098,8 +2184,8 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             const sao_status_t runtime_status = sao_ui_theme_set_active_id(
                 next == settings_theme::PanelTheme::light ? SAO_UI_THEME_LIGHT : SAO_UI_THEME_DARK);
             if (runtime_status != SAO_STATUS_OK) {
-                const sao_status_t rollback_status = rollback_draft_mutation(
-                    owner_lease, snapshot, owner_dirty_before, dirty);
+                const sao_status_t rollback_status =
+                    rollback_draft_mutation(owner_lease, snapshot, owner_dirty_before, dirty);
                 status = first_error(runtime_status, rollback_status);
             } else {
                 std::lock_guard lock(state().mutex);
@@ -2107,12 +2193,11 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
             }
         }
         return publish_after_draft_mutation(
-            status,
-            status == SAO_STATUS_OK
-                ? draft_feedback("Panel appearance / 界面外观",
-                                 next == settings_theme::PanelTheme::light ? "Light / 浅色"
-                                                                          : "Dark / 深色")
-                : "Theme could not be changed. / 主题更改失败。");
+            status, status == SAO_STATUS_OK
+                        ? draft_feedback("Panel appearance / 界面外观",
+                                         next == settings_theme::PanelTheme::light ? "Light / 浅色"
+                                                                                   : "Dark / 深色")
+                        : "Theme could not be changed. / 主题更改失败。");
     }
 
     if (action == "settings.profile.save_as") {
@@ -2176,16 +2261,16 @@ sao_status_t dispatch_action_impl(std::string_view action, std::string_view payl
                 state().draft_initialized = true;
                 state().draft_dirty = true;
             } else {
-                const sao_status_t rollback_status = rollback_draft_mutation(
-                    owner_lease, live_snapshot, owner_was_dirty, dirty);
+                const sao_status_t rollback_status =
+                    rollback_draft_mutation(owner_lease, live_snapshot, owner_was_dirty, dirty);
                 status = first_error(runtime_status, rollback_status);
             }
         }
         return publish_after_draft_mutation(
-            status,
-            status == SAO_STATUS_OK
-                ? "Profile loaded into the draft. Apply to save or discard to restore committed settings. / 配置已载入草稿；应用以保存，丢弃以恢复提交值。"
-                : profile_failure_text(status, "Load profile"));
+            status, status == SAO_STATUS_OK
+                        ? "Profile loaded into the draft. Apply to save or discard to restore "
+                          "committed settings. / 配置已载入草稿；应用以保存，丢弃以恢复提交值。"
+                        : profile_failure_text(status, "Load profile"));
     }
     return publish_after_draft_mutation(SAO_STATUS_ERR_NOT_FOUND, "Unknown settings action");
 }
@@ -2233,9 +2318,8 @@ extern "C" sao_status_t sao_launcher_settings_config_external_refresh(void) {
         {
             std::lock_guard lock(state().mutex);
             if (state().draft_dirty)
-                state().status_text =
-                    "Settings changed outside this panel; your draft is kept. / "
-                    "设置已在面板外更改，草稿已保留。";
+                state().status_text = "Settings changed outside this panel; your draft is kept. / "
+                                      "设置已在面板外更改，草稿已保留。";
         }
         return publish();
     } catch (...) {
@@ -2312,6 +2396,17 @@ sao_status_t settings_panel_unbind_owner(void* owner_opaque) noexcept {
 
 sao_status_t rebind_owner_for_testing(void* owner_opaque) noexcept {
     return sao_launcher_settings_panel_set_owner(owner_opaque);
+}
+
+sao_status_t settings_panel_bind_vt_state_query(VtStateQueryFn fn, void* user) noexcept {
+    try {
+        std::lock_guard lock(state().mutex);
+        state().vt_query_fn = fn;
+        state().vt_query_user = user;
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 #if defined(SAO_SETTINGS_PANEL_UI)
@@ -2426,7 +2521,11 @@ sao_status_t take_offline_for_testing() noexcept {
     {
         std::lock_guard lock(state().mutex);
         if (!state().creating && state().operations == 0U && state().callbacks == 0U &&
-            state().panel == nullptr && state().body == nullptr) {
+            state().panel == nullptr && state().body == nullptr
+#if defined(SAO_SETTINGS_HAS_FILE_PICKER) && SAO_SETTINGS_HAS_FILE_PICKER
+            && state().file_picker == nullptr
+#endif
+        ) {
             return SAO_STATUS_OK;
         }
     }
@@ -2436,8 +2535,13 @@ sao_status_t take_offline_for_testing() noexcept {
     sao_ui_panel_handle_t panel = nullptr;
 #if defined(SAO_SETTINGS_HAS_FILE_PICKER) && SAO_SETTINGS_HAS_FILE_PICKER
     sao_ui_file_picker_handle_t file_picker = nullptr;
-    bool picker_only_teardown = false;
+    // Set once the picker object has been destroyed below; the rollback
+    // path must then drop state().file_picker too or the slot dangles and
+    // the next ensure_file_picker()/take_offline call reuses a freed
+    // handle.
+    bool picker_destroyed = false;
 #endif
+    bool picker_only_teardown = false;
     bool action_attached = false;
     bool event_attached = false;
     {
@@ -2450,17 +2554,18 @@ sao_status_t take_offline_for_testing() noexcept {
 #endif
         )
             return SAO_STATUS_OK;
-        if (state().panel == nullptr || state().body == nullptr)
+#if defined(SAO_SETTINGS_HAS_FILE_PICKER) && SAO_SETTINGS_HAS_FILE_PICKER
+        file_picker = state().file_picker;
+        picker_only_teardown = state().panel == nullptr && file_picker != nullptr;
+#endif
+        if (!picker_only_teardown &&
+            (state().panel == nullptr || state().body == nullptr))
             return SAO_STATUS_ERR_HANDLE_INVALID;
         state().retiring = true;
         state().accepting = false;
         panel = state().panel;
         action_attached = state().action_attached;
         event_attached = state().event_attached;
-#if defined(SAO_SETTINGS_HAS_FILE_PICKER) && SAO_SETTINGS_HAS_FILE_PICKER
-        file_picker = state().file_picker;
-        picker_only_teardown = panel == nullptr && file_picker != nullptr;
-#endif
     }
 #if defined(SAO_SETTINGS_HAS_FILE_PICKER) && SAO_SETTINGS_HAS_FILE_PICKER
     if (picker_only_teardown) {
@@ -2488,8 +2593,10 @@ sao_status_t take_offline_for_testing() noexcept {
 #if defined(SAO_SETTINGS_HAS_FILE_PICKER) && SAO_SETTINGS_HAS_FILE_PICKER
     // The picker is owner-thread too.  Destroy it before unregistering the
     // panel so its cancel callback cannot publish into a released body.
-    if (status == SAO_STATUS_OK && file_picker != nullptr)
+    if (status == SAO_STATUS_OK && file_picker != nullptr) {
         (void)sao_ui_file_picker_try_destroy(file_picker);
+        picker_destroyed = true;
+    }
 #endif
     if (status == SAO_STATUS_OK) {
         sao_status_t injected = SAO_STATUS_OK;
@@ -2548,6 +2655,10 @@ sao_status_t take_offline_for_testing() noexcept {
         state().event_attached = event_attached;
         state().retiring = false;
         state().accepting = rollback_ok;
+#if defined(SAO_SETTINGS_HAS_FILE_PICKER) && SAO_SETTINGS_HAS_FILE_PICKER
+        if (picker_destroyed)
+            state().file_picker = nullptr;
+#endif
     }
     return rollback_ok ? status : SAO_UI_PANEL_STATUS_ERR_ROLLBACK_FAILED;
 #else
