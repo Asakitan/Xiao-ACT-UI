@@ -1,5 +1,7 @@
 #include "sao/plugins/loader/plugin_scanner.h"
 
+#include "sao/plugins/loader/loader_status.h"
+
 #include <algorithm>
 #include <filesystem>
 #include <new>
@@ -36,15 +38,15 @@ int32_t refresh_path(const fs::path& directory, bool user, bool workspace,
     output = scanned_plugin{};
     const auto manifest_path = directory / L"plugin.json";
     std::error_code error;
-    if (!fs::is_regular_file(manifest_path, error)) return SAO_ERR_HANDLE_INVALID;
+    if (!fs::is_regular_file(manifest_path, error)) return SAO_PLUGINS_ERR_NOT_FOUND;
     const auto status = sao_plugins_manifest_load_from_file(manifest_path.c_str(), &output.manifest);
     if (status != SAO_OK) return status;
     if (validate_manifest(output.manifest) != SAO_OK) return SAO_ERR_INVALID_ARGUMENT;
     const auto entry_path = directory / fs::u8path(output.manifest.entry);
-    if (!fs::is_regular_file(entry_path, error)) return SAO_ERR_HANDLE_INVALID;
+    if (!fs::is_regular_file(entry_path, error)) return SAO_PLUGINS_ERR_NOT_FOUND;
     if (!output.manifest.native_entry.empty()) {
         const auto native_path = directory / fs::u8path(output.manifest.native_entry);
-        if (!fs::is_regular_file(native_path, error)) return SAO_ERR_HANDLE_INVALID;
+        if (!fs::is_regular_file(native_path, error)) return SAO_PLUGINS_ERR_NOT_FOUND;
     }
     output.is_user_installed = user;
     output.is_workspace_plugin = workspace;
@@ -170,7 +172,7 @@ sao_plugins_scanner_find_workspace_root(const wchar_t* start_dir, wchar_t** out_
     *out_root_path = nullptr;
     try {
         fs::path current;
-        if (!canonical_path(fs::path(start_dir), current)) return SAO_ERR_HANDLE_INVALID;
+        if (!canonical_path(fs::path(start_dir), current)) return SAO_PLUGINS_ERR_NOT_FOUND;
         while (!current.empty()) {
             if (has_workspace_marker(current)) {
                 const auto value = current.native();
@@ -184,7 +186,7 @@ sao_plugins_scanner_find_workspace_root(const wchar_t* start_dir, wchar_t** out_
             if (parent == current) break;
             current = parent;
         }
-        return SAO_ERR_HANDLE_INVALID;
+        return SAO_PLUGINS_ERR_NOT_FOUND;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }

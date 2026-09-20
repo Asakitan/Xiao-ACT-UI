@@ -193,6 +193,31 @@ std::vector<std::string> string_array(const json& value) {
     return result;
 }
 
+// py_runtime / runtime_hint 归一化: 只认 pymini|cpython|auto,
+// 容忍首尾空白与大小写; 其它值一律归空 (非法声明不静默透传)。
+std::string normalize_py_runtime(std::string_view value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n");
+    const std::string normalized = lower_ascii(value.substr(first, last - first + 1));
+    if (normalized == "pymini" || normalized == "cpython" || normalized == "auto") {
+        return normalized;
+    }
+    return {};
+}
+
+// cs_runtime 归一化: 只认 csmini|coreclr|auto; 同 py_runtime 规则。
+std::string normalize_cs_runtime(std::string_view value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n");
+    const std::string normalized = lower_ascii(value.substr(first, last - first + 1));
+    if (normalized == "csmini" || normalized == "coreclr" || normalized == "auto") {
+        return normalized;
+    }
+    return {};
+}
+
 void parse_requires(const json& value, std::vector<std::string>& result) {
     auto trim = [](std::string text) {
         const auto first = text.find_first_not_of(" \t\r\n");
@@ -397,6 +422,10 @@ int32_t populate_manifest(const json& root, plugin_manifest& output) {
 
     auto language = string_value(root, "language");
     if (language.empty()) language = string_value(root, "engine");
+    // Deliberate leniency, mirroring the Python fixture's manifest
+    // normalization: hand-written manifests may omit name, version, language
+    // and entry; defaults are inferred so validate_manifest's required-field
+    // checks still trip on parse-invalid content, not on omitted defaults.
     if (language.empty()) language = string_value(root, "runtime");
     output.language = parse_engine_kind(language);
     if (output.language == engine_kind::unknown) output.language = infer_language_from_entry(output.entry);
@@ -405,6 +434,15 @@ int32_t populate_manifest(const json& root, plugin_manifest& output) {
         output.language = engine_kind::python;
     }
     if (output.entry.empty()) output.entry = guess_default_entry_for(output.language);
+    // C# manifests that omit managed_type fall back to the default-entry
+    // contract "Plugin,<entry-stem>" — the same shape the direct-load path
+    // derives — so the canonical ctx surface and direct lifecycle agree.
+    if (output.managed_type.empty() && output.language == engine_kind::csharp) {
+        const std::string stem = path_utf8(std::filesystem::u8path(output.entry).stem());
+        if (!stem.empty()) {
+            output.managed_type = "Plugin," + stem;
+        }
+    }
     if (output.name.empty()) output.name = output.plugin_id;
     if (output.version.empty()) output.version = "0.1.0";
 
@@ -435,6 +473,29 @@ int32_t populate_manifest(const json& root, plugin_manifest& output) {
     if (const auto iterator = root.find("mcpServers"); iterator != root.end()) output.mcp_servers_json = iterator->dump();
     if (const auto iterator = root.find("chatProviders"); iterator != root.end()) output.chat_providers_json = iterator->dump();
     output.protected_plugin = root.value("protected", false);
+
+    // ── platform / overlay / runtime hint passthrough ───────────
+    // 全部可选: 缺失 → 空默认, 非法值归一化为空; 未知键照旧忽略
+    // (与 py_v1_manifest 的 unknown-key 容忍一致, 多余键不报错)。
+    std::string py_runtime_value = string_value(root, "py_runtime");
+    if (py_runtime_value.empty()) py_runtime_value = string_value(root, "runtime_hint");
+    output.py_runtime = normalize_py_runtime(py_runtime_value);
+    output.cs_runtime = normalize_cs_runtime(string_value(root, "cs_runtime"));
+    if (const auto iterator = root.find("platform"); iterator != root.end()) {
+        output.platform_json = iterator->dump();
+        if (iterator->is_object()) {
+            if (const auto binds = iterator->find("binds");
+                binds != iterator->end() && binds->is_array()) {
+                output.binds_declared = true;
+                output.platform_binds = string_array(*binds);
+            }
+            output.surface = string_value(*iterator, "surface");
+        }
+    }
+    if (output.surface.empty()) output.surface = string_value(root, "surface");
+    if (const auto iterator = root.find("overlay_layers"); iterator != root.end()) {
+        output.overlay_layers_json = iterator->dump();
+    }
     return SAO_OK;
 }
 
@@ -524,7 +585,7 @@ sao_plugins_manifest_load_from_file(const wchar_t* manifest_path,
         std::error_code error;
         const auto file_size = std::filesystem::file_size(resolved_path, error);
         if (error)
-            return SAO_ERR_HANDLE_INVALID;
+             return SAO_PLUGINS_ERR_NOT_FOUND;
         if (file_size > kMaximumManifestRawBytes) {
             out_manifest->parse_error = "manifest exceeds raw byte budget";
             return SAO_ERR_INVALID_ARGUMENT;

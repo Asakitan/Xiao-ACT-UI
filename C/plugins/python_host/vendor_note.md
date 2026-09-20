@@ -6,8 +6,11 @@
 vcpkg install python3
 ```
 
-链接 ``Python3::Python``。CMake ``find_package(Python3 3.11 COMPONENTS
-Development.Embed REQUIRED)``。
+Windows构建通过 ``find_package(Python3 3.11 COMPONENTS Development.Embed QUIET)``
+取得headers。MSVC仅消费``Python3::Python``的include目录，并用
+``/NODEFAULTLIB:python3xx.lib``阻断``pyconfig.h``的默认导入库提示；运行时由
+``py_import_stubs.cpp``在``python_home``中动态加载DLL并解析required exports。
+找不到dev headers时host以unavailable形态构建，不中止整个native产品构建。
 
 ## 选项 2: 官方 embeddable package (推荐发布)
 
@@ -26,10 +29,10 @@ runtime/python-embed/
 在 py_host_config.python_home 里指向这个目录, PYTHONHOME + PYTHONPATH
 在 Py_Initialize 之前设好。
 
-## 冻结态 (Nuitka onedir 打包)
+## 旧 Python 产品冻结态 (Nuitka onedir)
 
-Nuitka 直接嵌入 CPython, 不需要额外 embed 分发。python_host.py_host_config
-把 python_home 传 ``dirname(argv[0])`` + 猜 python3XX.dll 位置。
+该路线只属于legacy Python产品，不是当前native launcher的runtime contract。native
+``python_host``必须收到明确``python_home``，不会从``argv[0]``猜测或下载runtime。
 
 ## 关键 Python 依赖 (随包 vendor)
 
@@ -43,5 +46,6 @@ Nuitka 直接嵌入 CPython, 不需要额外 embed 分发。python_host.py_host_
 
 ## 版本兼容
 
-只支持 CPython 3.11 + 3.12 + 3.13。3.10 因为 PEP 657 error tracing 差异
-拒。3.14 待评估。
+构建面要求CPython 3.11+ Development.Embed；运行时DLL的major/minor必须与构建时
+required-export表匹配。当前live provider probe证据为CPython 3.11.0；其他版本需按
+相同load/export/init/shutdown矩阵单独验收。

@@ -155,7 +155,7 @@ sao_plugins_install_archive(const wchar_t* archive_path,
         const fs::path archive(archive_path);
         const fs::path user_root(user_plugins_dir);
         std::error_code error;
-        if (!fs::is_regular_file(archive, error)) return SAO_ERR_HANDLE_INVALID;
+        if (!fs::is_regular_file(archive, error)) return SAO_PLUGINS_ERR_NOT_FOUND;
         fs::create_directories(user_root, error);
         if (error) return SAO_ERR_OS_CALL_FAILED;
 
@@ -192,12 +192,12 @@ sao_plugins_install_archive(const wchar_t* archive_path,
         }
         if (!fs::is_regular_file(plugin_root / fs::u8path(manifest.entry), error)) {
             result->message = "plugin entry is missing";
-            return SAO_ERR_HANDLE_INVALID;
+            return SAO_PLUGINS_ERR_NOT_FOUND;
         }
         if (!manifest.native_entry.empty() &&
             !fs::is_regular_file(plugin_root / fs::u8path(manifest.native_entry), error)) {
             result->message = "native plugin entry is missing";
-            return SAO_ERR_HANDLE_INVALID;
+            return SAO_PLUGINS_ERR_NOT_FOUND;
         }
         const auto destination = user_root / fs::u8path(manifest.plugin_id);
         if (!path_is_within_base(user_root.native(), destination.native())) return SAO_ERR_INVALID_ARGUMENT;
@@ -247,7 +247,7 @@ sao_plugins_uninstall_plugin(const char* plugin_id, bool to_recycle_bin) {
     if (plugin_id == nullptr || plugin_id[0] == '\0') return SAO_ERR_INVALID_ARGUMENT;
     auto* registry = sao_plugins_registry_instance();
     auto* plugin = sao_plugins_registry_find(registry, plugin_id);
-    if (plugin == nullptr) return SAO_ERR_HANDLE_INVALID;
+    if (plugin == nullptr) return SAO_PLUGINS_ERR_NOT_FOUND;
     if (!plugin_is_user_owned(plugin)) return SAO_PLUGINS_ERR_NOT_OWNER;
     const auto state = sao_plugins_lifecycle_state(plugin);
     if (state != lifecycle_state::discovered && state != lifecycle_state::unloaded &&
@@ -255,7 +255,7 @@ sao_plugins_uninstall_plugin(const char* plugin_id, bool to_recycle_bin) {
     const auto manifest = manifest_snapshot(plugin);
     try {
         const auto directory = fs::u8path(manifest.source_path);
-        if (directory.empty() || !fs::exists(directory)) return SAO_ERR_HANDLE_INVALID;
+         if (directory.empty() || !fs::exists(directory)) return SAO_PLUGINS_ERR_NOT_FOUND;
         if (to_recycle_bin) {
             auto path = directory.native();
             path.push_back(L'\0');

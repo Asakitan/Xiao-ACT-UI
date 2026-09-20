@@ -109,7 +109,7 @@ sao_plugins_registry_remove(registry_handle_t reg, plugin_handle_t handle) {
         std::unique_lock lock(reg->mutex);
         const auto iterator = std::find_if(reg->plugins.begin(), reg->plugins.end(),
             [handle](const auto& item) { return item.second.get() == handle; });
-        if (iterator == reg->plugins.end()) return SAO_ERR_HANDLE_INVALID;
+        if (iterator == reg->plugins.end()) return SAO_PLUGINS_ERR_NOT_FOUND;
         const auto retained = iterator->second;
         {
             std::lock_guard plugin_lock(retained->mutex);
@@ -149,7 +149,7 @@ sao_plugins_registry_add_extension(registry_handle_t reg,
         std::unique_lock lock(reg->mutex);
         const auto owner_iterator = std::find_if(reg->plugins.begin(), reg->plugins.end(),
             [owner](const auto& item) { return item.second.get() == owner; });
-        if (owner_iterator == reg->plugins.end()) return SAO_ERR_HANDLE_INVALID;
+        if (owner_iterator == reg->plugins.end()) return SAO_PLUGINS_ERR_NOT_FOUND;
         const auto duplicate = std::find_if(reg->extensions.begin(), reg->extensions.end(),
             [record, owner](const extension_record& existing) {
                 return existing.plugin_id == owner->manifest.plugin_id &&

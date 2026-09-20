@@ -7,7 +7,18 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_isolation_arm(plugin_handle_t plugin,
                           const isolation_config* cfg) {
     if (retain_plugin(plugin) == nullptr || cfg == nullptr) return SAO_ERR_INVALID_ARGUMENT;
-    return SAO_PLUGINS_ERR_UNSUPPORTED;
+    switch (cfg->mode) {
+    case isolation_mode::in_process:
+        // The in-process SEH barrier (plugin_lifecycle.cpp call sites) wraps
+        // every host-adapter entry unconditionally; arming is a recorded
+        // no-op rather than an enabling step.
+        return SAO_OK;
+    case isolation_mode::subprocess:
+    case isolation_mode::subprocess_sandbox:
+        return SAO_PLUGINS_ERR_UNSUPPORTED;
+    default:
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
 }
 
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL

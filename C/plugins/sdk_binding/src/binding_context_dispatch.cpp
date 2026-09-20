@@ -1,4 +1,5 @@
 #include "sao/plugins/sdk_binding/binding_common.h"
+#include "sao/plugins/sdk_binding/binding_engine.h"
 
 #include "sao/sdk/sao_sdk.h"
 
@@ -421,6 +422,14 @@ int32_t dispatch_ui(const SaoSdkContext* ctx,
             serialized.size());
         return status == SAO_SDK_OK ? write_result(true, request) : status;
     }
+    if (method == sdk_method_id::method_clear_overlay) {
+        std::string surface;
+        if (!read_string(arguments, "surface", &surface)) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        const int32_t status = sao_sdk_overlay_clear_surface(ctx, surface.c_str());
+        return status == SAO_SDK_OK ? write_result(true, request) : status;
+    }
 
     std::string panel_id;
     if (!read_string(arguments, "id", &panel_id)) {
@@ -509,6 +518,15 @@ int32_t dispatch_notification(const SaoSdkContext* ctx,
                               sdk_method_id method,
                               const ordered_json& arguments,
                               sdk_context_call_request* request) {
+    if (method == sdk_method_id::method_dismiss_notify) {
+        const auto token = arguments.find("token");
+        if (token == arguments.end() || !token->is_number_unsigned()) {
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        const int32_t status =
+            sao_sdk_notify_dismiss(ctx, token->get<sao_sdk_notify_token_t>());
+        return status == SAO_SDK_OK ? write_result(true, request) : status;
+    }
     std::string title;
     std::string message;
     double duration_s = 3.0;
@@ -547,6 +565,9 @@ sao_plugins_sdk_context_method_status(const SaoSdkContext* ctx,
     case sdk_method_id::prop_path:
     case sdk_method_id::prop_web_path:
     case sdk_method_id::prop_assets_path:
+    // 引擎面按目录名做 per-name 可用性判定，方法级恒 SAO_OK。
+    case sdk_method_id::method_engine_call:
+    case sdk_method_id::method_engine_list:
     case sdk_method_id::method_time:
         return SAO_OK;
     case sdk_method_id::method_subscribe:
@@ -572,7 +593,9 @@ sao_plugins_sdk_context_method_status(const SaoSdkContext* ctx,
     case sdk_method_id::method_set_interval:
     case sdk_method_id::method_clear_timer:
     case sdk_method_id::method_notify:
+    case sdk_method_id::method_dismiss_notify:
     case sdk_method_id::method_toast:
+    case sdk_method_id::method_clear_overlay:
         return normalize_status(sao_sdk_context_provider_status(ctx));
     default:
         return unsupported();
@@ -622,6 +645,7 @@ sao_plugins_sdk_context_dispatch(const SaoSdkContext* ctx,
             break;
         case sdk_method_id::method_register_ui_panel:
         case sdk_method_id::method_set_overlay:
+        case sdk_method_id::method_clear_overlay:
         case sdk_method_id::method_request_redraw:
             status = dispatch_ui(ctx, method_id, arguments, request);
             break;
@@ -633,8 +657,15 @@ sao_plugins_sdk_context_dispatch(const SaoSdkContext* ctx,
             status = dispatch_timer(ctx, method_id, arguments, request);
             break;
         case sdk_method_id::method_notify:
+        case sdk_method_id::method_dismiss_notify:
         case sdk_method_id::method_toast:
             status = dispatch_notification(ctx, method_id, arguments, request);
+            break;
+        case sdk_method_id::method_engine_call:
+            status = dispatch_engine_call(ctx, arguments, request);
+            break;
+        case sdk_method_id::method_engine_list:
+            status = dispatch_engine_list(ctx, request);
             break;
         default:
             break;

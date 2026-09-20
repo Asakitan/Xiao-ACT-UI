@@ -608,7 +608,7 @@ int32_t SAO_PLUGINS_CALL call_release(void* opaque) {
     if (call->callback->provider_release != nullptr) {
         call->callback->provider_release(call->callback->callback_user_data,
                                           call->callback->provider_user_data);
-    } else {
+    } else if (call->callback->legacy_release != nullptr) {
         call->callback->legacy_release(call->callback->callback_user_data);
     }
     return SAO_OK;
@@ -1127,6 +1127,8 @@ static constexpr method_name_map k_names[] = {
     {sdk_method_id::method_ensure_requirements, "ensure_requirements"},
     {sdk_method_id::method_load_local, "load_local"},
     {sdk_method_id::method_time, "time"},
+    {sdk_method_id::method_engine_call, "engine_call"},
+    {sdk_method_id::method_engine_list, "engine_list"},
 };
 static_assert(std::size(k_names) == static_cast<size_t>(sdk_method_id::method_count_));
 
@@ -1820,23 +1822,5 @@ sao_plugins_binding_test_last_log(plugin_binding_handle_t plugin) {
     // 注意: 返回内部 string 引用, 调用方不能修改。
     return plugin->last_log.c_str();
 }
-
-// ── activate / deactivate 通用工厂 (各语言复用) ──────────────
-
-namespace detail {
-
-// int lang: 0=python, 1=lua, 2=angel, 3=emma, 4=csharp
-plugin_binding_handle_t make_binding(void* ctx, void* lang_state, int lang) {
-    plugin_binding_handle_t binding = nullptr;
-    const auto language = static_cast<language_host_kind>(lang);
-    return sao_plugins_binding_plugin_load(language, ctx, lang_state, &binding) == SAO_OK ? binding
-                                                                                          : nullptr;
-}
-
-void free_binding(plugin_binding_handle_t plugin) {
-    (void)sao_plugins_binding_plugin_unload(plugin);
-}
-
-} // namespace detail
 
 } // namespace sao::plugins::sdk_binding

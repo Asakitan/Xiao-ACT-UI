@@ -10,6 +10,7 @@ add_library(sao_plugins_python_host STATIC
     src/py_call.cpp
     src/py_sandbox.cpp
     src/py_error.cpp
+    src/py_import_stubs.cpp
 )
 add_library(sao::plugins::python_host ALIAS sao_plugins_python_host)
 
@@ -53,6 +54,29 @@ if (SAO_PLUGINS_PYTHON_AUTO_FETCH)
         "Legacy compatibility switch; runtime downloads are disabled." FORCE)
 endif()
 
+# Locate a usable CPython 3.11+ Development.Embed root.  The host always
+# builds (fail-closed when none is found); these hints let the C++ tree
+# resolve a common local runtime without requiring PATH/registry entries.
+#   Priority: SAO_PYHOST_HOME > Python3_ROOT > well-known dev roots >
+#   per-user %LOCALAPPDATA% installs > registry/PATH (FindPython3 default).
+set(SAO_PYHOST_HOME "" CACHE PATH
+    "CPython install root to embed (contains include/Python.h and libs/)")
+if (NOT Python3_ROOT AND NOT Python3_ROOT_DIR)
+    foreach(_sao_py_candidate IN ITEMS
+            "${SAO_PYHOST_HOME}"
+            "E:/Py"
+            "C:/Python313" "C:/Python312" "C:/Python311"
+            "$ENV{LOCALAPPDATA}/Programs/Python/Python313"
+            "$ENV{LOCALAPPDATA}/Programs/Python/Python312"
+            "$ENV{LOCALAPPDATA}/Programs/Python/Python311")
+        if (_sao_py_candidate AND EXISTS "${_sao_py_candidate}/include/Python.h")
+            set(Python3_ROOT "${_sao_py_candidate}")
+            set(Python3_ROOT_DIR "${_sao_py_candidate}")
+            break()
+        endif()
+    endforeach()
+endif()
+
 find_package(Python3 3.11 COMPONENTS Development.Embed QUIET)
 set(_sao_python_resolved OFF)
 set(_sao_python_runtime_dll "")
@@ -60,13 +84,33 @@ if (Python3_FOUND)
     message(STATUS "sao_plugins_python_host: Python3 embed found (${Python3_VERSION})")
     target_compile_definitions(sao_plugins_python_host PUBLIC
         SAO_HAS_PYTHON_EMBED
-        # CPython's Windows headers automatically select python311_d.lib when
-        # _DEBUG is set. An official release distribution does not ship that
-        # debug import library, so suppress only the automatic link pragma.
-        # Python3::Python explicitly supplies python311.lib.
-        $<$<CONFIG:Debug>:Py_NO_LINK_LIB>
+        # No python3xx.lib import library is linked anywhere: the launcher
+        # payload must start on machines without CPython installed. The
+        # runtime DLL is discovered inside python_home and bound lazily
+        # through the __imp_* slots in py_import_stubs.cpp — the pragma
+        # import hints in pyconfig.h are suppressed for every config.
+        Py_NO_LINK_LIB
     )
-    target_link_libraries(sao_plugins_python_host PUBLIC Python3::Python)
+    # Keep Python.h reachable without inheriting the python311.lib link edge.
+    target_include_directories(sao_plugins_python_host PRIVATE
+        $<TARGET_PROPERTY:Python3::Python,INTERFACE_INCLUDE_DIRECTORIES>)
+    if (MSVC)
+        # pyconfig.h on this header set has no Py_NO_LINK_LIB guard — its
+        # pragma always emits /DEFAULTLIB for python3xx(_d).lib.  Ignore the
+        # directive in every consumer; binding is entirely dynamic
+        # (__imp_* slots filled by resolve_python_imports at runtime).
+        set(_sao_pyhost_dead_libs
+            "python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}.lib")
+        set(_sao_pyhost_dead_libs_debug
+            "python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}_d.lib")
+        set(_sao_pyhost_dead_libs_limited "python3.lib")
+        target_link_options(sao_plugins_python_host PUBLIC
+            /NODEFAULTLIB:${_sao_pyhost_dead_libs}
+            /NODEFAULTLIB:${_sao_pyhost_dead_libs_debug}
+            /NODEFAULTLIB:${_sao_pyhost_dead_libs_limited})
+    else()
+        target_link_libraries(sao_plugins_python_host PRIVATE Python3::Python)
+    endif()
     set(_sao_python_runtime_dll
         "python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}.dll")
     set(_sao_python_resolved ON)

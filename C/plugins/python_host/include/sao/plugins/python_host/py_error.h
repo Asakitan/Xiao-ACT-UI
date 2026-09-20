@@ -17,8 +17,9 @@
 
 namespace sao::plugins::python_host {
 
-// 从当前线程的 PyErr 状态取错误并清空。
-// 返回值: SAO_STATUS_*, 出参 out_utf8 是分配的 utf-8 消息 (调用方 free)。
+// 从当前线程的 PyErr 状态取错误并清空; 实现内部持 GIL, 调用方无需持有。
+// 返回值: SAO_STATUS_*; 无错误可取时返 SAO_ERR_HANDLE_INVALID。
+// 出参 out_utf8 是 malloc 分配的 utf-8 消息, 用 sao_plugins_pyhost_free_string 释放。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_take_error(char** out_utf8);
 

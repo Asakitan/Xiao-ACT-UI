@@ -160,6 +160,11 @@ enum class sdk_method_id : uint16_t {
     method_load_local,
     method_time,
 
+    // 反射引擎面：覆盖 SaoSdkContext 全部 vtable 槽与 sao_sdk_* 自由函数的
+    // 通用 engine 调用 / 目录枚举入口（见 binding_engine.h）。
+    method_engine_call,
+    method_engine_list,
+
     method_count_, // sentinel
 };
 
@@ -341,6 +346,14 @@ using sdk_context_panel_action_callback_fn =
     void(SAO_PLUGINS_CALL*)(const char* action_key_utf8, const uint8_t* action_json_utf8,
                             size_t action_size, void* user_data);
 
+// Generic engine callback channel used by the reflective engine surface
+// (binding_engine.h) for vtable slots whose callback shape has no dedicated
+// slot above — e.g. net frame callbacks, render hooks, data source ticks.
+// channel_utf8 names the source ("net.frame", "ui.render_hook", ...).
+using sdk_context_engine_callback_fn =
+    void(SAO_PLUGINS_CALL*)(const char* channel_utf8, const uint8_t* payload_json_utf8,
+                            size_t payload_size, void* user_data);
+
 struct sdk_context_call_request {
     const char* args_json_utf8 = nullptr;
     size_t args_size = 0;
@@ -348,6 +361,7 @@ struct sdk_context_call_request {
     sdk_context_hotkey_callback_fn hotkey_callback = nullptr;
     sdk_context_timer_callback_fn timer_callback = nullptr;
     sdk_context_panel_action_callback_fn panel_action_callback = nullptr;
+    sdk_context_engine_callback_fn engine_callback = nullptr;
     void* callback_user_data = nullptr;
     char* out_result_json_utf8 = nullptr;
     size_t out_capacity = 0;

@@ -22,6 +22,9 @@
 //     默认快捷键 (project_hotkey_architecture)
 //   abi_version →
 //     ABI 版本声明 (缺失 = 1, 表示旧插件)
+//   py_runtime / runtime_hint, platform (binds/surface/min_api_version),
+//     overlay_layers, surface →
+//     v2 兼容 passthrough (legacy-compat-design manifest additions)
 #pragma once
 
 #include <cstdint>
@@ -113,6 +116,16 @@ struct plugin_manifest {
     bool protected_plugin = false;
     std::string native_entry;   // e.g. "workshop_native.dll"
     std::string native_abi;     // "sao_plugin_v1"
+
+    // ── platform / overlay / runtime hint passthrough ───────────
+    // (legacy-compat-design manifest additions; 全部可选, 缺失/非法 → 空)
+    std::string py_runtime;                  // py_runtime / runtime_hint: pymini|cpython|auto
+    std::string cs_runtime;                  // cs_runtime: csmini|coreclr|auto
+    std::string platform_json;               // platform 对象原样 JSON
+    std::vector<std::string> platform_binds; // platform.binds 声明的 ctx bind 名
+    bool binds_declared = false;             // platform.binds 以数组形式声明过
+    std::string overlay_layers_json;         // overlay_layers 原样 JSON
+    std::string surface;                     // platform.surface, 顶层 surface 兜底
 
     // ── 加载时状态 ────────────────────────────────────────────
     std::string source_path;   // manifest 所在插件目录绝对路径

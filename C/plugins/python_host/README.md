@@ -32,9 +32,30 @@ PluginContext`` 直接可用 → 无需改一个字迁移。
 
 ## vcpkg / vendor 依赖
 
-- ``Python3::Python`` (vcpkg python3, embedded 版本; 或直接用 Windows 官方
-  embeddable package)
+- 构建时需要 CPython 3.11+ `Development.Embed` headers；MSVC 下只读取
+  `Python3::Python` 的 include 目录，不把 `python3xx.lib` 依赖传播到 launcher。
+- `py_import_stubs.cpp` 在配置的 `python_home` 内加载 `python3xx.dll`，解析完整
+  required-export 表后才允许初始化；缺任一导出即 fail closed。`SaoAuto` payload
+  因此不静态导入 `python311.dll`，没有安装 CPython 的机器仍可启动。
+- CMake 找不到 headers 时模块仍可构建为 unavailable host，运行时返回明确状态，
+  不下载 runtime。
 - 见 ``vendor_note.md`` —— 嵌入式 CPython 分发从哪拿
+
+## Production runtime acceptance
+
+- `python_home` 为空时状态为 `UNCONFIGURED`；路径存在但 runtime probe失败为
+  `UNAVAILABLE`；host未构建为 `HOST_UNAVAILABLE`；只有DLL加载、required exports与
+  host初始化条件全部满足才发布 `READY`。
+- `py_runtime: "cpython"` 的插件只在 `READY` 时进入CPython adapter；没有READY
+  runtime时保持deferred/fail-closed。`auto`或`pymini`插件继续走本机C++ pymini，
+  子集外能力返回明确`UNSUPPORTED`，不静默下载或替换runtime。
+- Launcher把上述Python状态显示为built-in Plugins状态行；Python状态本身不改变overall
+  plugin runtime operational status。只有整体plugin runtime不是`READY`时，Entity
+  publication才使用空loader catalog并清除旧revision/content token/published catalog，
+  防止上一次generation的插件action继续可调用。
+
+当前live provider probe曾完成CPython 3.11.0 init→version→shutdown；这是configured
+runtime生命周期证据，不代表任意CPython版本或第三方package都已验收。
 
 ## 历史测试（2026-08-23 已删除）
 

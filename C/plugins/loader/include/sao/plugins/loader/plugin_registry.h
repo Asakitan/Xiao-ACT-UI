@@ -32,6 +32,7 @@ enum class extension_kind : uint8_t {
     ui_panel,
     menu_category,
     data_source,
+    menu_surface,
 };
 
 // 一条扩展记录 (对齐 Python _normalize_extension 输出)

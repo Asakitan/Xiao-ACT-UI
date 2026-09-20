@@ -30,8 +30,10 @@
 #include "sao/plugins/compat/py_v1_manifest.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/sdk_binding/binding_common.h"
+#include "sao/plugins/python_host/py_error.h"
 #include "sao/plugins/python_host/py_host.h"
 #include "sao/plugins/python_host/py_module_bridge.h"
+#include "sao/plugins/python_host/py_dynamic_imports.h"
 #include "sao/sdk/sao_sdk.h"
 
 #include <windows.h>
@@ -858,6 +860,13 @@ bool preload_python_runtime(const python_layout& layout) {
         return false;
     }
     detail::dynamic_python_data() = candidate;
+
+    const char* missing_import = nullptr;
+    if (!detail::resolve_python_imports(
+            reinterpret_cast<void*>(loaded), &missing_import)) {
+        (void)FreeLibrary(loaded);
+        return false;
+    }
 #endif
 
     g_python_runtime_module = loaded;
@@ -1585,6 +1594,12 @@ sao_plugins_pyhost_unload_plugin(py_plugin_handle_t plugin) {
 
         // Py 可能已被 finalize (host_shutdown 之后二次 unload). 只有 initialized
         // 时才走 Py 侧清理.
+#if defined(SAO_PYHOST_DYNAMIC_PY_DATA)
+        if (!detail::python_imports_resolved() || Py_IsInitialized() == 0) {
+            // Imports never resolved or Py already gone — skip the Py-side
+            // teardown entirely; the state-slot close below still runs.
+        } else
+#endif
         if (Py_IsInitialized() != 0) {
             const int32_t teardown_status = sao_plugins_pyhost_ctx_try_teardown_native(pl->ctx);
             if (teardown_status != SAO_OK) {
@@ -1958,6 +1973,91 @@ sao_plugins_pyhost_get_last_error(py_plugin_handle_t plugin, char** out_utf8) {
         *out_utf8 = nullptr;
         return SAO_ERR_OS_CALL_FAILED;
     }
+#endif
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_take_error(char** out_utf8) {
+    if (out_utf8 != nullptr)
+        *out_utf8 = nullptr;
+#if !defined(SAO_HAS_PYTHON_EMBED)
+    return SAO_ERR_NOT_IMPLEMENTED;
+#else
+    if (out_utf8 == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        // Exported entry point callable before init: under DYNAMIC_PY_DATA
+        // the __imp_* slots are still nullptr until resolve_python_imports
+        // runs inside sao_plugins_pyhost_init.
+#if defined(SAO_PYHOST_DYNAMIC_PY_DATA)
+        if (!detail::python_imports_resolved() || Py_IsInitialized() == 0)
+#else
+        if (Py_IsInitialized() == 0)
+#endif
+            return SAO_ERR_HANDLE_INVALID;
+        const PyGILState_STATE gil_state = PyGILState_Ensure();
+        const std::string text = capture_and_clear_pyerr();
+        PyGILState_Release(gil_state);
+        if (text.empty())
+            return SAO_ERR_HANDLE_INVALID;
+        char* buffer = static_cast<char*>(std::malloc(text.size() + 1));
+        if (buffer == nullptr)
+            return SAO_ERR_OS_CALL_FAILED;
+        std::memcpy(buffer, text.data(), text.size());
+        buffer[text.size()] = '\0';
+        *out_utf8 = buffer;
+        return SAO_OK;
+    } catch (...) {
+        *out_utf8 = nullptr;
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+#endif
+}
+
+extern "C" SAO_PLUGINS_API void* SAO_PLUGINS_CALL
+sao_plugins_pyhost_gil_scope_enter(void) {
+#if !defined(SAO_HAS_PYTHON_EMBED)
+    return nullptr;
+#else
+    try {
+        // Dynamic import slots stay nullptr until a runtime module is
+        // resolved; touching Py_* before that would call a zero slot.
+#if defined(SAO_PYHOST_DYNAMIC_PY_DATA)
+        if (!detail::python_imports_resolved() || Py_IsInitialized() == 0)
+#else
+        if (Py_IsInitialized() == 0)
+#endif
+            return nullptr;
+        auto* scope = new (std::nothrow) PyGILState_STATE;
+        if (scope == nullptr)
+            return nullptr;
+        *scope = PyGILState_Ensure();
+        return scope;
+    } catch (...) {
+        return nullptr;
+    }
+#endif
+}
+
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
+sao_plugins_pyhost_gil_scope_leave(void* scope) {
+#if defined(SAO_HAS_PYTHON_EMBED)
+    if (scope == nullptr)
+        return;
+    try {
+#if defined(SAO_PYHOST_DYNAMIC_PY_DATA)
+        const bool py_ready =
+            detail::python_imports_resolved() && Py_IsInitialized() != 0;
+#else
+        const bool py_ready = Py_IsInitialized() != 0;
+#endif
+        if (py_ready)
+            PyGILState_Release(*static_cast<PyGILState_STATE*>(scope));
+    } catch (...) {
+    }
+    delete static_cast<PyGILState_STATE*>(scope);
+#else
+    (void)scope;
 #endif
 }
 

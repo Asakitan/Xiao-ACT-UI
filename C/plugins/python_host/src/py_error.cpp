@@ -1,13 +1,10 @@
-// py_error.cpp — stub
+// py_error.cpp — Python host 状态码 → 异常名映射。
+//
+// sao_plugins_pyhost_take_error 的实现在 py_host.cpp: 复用该 TU 的
+// capture_and_clear_pyerr + GIL 管理, 无法在本 TU 访问 (TU-local).
 #include "sao/plugins/python_host/py_error.h"
 
 namespace sao::plugins::python_host {
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_pyhost_take_error(char** out_utf8) {
-    if (out_utf8 != nullptr) *out_utf8 = nullptr;
-    return SAO_ERR_NOT_IMPLEMENTED;
-}
 
 extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
 sao_plugins_pyhost_status_to_python_exc(int32_t status) {

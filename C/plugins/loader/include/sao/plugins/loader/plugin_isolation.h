@@ -36,8 +36,11 @@ struct isolation_config {
     std::wstring host_executable;
 };
 
-// 为某插件 arm 隔离屏障。当前 loader 未拥有完整的进程/沙箱 primitive，
-// 所有模式均 fail-closed 返回 UNSUPPORTED，不登记虚假的已启用状态。
+// 为某插件 arm 隔离屏障。
+//   in_process: 返回 SAO_OK —— SEH 异常屏障在 plugin_lifecycle.cpp 的每个
+//     宿主调用点无条件生效，arm 只是记录意图，无独立启用态。
+//   subprocess / subprocess_sandbox: loader 未拥有完整的进程/沙箱 primitive，
+//     fail-closed 返回 UNSUPPORTED，不登记虚假的已启用状态。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_isolation_arm(plugin_handle_t plugin,
                           const isolation_config* cfg);

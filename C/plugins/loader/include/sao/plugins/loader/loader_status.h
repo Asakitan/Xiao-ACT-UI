@@ -10,6 +10,9 @@ inline constexpr int32_t SAO_PLUGINS_ERR_DEPENDENCY_MISSING = -1002;
 inline constexpr int32_t SAO_PLUGINS_ERR_DEPENDENCY_CYCLE = -1003;
 inline constexpr int32_t SAO_PLUGINS_ERR_ABI_MISMATCH = -1004;
 inline constexpr int32_t SAO_PLUGINS_ERR_CAPABILITY_MISMATCH = -1005;
+// Note: -1006 also exists as SAO_SHELL_STUB_RUNTIME_ERR_BUSY in the shell/stub
+// domain — the overlap is intentional; each status is only meaningful inside
+// its own module's domain and map_loader_status translates before crossing.
 inline constexpr int32_t SAO_PLUGINS_ERR_BUSY = -1006;
 inline constexpr int32_t SAO_PLUGINS_ERR_VERSION_MISMATCH = -1007;
 inline constexpr int32_t SAO_PLUGINS_ERR_NOT_OWNER = -1008;

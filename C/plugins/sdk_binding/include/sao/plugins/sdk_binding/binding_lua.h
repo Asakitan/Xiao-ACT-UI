@@ -39,18 +39,6 @@ typedef struct plugin_context_s* plugin_context_ptr;
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_lua_register_sdk(lua_State* L, plugin_context_ptr ctx);
 
-// 装 ctx.ui 子表 (Lua 侧 ctx.ui.panel / ctx.ui.text / ...)。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_lua_register_ui(lua_State* L);
-
-// 装 ctx.mem 子表 (只读内存 API)。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_lua_register_mem(lua_State* L, plugin_context_ptr ctx);
-
-// 装 ctx.engine 子表 (跨插件 engine 访问)。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_lua_register_engine(lua_State* L, plugin_context_ptr ctx);
-
 // ── 值转换 ────────────────────────────────────────────
 
 // Lua 栈项 (index) → utf-8 json。
@@ -77,74 +65,15 @@ sao_plugins_binding_lua_wrap_callback(lua_State* L,
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
 sao_plugins_binding_lua_release_callback(void* user_data);
 
-// ── SDK 方法在 Lua 侧的 C 实现 ── (每一条 lua_CFunction 一对一映射)
+// ── SDK 方法在 Lua 侧的 C 实现 ── (legacy symbol compat only)
 //
-// 每条实现从 Lua 栈拿参数, 调 sao_plugins_ctx_* API, 结果 push 回栈。
-// 用 luaL_check* 校验参数类型, 错误抛 lua_error。
-//
-// 命名约定: lua_ctx_<method_name>, 内部用 lua_pushcclosure 挂到 ctx 表。
+// lua_host owns the typed ctx bridge (lua_module_bridge.cpp); the
+// provider-neutral facade keeps only these three legacy symbols — each
+// implementation returns loader::SAO_PLUGINS_ERR_UNSUPPORTED.
 
-extern "C" int lua_ctx_log(lua_State* L);
-extern "C" int lua_ctx_subscribe(lua_State* L);
-extern "C" int lua_ctx_subscribe_once(lua_State* L);
-extern "C" int lua_ctx_unsubscribe(lua_State* L);
-extern "C" int lua_ctx_emit(lua_State* L);
-extern "C" int lua_ctx_on_damage(lua_State* L);
-extern "C" int lua_ctx_on_heal(lua_State* L);
-extern "C" int lua_ctx_on_skill(lua_State* L);
-extern "C" int lua_ctx_on_boss(lua_State* L);
-extern "C" int lua_ctx_on_snapshot(lua_State* L);
-extern "C" int lua_ctx_on_encounter_finalized(lua_State* L);
-extern "C" int lua_ctx_get_snapshot(lua_State* L);
-extern "C" int lua_ctx_snapshot_value(lua_State* L);
-extern "C" int lua_ctx_recent_events(lua_State* L);
-
-extern "C" int lua_ctx_get_setting(lua_State* L);
-extern "C" int lua_ctx_setting(lua_State* L);           // alias
-extern "C" int lua_ctx_set_setting(lua_State* L);
-extern "C" int lua_ctx_set_defaults(lua_State* L);
-
-extern "C" int lua_ctx_register_parser_adapter(lua_State* L);
-extern "C" int lua_ctx_register_exporter(lua_State* L);
-extern "C" int lua_ctx_register_formatter(lua_State* L);
-extern "C" int lua_ctx_register_trigger_type(lua_State* L);
-extern "C" int lua_ctx_register_report_view(lua_State* L);
-extern "C" int lua_ctx_register_timer(lua_State* L);
-extern "C" int lua_ctx_register_ui_panel(lua_State* L);
-extern "C" int lua_ctx_register_render_hook(lua_State* L);
-extern "C" int lua_ctx_set_overlay(lua_State* L);
-extern "C" int lua_ctx_clear_overlay(lua_State* L);
-extern "C" int lua_ctx_register_hotkey(lua_State* L);
-extern "C" int lua_ctx_register_engine(lua_State* L);
-extern "C" int lua_ctx_register_data_source(lua_State* L);
 extern "C" int lua_ctx_register_menu_category(lua_State* L);
 extern "C" int lua_ctx_register_menu_surface(lua_State* L);
 extern "C" int lua_ctx_register_action_handler(lua_State* L);
-extern "C" int lua_ctx_request_redraw(lua_State* L);
-
-extern "C" int lua_ctx_set_interval(lua_State* L);
-extern "C" int lua_ctx_set_timeout(lua_State* L);
-extern "C" int lua_ctx_clear_timer(lua_State* L);
-extern "C" int lua_ctx_run_on_ui(lua_State* L);
-
-extern "C" int lua_ctx_notify(lua_State* L);
-extern "C" int lua_ctx_dismiss_notify(lua_State* L);
-extern "C" int lua_ctx_toast(lua_State* L);
-extern "C" int lua_ctx_open_file(lua_State* L);
-extern "C" int lua_ctx_open_window(lua_State* L);
-
-extern "C" int lua_ctx_create_compositor_layer(lua_State* L);
-extern "C" int lua_ctx_upload_compositor_frame(lua_State* L);
-extern "C" int lua_ctx_set_compositor_layer_position(lua_State* L);
-extern "C" int lua_ctx_set_compositor_layer_visible(lua_State* L);
-extern "C" int lua_ctx_destroy_compositor_layer(lua_State* L);
-
-extern "C" int lua_ctx_get_engine(lua_State* L);
-extern "C" int lua_ctx_require_engine(lua_State* L);
-extern "C" int lua_ctx_call_engine(lua_State* L);
-extern "C" int lua_ctx_call_runtime(lua_State* L);
-extern "C" int lua_ctx_ensure_requirements(lua_State* L);
-extern "C" int lua_ctx_load_local(lua_State* L);
 
 // ── 激活 Lua 侧 binding ─────────────────────────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

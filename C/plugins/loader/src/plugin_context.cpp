@@ -452,6 +452,8 @@ extension_kind parse_extension_kind(const char* value, bool& valid) {
         return extension_kind::report_view;
     if (std::strcmp(value, "timer") == 0)
         return extension_kind::timer;
+    if (std::strcmp(value, "menu_surface") == 0)
+        return extension_kind::menu_surface;
     valid = false;
     return extension_kind::ui_panel;
 }
@@ -1991,8 +1993,29 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_men
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_ctx_register_menu_surface(plugin_context_t*, const char*, const char*, float) {
-    return SAO_PLUGINS_ERR_UNSUPPORTED;
+sao_plugins_ctx_register_menu_surface(plugin_context_t* ctx, const char* surface_id_utf8,
+                                      const char* descriptor_json_utf8, float priority) {
+    if (surface_id_utf8 == nullptr || surface_id_utf8[0] == '\0' ||
+        !std::isfinite(priority)) {
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        json metadata = json::object();
+        if (descriptor_json_utf8 != nullptr && descriptor_json_utf8[0] != '\0') {
+            const json parsed = json::parse(descriptor_json_utf8, nullptr, false);
+            if (parsed.is_discarded() || !parsed.is_object()) {
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            metadata = parsed;
+        }
+        metadata["surface_id"] = surface_id_utf8;
+        metadata["priority"] = priority;
+        const std::string dumped = metadata.dump();
+        return add_extension(ctx, extension_kind::menu_surface, surface_id_utf8,
+                             dumped.c_str());
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_data_source(

@@ -81,79 +81,15 @@ extern "C" SAO_PLUGINS_API void* SAO_PLUGINS_CALL
 sao_plugins_binding_angel_json_to_dict(asIScriptEngine* engine,
                                        const char* utf8_json);
 
-// AS string → utf-8 (借用引用, 不拷贝, 用于 asCALL_THISCALL 的 self)。
-extern "C" SAO_PLUGINS_API const char* SAO_PLUGINS_CALL
-sao_plugins_binding_angel_string_view(void* as_string_ptr, size_t* out_len);
-
 // ── SDK 方法在 AS 侧的 C 实现 ─── (由 RegisterObjectMethod 调用)
 //
 // 每条 as_ctx_<method> 都是 asCALL_THISCALL_ASGLOBAL / asCALL_CDECL_OBJFIRST
 // 变体, 第一个参数是 PluginContext*, 内部 dispatch 到 sao_plugins_ctx_*.
 //
-// 完整暴露 (对齐 sdk_method_id 每一项):
+// as_module_bridge owns the typed PluginContext class registration; the
+// provider-neutral facade keeps only these three legacy stub decls — each
+// implementation returns loader::SAO_PLUGINS_ERR_UNSUPPORTED.
 
-extern "C" void as_ctx_log(void* self, const void* str);
-extern "C" uint32_t as_ctx_subscribe(void* self, const void* topic,
-                                     asIScriptFunction* cb);
-extern "C" uint32_t as_ctx_subscribe_once(void* self, const void* topic,
-                                          asIScriptFunction* cb);
-extern "C" bool as_ctx_unsubscribe(void* self, uint32_t token);
-extern "C" void as_ctx_emit(void* self, const void* topic, void* payload_dict);
-
-extern "C" uint32_t as_ctx_on_damage(void* self, asIScriptFunction* cb);
-extern "C" uint32_t as_ctx_on_heal(void* self, asIScriptFunction* cb);
-extern "C" uint32_t as_ctx_on_skill(void* self, asIScriptFunction* cb);
-extern "C" uint32_t as_ctx_on_boss(void* self, asIScriptFunction* cb);
-extern "C" uint32_t as_ctx_on_snapshot(void* self, asIScriptFunction* cb);
-extern "C" uint32_t as_ctx_on_encounter_finalized(void* self, asIScriptFunction* cb);
-
-extern "C" void* as_ctx_get_snapshot(void* self);
-extern "C" void* as_ctx_snapshot_value(void* self, const void* path);
-extern "C" void* as_ctx_recent_events(void* self, uint32_t limit, const void* topic);
-
-extern "C" void* as_ctx_get_setting(void* self, const void* key);
-extern "C" void as_ctx_set_setting(void* self, const void* key, void* value);
-extern "C" void as_ctx_set_defaults(void* self, void* defaults);
-
-extern "C" void as_ctx_register_ui_panel(void* self, const void* panel_id,
-                                          void* metadata,
-                                          asIScriptFunction* render_cb,
-                                          asIScriptFunction* action_cb);
-extern "C" uint32_t as_ctx_register_render_hook(void* self, const void* surface,
-                                                 float priority,
-                                                 asIScriptFunction* cb);
-extern "C" void as_ctx_set_overlay(void* self, const void* surface, void* spec);
-extern "C" void as_ctx_clear_overlay(void* self, const void* surface);
-extern "C" void as_ctx_request_redraw(void* self, const void* surface,
-                                       const void* reason);
-extern "C" void as_ctx_register_hotkey(void* self, const void* hotkey_id,
-                                        const void* default_key,
-                                        const void* label,
-                                        asIScriptFunction* cb);
-extern "C" void as_ctx_register_engine(void* self, const void* name,
-                                        void* engine_obj);
-extern "C" void as_ctx_register_data_source(void* self, const void* source_id,
-                                             void* metadata,
-                                             asIScriptFunction* start,
-                                             asIScriptFunction* stop);
-extern "C" void as_ctx_register_parser_adapter(void* self, const void* id,
-                                                void* metadata,
-                                                asIScriptFunction* handler);
-extern "C" void as_ctx_register_exporter(void* self, const void* id,
-                                          void* metadata,
-                                          asIScriptFunction* handler);
-extern "C" void as_ctx_register_formatter(void* self, const void* id,
-                                           void* metadata,
-                                           asIScriptFunction* handler);
-extern "C" void as_ctx_register_trigger_type(void* self, const void* id,
-                                              void* metadata,
-                                              asIScriptFunction* handler);
-extern "C" void as_ctx_register_report_view(void* self, const void* id,
-                                             void* metadata,
-                                             asIScriptFunction* handler);
-extern "C" void as_ctx_register_timer(void* self, const void* id,
-                                        void* metadata,
-                                        asIScriptFunction* handler);
 extern "C" int32_t as_ctx_register_menu_category(void* self, const void* name,
                                                 const void* icon,
                                                 asIScriptFunction* builder,
@@ -163,30 +99,6 @@ extern "C" int32_t as_ctx_register_menu_surface(void* self, const void* id,
                                                float priority);
 extern "C" int32_t as_ctx_register_action_handler(void* self,
                                                  asIScriptFunction* handler);
-
-extern "C" void* as_ctx_set_interval(void* self, asIScriptFunction* cb, double s);
-extern "C" void* as_ctx_set_timeout(void* self, asIScriptFunction* cb, double s);
-extern "C" bool as_ctx_clear_timer(void* self, const void* token);
-extern "C" void as_ctx_run_on_ui(void* self, asIScriptFunction* cb);
-
-extern "C" void as_ctx_notify(void* self, const void* title, const void* msg,
-                                 double duration_s, const void* kind);
-extern "C" void as_ctx_toast(void* self, const void* message);
-extern "C" void as_ctx_open_window(void* self, const void* panel_id,
-                                       uint32_t w, uint32_t h);
-
-extern "C" void as_ctx_create_compositor_layer(void* self, const void* name,
-                                                  uint32_t w, uint32_t h,
-                                                  int32_t x, int32_t y, int32_t z);
-extern "C" void as_ctx_upload_compositor_frame(void* self, const void* name,
-                                                 void* buffer);
-extern "C" void as_ctx_destroy_compositor_layer(void* self, const void* name);
-
-extern "C" void* as_ctx_get_engine(void* self, const void* name);
-extern "C" void* as_ctx_call_engine(void* self, const void* engine_name,
-                                    const void* method, void* args);
-extern "C" void as_ctx_ensure_requirements(void* self, bool install);
-extern "C" void* as_ctx_load_local(void* self, const void* relative);
 
 // ── 激活 AngelScript 侧 binding ─────────────────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

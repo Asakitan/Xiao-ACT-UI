@@ -425,25 +425,12 @@ bool install_sandbox_hooks(SandboxSlot* slot) {
 // - 3.11: 我们只需要独立的 module state, PyThreadState_Swap 就够
 // - 3.12+: 用 Py_NewInterpreterFromConfig 建 per-interpreter GIL, 更强隔离
 PyThreadState* create_subinterp() {
-#if PY_VERSION_HEX >= 0x030C0000
-    PyThreadState* ts = nullptr;
-    PyInterpreterConfig cfg = {};
-    cfg.use_main_obmalloc = 0;
-    cfg.allow_fork = 0;
-    cfg.allow_exec = 1;
-    cfg.allow_threads = 1;
-    cfg.allow_daemon_threads = 0;
-    cfg.check_multi_interp_extensions = 1;
-    cfg.gil = PyInterpreterConfig_OWN_GIL;
-    PyStatus st = Py_NewInterpreterFromConfig(&ts, &cfg);
-    if (PyStatus_Exception(st) || ts == nullptr) {
-        // 部分构建禁用 subinterp 隔离. 退回旧 API.
-        ts = Py_NewInterpreter();
-    }
-    return ts;
-#else
+    // Always use Py_NewInterpreter: Py_NewInterpreterFromConfig only
+    // exists on >=3.12 and is NOT in the dynamic import table, so a
+    // >=3.12-header build would reference a nonexistent __imp_ slot
+    // (link failure), while a 3.11 runtime could never resolve it
+    // (init fail-close). Py_NewInterpreter is portable across both.
     return Py_NewInterpreter();
-#endif
 }
 
 void destroy_subinterp(PyThreadState* ts) {

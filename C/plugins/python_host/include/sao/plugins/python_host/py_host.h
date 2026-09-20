@@ -189,4 +189,15 @@ sao_plugins_pyhost_report_requirements(const wchar_t* plugin_dir,
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
 sao_plugins_pyhost_free_string(char* value);
 
+// CPython GIL scope for host-adapter composites (例如 pymini 代理
+// py_runtime:cpython 插件)。enter/leave 成对调用包住一段 pyhost load/hook/
+// unload 调用；实现内部走 PyGILState_Ensure/Release，调用方无需 include
+// Python.h。
+//   enter: 返回 opaque scope；失败返回 NULL。
+//   leave: 归还 scope；NULL 为 no-op。
+extern "C" SAO_PLUGINS_API void* SAO_PLUGINS_CALL
+sao_plugins_pyhost_gil_scope_enter(void);
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
+sao_plugins_pyhost_gil_scope_leave(void* scope);
+
 } // namespace sao::plugins::python_host

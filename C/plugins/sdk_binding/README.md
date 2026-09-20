@@ -38,6 +38,42 @@ C ABI 暴露给自己的语言。这一层做**类型转换 + 异常屏障**, �
 - ``nlohmann-json`` (json_node 底层实现)
 - 语言特定依赖不在这, 落在各 ``*_host/`` 里
 
+## ctx_dispatch JSON 方法面（session-44）
+
+- `sao_plugins_sdk_context_dispatch`（`binding_context_dispatch.cpp`）是各
+  语言宿主的 JSON 调用面：`method_status` 门先分流 ——
+  property/settings/event/ui/hotkey/timer/notification 七组可服务；
+  render-hook/menu/run_on_ui/file-dialog 的 request 无 callback slot、
+  loader-ctx-only 方法族与 compositor×11（platform-internal）如实
+  UNSUPPORTED。完整覆盖矩阵见 `docs/plugin-abi.md` 的
+  “`sao_plugins_sdk_context_dispatch` 覆盖模型”一节。
+- overlay 为 surface-keyed ctx-scoped：`set_overlay` 走 ui-table replace
+  语义（同 surface 旧 overlay 自动先清），`clear_overlay` 走 session-44
+  新增的 `sao_sdk_overlay_clear_surface` 导出；`dismiss_notify` 消费
+  `sao_sdk_notify_show` 返回的 token。
+- 回调 owner/release：provider_release 优先，legacy_release 为兼容位；
+  两者皆空视为无 owned 资源（`call_release` null 守卫，session-44）。
+
+## 反射引擎面（session-57/59/60/61）
+
+- `binding_engine.h` 定义目录契约：`sdk_engine_function_desc{name, arg_names,
+  arg_count, invoke, availability}` + `sdk_engine_group_table{descs, count, probe}`，
+  六组 `kEngineGroup{Mem,Net,Ui,GpuHunt,Vt,Misc}` 合计 126 项，全部经
+  `sao_plugins_sdk_context_dispatch` 的 `method_engine_call`/`method_engine_list`
+  JSON 分发；二进制参数统一 `*_b64`，provider 缺失按 `engine_no_provider`
+  fail-closed。
+- **vt 组（12 项，session-61）**：`vt.provider_status` / `vt.status` /
+  `vt.capabilities` / `vt.probe` / `vt.perf_stats` / `vt.list_hooks` /
+  `vt.read_phys`（gpa+size→`data_b64`）/ `vt.write_phys`（gpa+`data_b64`）/
+  `vt.hook_page`（gva+`patch_b64`→hook_id,gpa）/ `vt.hide_region`
+  （gva+page_count+decoy_mode+`template_b64` 可选→hook_ids[]）/
+  `vt.unhook`（hook_id）/ `vt.map_user`。实现落在 `platform/sdk`
+  的 `SaoSdkVtTable`（`sao_sdk_vt.h` + `sdk_vt_wire.cpp`）：SDK-local POD 镜像
+  rt_io proxy wire 类型，进程级 lazy `sao_rt_io_proxy_runtime_handle_t`
+  （autospawn=0 attach-only），runtime/helper/驱动未就绪一律
+  `SAO_SDK_ERR_UNSUPPORTED`；typed 结果携带 driver `operation_status` /
+  `response_flags`。
+
 ## 历史测试（2026-08-23 已删除）
 
 旧 ``tests/`` 与 ``*_host/tests/``、Catch2 和 CTest 注册均已删除；此前的

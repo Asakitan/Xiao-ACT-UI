@@ -8,11 +8,6 @@
 
 namespace sao::plugins::sdk_binding {
 
-namespace detail {
-plugin_binding_handle_t make_binding(void* ctx, void* lang_state, int lang);
-void free_binding(plugin_binding_handle_t plugin);
-} // namespace detail
-
 // 保留旧签名并转发到 provider。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_lua_register_sdk(lua_State* L, plugin_context_ptr ctx) {

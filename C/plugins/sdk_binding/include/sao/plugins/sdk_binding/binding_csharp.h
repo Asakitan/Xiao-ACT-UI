@@ -74,78 +74,14 @@ sao_plugins_binding_csharp_release_delegate(void* user_data);
 // ── native → managed 反向 API 表 ──
 //
 // 托管侧 wrapper (SaoPluginContext.cs) 通过 [LibraryImport("sao_plugins_binding")]
-// 声明这些函数. native 侧对应 sao_plugins_ctx_* 一一映射.
+// 声明这些函数. 完整的 sdk_method_id 表面由 cs_module_bridge 的 SdkBridge
+// fn-ptr 结构承载; 本节仅保留三个已实现的导出符号:
+//   - register_menu_category: 真实现, 转发到 loader ctx API
+//   - register_menu_surface / register_action_handler: 占位 stub, 返回 UNSUPPORTED
 //
 // 命名约定: sao_csharp_ctx_<method>. 与 sao_plugins_ctx_<method> 同签名,
 // 只是导出符号名以 sao_csharp_ 前缀区分, 便于 hostfxr LibraryImport 显式绑定。
-//
-// 完整暴露 (对齐 sdk_method_id 每一项):
 
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_csharp_ctx_log(void* ctx, const char* message);
-
-extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_subscribe(void* ctx, const char* topic, void* cb, void* user_data);
-
-extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_subscribe_once(void* ctx, const char* topic, void* cb, void* user_data);
-
-extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
-sao_csharp_ctx_unsubscribe(void* ctx, uint32_t token);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_emit(void* ctx, const char* topic, const char* payload_json);
-
-extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_on_damage(void* ctx, void* cb, void* user_data);
-extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_on_heal(void* ctx, void* cb, void* user_data);
-extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_on_skill(void* ctx, void* cb, void* user_data);
-extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_on_boss(void* ctx, void* cb, void* user_data);
-extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_on_snapshot(void* ctx, void* cb, void* user_data);
-extern "C" SAO_PLUGINS_API uint32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_on_encounter_finalized(void* ctx, void* cb, void* user_data);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_get_snapshot(void* ctx, char** out_json);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_snapshot_value(void* ctx, const char* path, char** out_json);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_recent_events(void* ctx, uint32_t limit, const char* topic,
-                              char** out_json);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_get_setting(void* ctx, const char* key, char** out_json);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_setting(void* ctx, const char* key, const char* value_json);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_defaults(void* ctx, const char* defaults_json);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_ui_panel(void* ctx, const char* panel_id,
-                                 const char* meta_json, void* render_delegate,
-                                 void* action_delegate);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_render_hook(void* ctx, const char* surface,
-                                     float priority, void* delegate,
-                                     uint32_t* out_token);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_overlay(void* ctx, const char* surface, const char* spec_json);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_clear_overlay(void* ctx, const char* surface);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_request_redraw(void* ctx, const char* surface, const char* reason);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_hotkey(void* ctx, const char* id, const char* default_key,
-                                const char* label, void* delegate);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_engine(void* ctx, const char* name, void* engine);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_data_source(void* ctx, const char* id, const char* meta_json,
-                                     void* start_delegate, void* stop_delegate);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_csharp_ctx_register_menu_category(void* ctx, const char* name, const char* icon,
                                         void* builder_delegate, float priority);
@@ -153,85 +89,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_csharp_ctx_register_menu_surface(void* ctx, const char* id,
                                        const char* descriptor_json, float priority);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_parser_adapter(void* ctx, const char* id,
-                                        const char* meta_json, void* delegate);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_exporter(void* ctx, const char* id, const char* meta_json,
-                                  void* delegate);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_formatter(void* ctx, const char* id, const char* meta_json,
-                                   void* delegate);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_trigger_type(void* ctx, const char* id, const char* meta_json,
-                                      void* delegate);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_report_view(void* ctx, const char* id, const char* meta_json,
-                                     void* delegate);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_register_timer(void* ctx, const char* id, const char* meta_json,
-                               void* delegate);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_csharp_ctx_register_action_handler(void* ctx, void* delegate);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_interval(void* ctx, void* delegate, double seconds,
-                              char** out_token);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_timeout(void* ctx, void* delegate, double seconds,
-                             char** out_token);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_clear_timer(void* ctx, const char* token);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_run_on_ui(void* ctx, void* delegate);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_notify(void* ctx, const char* title, const char* message,
-                        double duration_s, const char* kind);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_dismiss_notify(void* ctx);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_toast(void* ctx, const char* message);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_open_file(void* ctx, const char* filters_json, const char* title,
-                          const wchar_t* initial_dir, intptr_t hwnd_owner,
-                          wchar_t** out_path);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_open_window(void* ctx, const char* panel_id,
-                            uint32_t width, uint32_t height);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_create_compositor_layer(void* ctx, const char* name,
-                                        uint32_t w, uint32_t h,
-                                        int32_t x, int32_t y, int32_t z,
-                                        bool click_through, bool high_fps,
-                                        uint32_t target_fps);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_upload_compositor_frame(void* ctx, const char* name,
-                                        const uint8_t* bgra, size_t len,
-                                        uint32_t w, uint32_t h);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_compositor_layer_mmf_source(void* ctx, const char* name,
-                                                 const char* mmf_name);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_compositor_layer_shared_texture_source(void* ctx, const char* name,
-                                                            intptr_t handle,
-                                                            uint32_t w, uint32_t h);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_compositor_layer_position(void* ctx, const char* name,
-                                                int32_t x, int32_t y);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_set_compositor_layer_visible(void* ctx, const char* name, bool visible);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_destroy_compositor_layer(void* ctx, const char* name);
-extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
-sao_csharp_ctx_compositor_gpu_interop_available(void* ctx);
-
-extern "C" SAO_PLUGINS_API void* SAO_PLUGINS_CALL
-sao_csharp_ctx_get_engine(void* ctx, const char* name);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_ensure_requirements(void* ctx, bool install, char** out_json);
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_csharp_ctx_load_local(void* ctx, const char* relative, wchar_t** out_path);
 
 // ── 激活 C# 侧 binding ──────────────────────────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

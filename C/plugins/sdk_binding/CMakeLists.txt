@@ -2,6 +2,14 @@
 add_library(sao_plugins_sdk_binding STATIC
     src/binding_common.cpp
     src/binding_context_dispatch.cpp
+    src/binding_engine_catalog.cpp
+    src/binding_engine_dispatch.cpp
+    src/binding_engine_mem.cpp
+    src/binding_engine_net.cpp
+    src/binding_engine_ui.cpp
+    src/binding_engine_gpuhunt.cpp
+    src/binding_engine_vt.cpp
+    src/binding_engine_misc.cpp
     src/binding_python.cpp
     src/binding_emma.cpp
     src/binding_angel.cpp

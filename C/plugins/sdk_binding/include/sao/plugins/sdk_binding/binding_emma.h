@@ -37,17 +37,8 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_emma_register_ctx(emma_interpreter_ptr interp,
                                       plugin_context_ptr ctx);
 
-// 装 ctx.ui / ctx.mem / ctx.engine 三个子 dict。
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_emma_register_ui(emma_interpreter_ptr interp);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_emma_register_mem(emma_interpreter_ptr interp,
-                                      plugin_context_ptr ctx);
-
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_binding_emma_register_engine(emma_interpreter_ptr interp,
-                                          plugin_context_ptr ctx);
+// (ctx.ui / ctx.mem / ctx.engine 子 dict 由 emma_module_bridge 的 typed
+//  proxy 处理; binding 层不提供独立的 register_ui/mem/engine 入口。)
 
 // ── 值转换 ────────────────────────────────────────────
 

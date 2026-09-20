@@ -2000,19 +2000,34 @@ int PluginContext_init(PluginContextObject* self, PyObject* args, PyObject* kwds
                                      &handle_int, &controlled_test_shim)) {
         return -1;
     }
-    Py_XDECREF(self->plugin_id);
-    self->plugin_id = PyUnicode_FromString(pid);
-    Py_XDECREF(self->base_dir);
-    self->base_dir = PyUnicode_FromString(dir_);
     // assets_path / web_path 默认拼在 base_dir 下
     std::string dir_s = dir_;
     if (!dir_s.empty() && dir_s.back() != '/' && dir_s.back() != '\\') {
         dir_s.push_back('/');
     }
+    // Allocate into temporaries first: an unchecked PyUnicode_FromString
+    // failure would leave the member nullptr while tp_init returns 0, and
+    // a later getter's Py_NewRef(nullptr) crashes.
+    PyObject* new_plugin_id = PyUnicode_FromString(pid);
+    PyObject* new_base_dir = PyUnicode_FromString(dir_);
+    PyObject* new_assets = PyUnicode_FromString((dir_s + "assets").c_str());
+    PyObject* new_web = PyUnicode_FromString((dir_s + "web").c_str());
+    if (new_plugin_id == nullptr || new_base_dir == nullptr ||
+        new_assets == nullptr || new_web == nullptr) {
+        Py_XDECREF(new_plugin_id);
+        Py_XDECREF(new_base_dir);
+        Py_XDECREF(new_assets);
+        Py_XDECREF(new_web);
+        return -1;
+    }
+    Py_XDECREF(self->plugin_id);
+    self->plugin_id = new_plugin_id;
+    Py_XDECREF(self->base_dir);
+    self->base_dir = new_base_dir;
     Py_XDECREF(self->assets_path);
-    self->assets_path = PyUnicode_FromString((dir_s + "assets").c_str());
+    self->assets_path = new_assets;
     Py_XDECREF(self->web_path);
-    self->web_path = PyUnicode_FromString((dir_s + "web").c_str());
+    self->web_path = new_web;
     self->opaque_handle = reinterpret_cast<void*>(static_cast<intptr_t>(handle_int));
     self->controlled_test_shim = controlled_test_shim != 0;
     return 0;
@@ -3273,11 +3288,55 @@ PyObject* PluginContext_register_menu_surface(PluginContextObject* self, PyObjec
                         "menu surface id, descriptor, and priority must be valid");
         return nullptr;
     }
+    // Flatten the descriptor into metadata JSON: scalar values are copied
+    // verbatim and callables are recorded by name under "hooks" — function
+    // objects cannot cross the C ABI, but the record must show which hooks
+    // the plugin provided.
+    nlohmann::json metadata = nlohmann::json::object();
+    nlohmann::json hooks = nlohmann::json::array();
+    PyObject* items = PyMapping_Items(descriptor);
+    if (items == nullptr) {
+        PyErr_SetString(PyExc_ValueError, "descriptor must be a mapping");
+        return nullptr;
+    }
+    const Py_ssize_t item_count = PyList_Size(items);
+    for (Py_ssize_t i = 0; i < item_count; ++i) {
+        PyObject* pair = PyList_GetItem(items, i); // borrowed
+        PyObject* key = pair != nullptr ? PyTuple_GetItem(pair, 0) : nullptr;
+        PyObject* value = pair != nullptr ? PyTuple_GetItem(pair, 1) : nullptr;
+        if (key == nullptr || value == nullptr || !PyUnicode_Check(key))
+            continue;
+        const char* name = PyUnicode_AsUTF8(key);
+        if (name == nullptr)
+            continue;
+        if (PyCallable_Check(value)) {
+            hooks.push_back(name);
+            continue;
+        }
+        if (value == Py_None)
+            continue;
+        if (PyBool_Check(value))
+            metadata[name] = (value == Py_True);
+        else if (PyLong_Check(value))
+            metadata[name] = static_cast<int64_t>(PyLong_AsLongLong(value));
+        else if (PyFloat_Check(value))
+            metadata[name] = PyFloat_AsDouble(value);
+        else if (PyUnicode_Check(value)) {
+            const char* text = PyUnicode_AsUTF8(value);
+            if (text != nullptr)
+                metadata[name] = text;
+        }
+    }
+    Py_DECREF(items);
+    if (!hooks.empty())
+        metadata["hooks"] = std::move(hooks);
+    const std::string metadata_text = metadata.dump();
     const int32_t status =
         self->loader_context == nullptr
             ? loader::SAO_PLUGINS_ERR_UNSUPPORTED
-            : loader::sao_plugins_ctx_register_menu_surface(self->loader_context, surface_id, "{}",
-                                                            static_cast<float>(priority));
+            : loader::sao_plugins_ctx_register_menu_surface(
+                  self->loader_context, surface_id, metadata_text.c_str(),
+                  static_cast<float>(priority));
     if (status != SAO_OK)
         return status_error("menu surface registration", status);
     return PyUnicode_FromString(surface_id);
@@ -3861,10 +3920,18 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_register_
             Py_DECREF(pc_cls);
             return SAO_ERR_OS_CALL_FAILED;
         }
-        PyDict_SetItemString(mods, "act_platform", act_platform_mod);
+        if (PyDict_SetItemString(mods, "act_platform", act_platform_mod) != 0) {
+            Py_DECREF(act_platform_mod);
+            Py_DECREF(pc_cls);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
         // PyDict_SetItem 取新引用, PyModule_New 建时 refcount=1 → 现在 2, 平衡回 1
         Py_DECREF(act_platform_mod);
         act_platform_mod = PyDict_GetItemString(mods, "act_platform"); // borrowed
+        if (act_platform_mod == nullptr) {
+            Py_DECREF(pc_cls);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
     }
     Py_INCREF(act_platform_mod); // 为下面的 DECREF 对齐
     PyObject* plugins_mod = PyModule_New("act_platform.plugins");
@@ -3873,9 +3940,14 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_register_
         Py_DECREF(pc_cls);
         return SAO_ERR_OS_CALL_FAILED;
     }
-    PyObject_SetAttrString(plugins_mod, "PluginContext", pc_cls);
-    PyObject_SetAttrString(act_platform_mod, "plugins", plugins_mod);
-    PyDict_SetItemString(mods, "act_platform.plugins", plugins_mod);
+    if (PyObject_SetAttrString(plugins_mod, "PluginContext", pc_cls) != 0 ||
+        PyObject_SetAttrString(act_platform_mod, "plugins", plugins_mod) != 0 ||
+        PyDict_SetItemString(mods, "act_platform.plugins", plugins_mod) != 0) {
+        Py_DECREF(plugins_mod);
+        Py_DECREF(act_platform_mod);
+        Py_DECREF(pc_cls);
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 
     // Phase 2 (P0 compat shim): 追加 act_platform.runtime 子 module。
     // star_resonance 的 plugin.py:160 会做:

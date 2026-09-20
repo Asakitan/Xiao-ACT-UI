@@ -37,10 +37,6 @@ typedef struct plugin_context_s* plugin_context_ptr; // 来自 loader/plugin_con
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_binding_python_register_module(void);
 
-// PyInit_sao_sdk 内部实现 (由 PyImport_AppendInittab 拿函数指针)。
-extern "C" SAO_PLUGINS_API PyObject* SAO_PLUGINS_CALL
-sao_plugins_binding_python_module_init(void);
-
 // 每插件在 Py 层创建 ctx PyObject。返回借用引用, 归属由宿主管理。
 // 该 PyObject 是一个 "PluginContext" 类实例, __getattr__ 派发到 SDK 方法。
 extern "C" SAO_PLUGINS_API PyObject* SAO_PLUGINS_CALL
@@ -68,92 +64,11 @@ sao_plugins_binding_python_pyobject_to_json(PyObject* obj, char** out_json_utf8)
 // 命名约定: py_ctx_<method_name>, 与 loader/plugin_context.h 的
 // sao_plugins_ctx_<method_name> 一一对应.
 
-// 属性访问 (通过 PyGetSetDef, 内部实现)
-extern "C" PyObject* py_ctx_get_plugin_id(PyObject* self, void* closure);
-extern "C" PyObject* py_ctx_get_path(PyObject* self, void* closure);
-extern "C" PyObject* py_ctx_get_web_path(PyObject* self, void* closure);
-extern "C" PyObject* py_ctx_get_assets_path(PyObject* self, void* closure);
-extern "C" PyObject* py_ctx_get_should_stop(PyObject* self, void* closure);
-extern "C" PyObject* py_ctx_get_mem(PyObject* self, void* closure);
-extern "C" PyObject* py_ctx_get_ui(PyObject* self, void* closure);
-extern "C" PyObject* py_ctx_get_engine(PyObject* self, void* closure);
-
-// 日志
-extern "C" PyObject* py_ctx_log(PyObject* self, PyObject* args);
-
-// 事件族
-extern "C" PyObject* py_ctx_subscribe(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_subscribe_once(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_unsubscribe(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_emit(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_on_damage(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_on_heal(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_on_skill(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_on_boss(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_on_snapshot(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_on_encounter_finalized(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_get_snapshot(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_snapshot_value(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_recent_events(PyObject* self, PyObject* args);
-
-// 设置族
-extern "C" PyObject* py_ctx_get_setting(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_setting(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_defaults(PyObject* self, PyObject* args);
-
-// 扩展注册族
-extern "C" PyObject* py_ctx_register_parser_adapter(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_exporter(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_formatter(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_trigger_type(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_report_view(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_timer(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_ui_panel(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_render_hook(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_overlay(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_clear_overlay(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_hotkey(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_engine(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_register_data_source(PyObject* self, PyObject* args);
+// 扩展注册族 (legacy stubs — py_module_bridge does not consume these
+// symbols; they remain linkable placeholders returning nullptr.)
 extern "C" PyObject* py_ctx_register_menu_category(PyObject* self, PyObject* args);
 extern "C" PyObject* py_ctx_register_menu_surface(PyObject* self, PyObject* args);
 extern "C" PyObject* py_ctx_register_action_handler(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_request_redraw(PyObject* self, PyObject* args);
-
-// 定时器
-extern "C" PyObject* py_ctx_set_interval(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_timeout(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_clear_timer(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_run_on_ui(PyObject* self, PyObject* args);
-
-// 通知 / 对话框 / 窗口
-extern "C" PyObject* py_ctx_notify(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_dismiss_notify(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_toast(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_open_file(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_open_window(PyObject* self, PyObject* args);
-
-// Compositor Layer
-extern "C" PyObject* py_ctx_create_compositor_layer(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_upload_compositor_frame(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_compositor_layer_mmf_source(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_compositor_layer_shared_texture_source(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_compositor_layer_position(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_compositor_layer_visible(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_set_compositor_layer_input(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_destroy_compositor_layer(PyObject* self, PyObject* args);
-
-// 引擎 / 依赖
-extern "C" PyObject* py_ctx_get_engine_method(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_require_engine(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_call_engine(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_call_runtime(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_ensure_requirements(PyObject* self, PyObject* args);
-extern "C" PyObject* py_ctx_load_local(PyObject* self, PyObject* args);
-
-// PyMethodDef 表 (在 binding_python.cpp 里定义, 供 module init 调 PyModule_AddFunctions)。
-extern "C" SAO_PLUGINS_API const struct PyMethodDef* SAO_PLUGINS_CALL
-sao_plugins_binding_python_method_defs(size_t* out_count);
 
 // ── 激活 Python 侧 binding (返 opaque plugin binding) ─────────────────
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

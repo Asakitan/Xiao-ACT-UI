@@ -552,6 +552,10 @@ int32_t load_single(plugin_handle_t plugin, std::unordered_set<plugin_handle_t>&
             return status;
         }
     }
+    {
+        std::lock_guard lock(plugin->mutex);
+        plugin->state = lifecycle_state::validating;
+    }
     if (validate_manifest(manifest) != SAO_OK) {
         {
             std::lock_guard lock(plugin->mutex);

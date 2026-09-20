@@ -4,6 +4,7 @@
 #if defined(SAO_HAS_PYTHON_EMBED)
 #define PY_SSIZE_T_CLEAN
 #include "sao/plugins/python_host/py_release_abi.h"
+#include "sao/plugins/python_host/py_dynamic_imports.h"
 #endif
 
 #include "sao/plugins/loader/loader_status.h"
@@ -83,6 +84,14 @@ class gil_guard {
 class existing_interpreter_gil {
   public:
     existing_interpreter_gil() {
+#if defined(SAO_PYHOST_DYNAMIC_PY_DATA)
+        // __imp_* slots are nullptr until resolve_python_imports fills
+        // them inside sao_plugins_pyhost_init — calling Py_IsInitialized
+        // before then is an indirect call through 0.
+        if (!detail::python_imports_resolved()) {
+            return;
+        }
+#endif
         if (Py_IsInitialized() != 0) {
             state_ = PyGILState_Ensure();
             active_ = true;
@@ -90,6 +99,11 @@ class existing_interpreter_gil {
     }
 
     ~existing_interpreter_gil() {
+#if defined(SAO_PYHOST_DYNAMIC_PY_DATA)
+        if (!detail::python_imports_resolved()) {
+            return;
+        }
+#endif
         if (active_ && Py_IsInitialized() != 0) {
             PyGILState_Release(state_);
         }
