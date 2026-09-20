@@ -1,5 +1,31 @@
 # `platform/ui`
 
+## SaoMenu motion revision (2026-09-19)
+
+Entity consumes private resolved child anchor/extension/split values. Root reversals
+preserve current progress; rapid child selection redirects the current trajectory.
+NerveGear feedback is continuous; opaque neutral cards retain thin material edges,
+icon micro-motion and short hover glints. A value-only compositor-keyed scene shares
+the owner clock, 1000ms theme progress and host-normalized 48-column front between
+foreground and background; a feathered quiet region reduces detail behind the menu.
+The private GPU constant buffer is 80 bytes; public ABI is unchanged.
+
+Synchronous menu actions scope generic-panel origins: 220/160ms reveal/close with
+at most 20px translation, immediate logical hide/input withdrawal, owner-thread ticks
+and stable-ID/token-gated return focus. Deferred/WebView surfaces retain their original
+presentation. Reduced motion/high contrast bypass connected movement and settle theme
+changes. Preview `--menu-motion` is an offline-only frame-export interaction timeline.
+Initial Debug UI/Preview build and 420-frame export passed before final refinements.
+Static review fixes preserve child-page IDs across reversal/reorder, root rollback
+trajectories, navigation-token invalidation, theme-frame geometry/time, high-contrast
+short-circuiting, same-thread panel retirement and SDK-owned opacity multiplication.
+Preview rejects explicit backend options and routes Settings titlebar close through
+compositor input. Final Debug rebuild and revised 420-frame/7s export both passed;
+all 15 events completed, Settings titlebar close withdrew logical visibility and returned
+navigation to front. Final light/dark captures were inspected and runtime memory synchronized.
+The full DPI/accessibility/retirement fault matrix remains source-reviewed, not runtime-proven.
+Older timing/layout descriptions below retain their original historical context.
+
 The native overlay stack — 1:1 port of Python `sao_auto/python/render/`
 and `sao_auto/python/ui_gpu/`.  One HWND, virtual layer compositor,
 Direct2D widget kit, GPU pop-up, panel + layout engine, input router,
@@ -130,7 +156,10 @@ control decoy while the render side is excluded).
 - `panel.h` — plugin panel container.  Two register paths: legacy
   `SaoPanelConfig` + ui_spec JSON *and* new `SaoPanelDescriptor` +
   layout-tree body (SDK-facing).  Batched body mutations, theme
-  override, geometry persist hook.
+  override, geometry persist hook.  Minor 17 adds
+  `sao_ui_panel_find_widget` (spec-node id → live widget handle)
+  plus the `canvas` spec leaf wired to `sao_ui_scriptable_canvas.h`;
+  the leaf is non-interactive like `sparkline`.
 - `input.h` — legacy input router + hotkey manager + cursor override
   + focus shield (arm-once WM_MOUSEACTIVATE → MA_NOACTIVATE).
 - `z_order.h` — TOPMOST / follow-game state machine.  Sole authority;

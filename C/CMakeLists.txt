@@ -38,7 +38,7 @@ endif()
 # ---------------------------------------------------------------------------
 
 project(SaoAutoC
-    VERSION 0.2.0
+    VERSION 0.2.1
     DESCRIPTION "SAO Auto — fully independent native C++ platform"
     LANGUAGES C CXX ASM_MASM)
 
@@ -522,14 +522,27 @@ if (SAO_ENCRYPTED_RUNTIME_BUNDLE AND TARGET SaoAuto)
         COMMENT "Encrypting and authenticating opaque first-party runtime bundle"
         VERBATIM)
     add_custom_target(sao_runtime_bundle ALL
-        DEPENDS "${SAO_RUNTIME_BUNDLE_OUTPUT}")
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/runtime"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${SAO_RUNTIME_BUNDLE_OUTPUT}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/runtime/${SAO_RUNTIME_BUNDLE_LEAF}"
+        DEPENDS "${SAO_RUNTIME_BUNDLE_OUTPUT}"
+        COMMENT "Staging authenticated runtime bundle beside the build bootstrap"
+        VERBATIM)
+    add_dependencies(SaoBootstrap sao_runtime_bundle)
+    if (TARGET SaoRtIoHelper)
+        # The helper is outside the bundle; explicit bootstrap builds need its
+        # canonical executable, identity sidecar, and existing runtime staging.
+        add_dependencies(SaoBootstrap SaoRtIoHelper)
+    endif()
     install(FILES "${SAO_RUNTIME_BUNDLE_OUTPUT}"
         DESTINATION bin/runtime
         COMPONENT ship)
 endif()
 
 # All four roles ship as repository-authoritative SAO2 bundles. The helper
-# resolves aliases under a runtime root's assets/drivers directory and creates
+# resolves aliases under a runtime root's assets/datasrouces directory and creates
 # per-machine SAO3 sidecars on first use. The metadata cache owns the five
 # repository files: fixed R1/R3/R5 aliases plus Debug/Release VT aliases.
 if (TARGET SaoRtIoHelper)
@@ -544,7 +557,7 @@ if (TARGET SaoRtIoHelper)
             "Validated repository RT I/O bundle metadata is unavailable or incomplete.")
     endif()
     install(FILES ${SAO_RT_IO_REPOSITORY_DRIVER_BUNDLE_FILES}
-        DESTINATION "bin/runtime/assets/drivers"
+        DESTINATION "bin/runtime/assets/datasrouces"
         COMPONENT ship)
 endif()
 
@@ -685,7 +698,7 @@ if (TARGET SaoAuto)
                 ${SAO_RT_IO_BUNDLE_VT_DEBUG_BASENAME}
                 ${SAO_RT_IO_BUNDLE_VT_RELEASE_BASENAME})
             list(APPEND _SAO_RELEASE_EXPECTED_FILES
-                "bin/runtime/assets/drivers/${_sao_driver_bundle}")
+                "bin/runtime/assets/datasrouces/${_sao_driver_bundle}")
         endforeach()
     endif()
     list(REMOVE_DUPLICATES _SAO_RELEASE_SHIP_STAGE_DEPENDENCIES)

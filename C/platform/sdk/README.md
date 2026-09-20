@@ -42,6 +42,10 @@ reached through `SaoSdkContext`'s vtable — plugins never link
 - `sao_sdk_ui.h`, `sao_sdk_event.h`, `sao_sdk_mem.h`, `sao_sdk_net.h`,
   `sao_sdk_config.h`, `sao_sdk_hotkey.h`, `sao_sdk_tts.h`,
   `sao_sdk_banner.h` — inline convenience wrappers for each sub-table.
+- `sao_sdk_provider.h` — ctx-level capability surface:`overlay_set/clear`
+  token 对、`sao_sdk_overlay_clear_surface`（session-44，surface-keyed）、
+  `sao_sdk_notify_show/dismiss`、`sao_sdk_platform_*`（render dispatch、
+  panel open、streaming apply）等独立导出，不经 ctx vtable。
 
 ## Implementation map
 
@@ -59,6 +63,9 @@ reached through `SaoSdkContext`'s vtable — plugins never link
   runtime output dir.  Plugins LoadLibrary it by relative path.
 - No install-time registration needed — the DLL is not COM-registered,
   it's just a shared library.
-- `.lib` import stub only exposes `sao_sdk_abi_version` and
-  `sao_sdk_bind_context` — the vtable factory.  Every other symbol
-  travels through the ctx vtable.
+- `.lib` import stub exposes `sao_sdk_abi_version` and
+  `sao_sdk_bind_context` — the vtable factory — plus the independent
+  `sao_sdk_provider.h` exports (overlay/notify/platform surface, e.g.
+  `sao_sdk_overlay_clear_surface`, `sao_sdk_notify_dismiss`,
+  `sao_sdk_platform_render_dispatch`).  Everything else travels through
+  the ctx vtable.

@@ -17,7 +17,11 @@
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL": "OFF"
+        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL": "OFF",
+        "SAO_PLUGINS_ENABLE_PYTHON": "ON",
+        "SAO_PLUGINS_ENABLE_LUA": "ON",
+        "SAO_PLUGINS_ENABLE_ANGEL": "ON",
+        "SAO_PLUGINS_ENABLE_CSHARP": "ON"
       },
       "environment": {
         "SAO_BUILD_ROOT": "${sourceDir}"
