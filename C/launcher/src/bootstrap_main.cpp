@@ -18,7 +18,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <cwchar>
 #include <exception>
 #include <filesystem>
@@ -39,6 +41,32 @@
 namespace {
 
 namespace fs = std::filesystem;
+
+HANDLE bootstrap_diagnostic_output() noexcept {
+    static HANDLE output = []() noexcept {
+        HANDLE source = ::GetStdHandle(STD_OUTPUT_HANDLE);
+        if (source == nullptr || source == INVALID_HANDLE_VALUE)
+            return source;
+        HANDLE duplicate = nullptr;
+        return ::DuplicateHandle(::GetCurrentProcess(), source, ::GetCurrentProcess(), &duplicate,
+                                 0u, FALSE, DUPLICATE_SAME_ACCESS) != FALSE
+                   ? duplicate
+                   : source;
+    }();
+    return output;
+}
+
+void bootstrap_diagnostic(const char* line) noexcept {
+    if (line == nullptr)
+        return;
+    HANDLE output = bootstrap_diagnostic_output();
+    if (output == nullptr || output == INVALID_HANDLE_VALUE)
+        return;
+    DWORD written = 0u;
+    (void)::WriteFile(output, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+    static constexpr char newline[] = "\r\n";
+    (void)::WriteFile(output, newline, sizeof(newline) - 1u, &written, nullptr);
+}
 
 constexpr wchar_t kRuntimeLeaf[] = L"runtime";
 constexpr wchar_t kHelperLeaf[] = L"helper";
@@ -1722,6 +1750,11 @@ void set_environment_value(std::vector<EnvironmentEntry>& entries, std::wstring 
                        wait_failed ? L"SaoAuto payload wait failed."
                                    : L"SaoAuto payload could not be started.");
     }
+    char child_diagnostic[96]{};
+    (void)std::snprintf(child_diagnostic, sizeof(child_diagnostic),
+                        "SAO_BOOTSTRAP_CHILD_EXIT code=%lu",
+                        static_cast<unsigned long>(child_exit_code));
+    bootstrap_diagnostic(child_diagnostic);
 
     bool guards_closed = true;
     for (UniqueHandle& session_guard : session_guards)
@@ -1740,6 +1773,11 @@ void set_environment_value(std::vector<EnvironmentEntry>& entries, std::wstring 
     guards_closed = user_runtime_guard.close() && guards_closed;
     guards_closed = product_root_guard.close() && guards_closed;
     guards_closed = local_app_data_guard.close() && guards_closed;
+    char cleanup_diagnostic[128]{};
+    (void)std::snprintf(cleanup_diagnostic, sizeof(cleanup_diagnostic),
+                        "SAO_BOOTSTRAP_CLEANUP guards=%d tree=%u",
+                        guards_closed ? 1 : 0, static_cast<unsigned>(cleanup_result));
+    bootstrap_diagnostic(cleanup_diagnostic);
     if (!guards_closed || cleanup_result != TreeDeleteResult::deleted) {
         return failure(child_exit_code == 0u ? kFailureCleanup : child_exit_code,
                        L"SaoAuto runtime cleanup was incomplete.");
@@ -1755,10 +1793,19 @@ void show_failure(const wchar_t* message) noexcept {
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    (void)bootstrap_diagnostic_output();
     try {
         const BootstrapOutcome outcome = run_bootstrap();
-        if (outcome.failed)
+        char outcome_diagnostic[128]{};
+        (void)std::snprintf(outcome_diagnostic, sizeof(outcome_diagnostic),
+                            "SAO_BOOTSTRAP_OUTCOME failed=%d code=%lu",
+                            outcome.failed ? 1 : 0,
+                            static_cast<unsigned long>(outcome.return_code));
+        bootstrap_diagnostic(outcome_diagnostic);
+        if (outcome.failed) {
             show_failure(outcome.message);
+            bootstrap_diagnostic("SAO_BOOTSTRAP_FAILURE_UI_DONE");
+        }
         return static_cast<int>(outcome.return_code);
     } catch (const std::bad_alloc&) {
         show_failure(L"SaoAuto bootstrap ran out of memory.");

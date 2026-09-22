@@ -8,6 +8,15 @@ CPython runtime.
 
 ## Startup diagnostics and native dispatch
 
+Link Start's parked SYSTEM hold now resumes from its first post-release tick,
+excluding synchronous UI bring-up from the exit clock. Only final-stage100% plus
+successful release starts the default SYSTEM perspective camera flyby; all six
+loading stages and the final capture-sweep wait remain unchanged. Natural completion
+then opens the existing geometric menu entrance. Offline root `--intro-handoff`
+checks each stage,100%-but-not-released, repeated release and a3s delayed first tick
+without backend startup; `--frame-ms` is relative to the resumed frame.
+Current verification is recorded in `../docs/session-log/session-78-intro-menu-handoff.md`.
+
 Product startup, including Debug, selects the native lifecycle without loading
 historical rollout/dual-run configuration. It does not hand off to the retired
 Python application on startup failure. Compatibility APIs and the explicit
@@ -21,25 +30,40 @@ bundle inputs nor helper dependencies lead back to the bootstrap in the static
 source graph. Install still consumes the canonical `runtime-bundle` output.
 A bare bootstrap without this file exits 10 before payload launch.
 
-`--log-level=trace` reports launcher failure stages. The existing
-`SAO_LAUNCHER_STARTUP_DIAGNOSTICS=1` additionally reports helper READY details on
-stderr. Session-63 observed helper `-20/stage16/reason26/error31`, a process
-mitigation failure, distinct from the bundle layout failure and Python handoff.
-The strict-handle request now sets both required strict-handle bits. A standalone
-Win32 observation still found ASLR request 0x0F read back as 0x0B while the host's
-BottomUp/HighEntropy settings were OFF; that observation does not establish a
-unique root cause. These source fixes neither alter host settings nor weaken
-readback requirements. After the user restored the original local toolchain shim
-and JSON config, all presets reconfigured with explicit path overrides.
-Debug/RelWithDebInfo builds and both optimized release acceptances passed;
-all three ship trees were refreshed. Six build/ship `--version` queries exit 0
-with `0.2.1`, and staged bundle hashes match the canonical outputs.
-Fresh ordinary launches still exit 4: Debug now reaches provider installation but
-reports `-4080/stage8/reason22/error6667`; Release/Hardened retain the mitigation
-failure above. Host settings and recovery records were not changed. See
-`../docs/session-log/session-63-startup-diagnostics.md`.
+`--log-level=trace` reports launcher failure stages. Startup/exit fault evidence
+captures duplicated raw stdout handles before subsystem bring-up so later
+GUI-subsystem handle changes cannot hide it: intro-pump and background-worker results,
+anti-debug non-clean evidence, `SAO_PROCESS_RETURN`, and outer-bootstrap
+`SAO_BOOTSTRAP_CHILD_EXIT`/`CLEANUP`/`OUTCOME` checkpoints. These lines appear
+only when stdout is inherited or a fault path is exercised; clean GUI startup
+does not gain a new console dependency.
+
+Session-63's `-20/stage16/reason26/error31` and Debug
+`-4080/stage8/reason22/error6667` observations are repair inputs, not current
+ordinary-start results. The strict-handle request still requires both permanent
+bits, and no host requirement was weakened. Session-64's final accepted
+RelWithDebInfo public bootstrap reaches all six Link Start stages and
+`BOOTSTRAP_READY`; a targeted close of the payload's `4F5A.mh` owner window
+returns payload/outer code zero with `guards=1 tree=0` and zero helper/process/
+service/key/generation residue. That lifecycle used a temporary no-license
+fixture which was deleted; the license gate is currently unconditional
+fail-closed — with `license.enabled` a failed verification (no token,
+expired, revoked, HWID mismatch) exits with code 2. (The `license.required`
+advisory-degrade field documented for session-66 does not exist in the
+current `LicenseProviderConfiguration`, `parseLicense`, shipped config, or
+either gate; restore it in code before relying on degrade-to-free. See
+`../docs/session-log/session-73-license-cli-selfheal-kit.md`.)
+See
+`../docs/session-log/session-64-overlay-and-rtio-helper-lifecycle.md`.
 
 ## Public bootstrap lifecycle
+
+Normal GUI exit first hides registered panels, the Entity/NerveGear surface and
+other native layers, without transferring their teardown ownership. The existing
+owner-thread exit pump then runs 900ms Link End followed by 650ms CRT line/dot
+shutdown before hiding the host and proceeding to resource teardown. Its cooperative
+deadline is 2500ms; reduced motion remains 180ms. System shutdown, error, smoke,
+safe and operator paths retain their existing skip/cancel behavior.
 
 1. Resolve the install root from the bootstrap module path and open
   `runtime/ff22701a59858ebf` by an exact, non-reparse path identity.
@@ -56,6 +80,9 @@ failure above. Host settings and recovery records were not changed. See
 The bootstrap removes the hidden helper transaction lock when releasing the
 transaction. Final waited probes found no opaque helper DLLs, transaction locks,
 or LocalAppData generations in any Debug, RelWithDebInfo, or Hardened ship tree.
+The final Session-64 public probe additionally emitted child exit zero,
+`SAO_BOOTSTRAP_CLEANUP guards=1 tree=0`, and `failed=0 code=0`; direct Services
+registry census found no `WdiSvcHost_*` key after exit.
 
 The bundle has 17 unique PE inputs and 21 destination records: one payload,
 16 session DLL records, and four helper records that reuse four DLL inputs. The
@@ -239,7 +266,7 @@ startup failures return a non-zero bootstrap code before the payload runs.
 |------|---------------------------------|--------------------------------------------------|
 | 0    | `SAO_EXIT_OK`                   | Clean shutdown                                   |
 | 1    | `SAO_EXIT_ALREADY_RUNNING`      | Another instance already running                 |
-| 2    | `SAO_EXIT_LICENSE_INVALID`      | License check failed                             |
+| 2    | `SAO_EXIT_LICENSE_INVALID`      | License check failed while `license.required` is true |
 | 3    | `SAO_EXIT_SHELL_TAMPERED`       | Shell integrity check failed                     |
 | 4    | `SAO_EXIT_PLATFORM_INIT_FAIL`   | Platform subsystem failed to initialise          |
 | 5    | `SAO_EXIT_PLUGIN_LOAD_FAIL`     | Fatal plugin load error                          |
@@ -286,8 +313,13 @@ not a separate full `ALL_BUILD`. Debug ship staging also passed. Each ship has
 22 direct PEs / 76 files, and all six build/ship version probes returned
 `SaoAuto 0.2.1` with exit 0. Current bundle sizes and SHA-256 are recorded in
 `../docs/session-log/session-63-startup-diagnostics.md`; they agree across each
-preset's canonical, adjacent and ship copies. Ordinary startup still exits 4
-in every preset, and optimized C4702 warnings remain.
+preset's canonical, adjacent and ship copies. Session-64 subsequently rebuilt
+the RelWithDebInfo bootstrap/bundle and passed final acceptance again: 17 input
+PEs, 31,024,208 authenticated bundle bytes, 22 shipped PEs, and 76 exact files.
+That accepted public ship reaches six-stage READY and normal exit zero under the
+temporary lifecycle fixture; a failed license verification now degrades to the
+free tier under the shipped `"required": false` rather than exiting 2.
+Optimized C4702 warnings remain.
 
 The earlier session-58b RelWithDebInfo release acceptance produced the
 22-PE/76-file direct surface used for the production `0.2.1` package. That package
@@ -318,5 +350,6 @@ above apply to the newly rebuilt bundle, not that historical file.
 The session-34 Debug ship matched that historical build's bootstrap/bundle hashes
 and passed its five-driver bundle audit. Session-63 has since refreshed Debug and
 completed fresh Release/Hardened acceptance; the former pending-Hardened claim
-is historical. These packaging results do not establish ordinary startup or
-driver retirement; the final empty process census proves process absence only.
+is historical. Packaging results alone do not establish startup or driver
+retirement; Session-64 separately proves the temporary-fixture public lifecycle,
+while the empty process census proves process absence only.

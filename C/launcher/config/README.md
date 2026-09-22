@@ -6,6 +6,14 @@
 SaoAuto.exe --config=path\to\SaoAuto.provider.json
 ```
 
+## 落盘形式：SAO3 envelope（明文只出现一次）
+
+`SaoAuto.provider.json` 在目标机器上**不以明文留存**。首个成功解析它的进程（launcher、license CLI、RTIO helper）会在解析通过后把文件原地重写为 SAO3 envelope：`SAO3` magic + AES-256-GCM 密文 + DPAPI `CRYPTPROTECT_LOCAL_MACHINE` 包裹的一次性数据密钥——即"本机绑定加密"，与 RT I/O 驱动 `.dat` 的 SAO3 是同一线缆布局（数据变体不强制 `MZ` 前缀）。
+
+- 明文 JSON 始终可直接放入（部署、更新包、开发机器）：下次加载自动迁移。
+- SAO3 文件**不可跨机拷贝**：解密在别的机器上失败（DPAPI 钥不通用）。要迁移配置就重新放一份明文。
+- 解密失败/损坏一律 `SAO_STATUS_INVALID_ARGUMENT` 拒绝启动（与明文解析失败同一 fail-closed 路径），迁移写失败不回滚本次启动。
+
 ## 服务器地址映射（云端不对等端口）
 
 | 服务 | Python 服务器进程内部端口 (server_main.py / update_host_main.py) | 云上外部端口 (C++ 客户端应连) | Python 权威地址 (sao_auto/python/config.py) |
@@ -32,7 +40,7 @@ SaoAuto.exe --config=path\to\SaoAuto.provider.json
 ```json
 {
   "license": {
-    "enabled": true,
+    "enabled": true,                                  // 验证失败即 exit 2（fail-closed）；session-66 文档的 required 字段未落盘
     "endpoint": "https://x2.sjcmc.cn:15522",           // 必填, 外部端口；服务端内部 15080
     "build_id": "SaoAuto-0.2.0+ab12cd3",                // 必填, 每 build 唯一
     "server_ed25519_pubkey": "<64-hex>",                // 必填, license_server 首启打印

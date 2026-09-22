@@ -22,13 +22,18 @@ extern "C" {
 // launcher can log them uniformly.
 typedef int32_t sao_status_t;
 
+// Canonical values come from sao/core/status.h (sao_status_e); this header
+// keeps the historical SAO_STATUS_* spellings as macros so launcher TUs stay
+// dependency-free.  The values MUST mirror the canonical enum — a drift is
+// caught by static_asserts in init_pipeline.cpp.  Licence codes moved out of
+// the -100/-101/-102 block because the canonical UI range already owns it.
 #define SAO_STATUS_OK 0
-#define SAO_STATUS_NOT_IMPLEMENTED -1
-#define SAO_STATUS_INTERNAL -2
-#define SAO_STATUS_INVALID_ARGUMENT -3
-#define SAO_STATUS_LICENSE_INVALID -100
-#define SAO_STATUS_LICENSE_EXPIRED -101
-#define SAO_STATUS_LICENSE_HWID_MISMATCH -102
+#define SAO_STATUS_NOT_IMPLEMENTED -5      // SAO_STATUS_ERR_NOT_IMPLEMENTED
+#define SAO_STATUS_INTERNAL -11            // SAO_STATUS_ERR_INTERNAL
+#define SAO_STATUS_INVALID_ARGUMENT -1     // SAO_STATUS_ERR_INVALID_ARGUMENT
+#define SAO_STATUS_LICENSE_INVALID -140
+#define SAO_STATUS_LICENSE_EXPIRED -141
+#define SAO_STATUS_LICENSE_HWID_MISMATCH -142
 #define SAO_STATUS_SHELL_TAMPERED -200
 #define SAO_STATUS_PLATFORM_INIT_FAIL -300
 #define SAO_STATUS_PLUGIN_LOAD_FAIL -400

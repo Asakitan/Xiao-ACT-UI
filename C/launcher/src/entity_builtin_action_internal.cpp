@@ -160,6 +160,9 @@ sao_status_t authorization_status(std::int32_t action, const State& state) noexc
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
         available = state.authority.about;
         break;
+    case SAO_UI_ENTITY_ACTION_OPEN_USER_MENU:
+        available = state.authority.user_menu;
+        break;
     case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
         control_action = true;
         available = controls_ready && state.authority.topmost;

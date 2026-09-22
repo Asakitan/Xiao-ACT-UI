@@ -33,6 +33,7 @@
 #define SAO_LAUNCHER_HAS_ANTI_SCREENCAP_API 1
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -46,8 +47,8 @@ namespace sao::launcher {
 
 namespace {
 
-// Raised timer resolution so refresh-matched sub-16 ms WM_TIMER delivery
-// lands near the requested cadence.  Same dllimport pattern as
+// Raised timer resolution so refresh-matched sub-16 ms frame-deadline
+// waits land near the requested cadence.  Same dllimport pattern as
 // platform/ui/src/scheduler.cpp — avoids pulling <mmsystem.h> aliases.
 extern "C" {
 __declspec(dllimport) unsigned int __stdcall timeBeginPeriod(unsigned int uPeriod);
@@ -75,7 +76,7 @@ class UiFineTimerScope {
 // platform/ui/src/scheduler.cpp::detect_refresh_hz_impl: dmDisplayFrequency
 // (the committed mode) on every active display, fastest wins, clamped to
 // 60-240 Hz so the UI still ticks ≥60 fps on any panel.  Detected once; the
-// WM_TIMER is armed with this interval at loop entry.
+// frame deadline pump consumes this interval at loop entry.
 int32_t uiFrameIntervalMs() noexcept {
     static const int32_t interval_ms = []() -> int32_t {
         int32_t best_hz = 0;
@@ -115,10 +116,25 @@ int32_t uiFrameIntervalMs() noexcept {
 // Console-readable smoke/operator output.  Prefer an inherited stdout pipe
 // so subprocess harnesses keep deterministic capture; allocate a console only
 // when the process has no usable output handle.
+HANDLE diagnosticOutputHandle() noexcept {
+    static HANDLE output = []() noexcept {
+        HANDLE source = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (source == nullptr || source == INVALID_HANDLE_VALUE)
+            return source;
+        HANDLE duplicate = nullptr;
+        if (DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &duplicate, 0u, FALSE,
+                            DUPLICATE_SAME_ACCESS) != FALSE) {
+            return duplicate;
+        }
+        return source;
+    }();
+    return output;
+}
+
 void consolePrintLine(const char* line) noexcept {
     if (line == nullptr)
         return;
-    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE output = diagnosticOutputHandle();
     if (output == nullptr || output == INVALID_HANDLE_VALUE) {
         if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
             (void)AllocConsole();
@@ -229,9 +245,14 @@ constexpr const char* kBootstrapCaptions[kBootstrapStageCount] = {
     "WINDOW SCRUB", "ENGINE RUNTIMES", "PLUGIN ENGINES",
 };
 constexpr const char* kBootstrapWaits[kBootstrapStageCount] = {
-    "WAITING FOR R1/R3/R5 READY", "CREATING PANELS / INPUT ROUTES",
-    "PROTECTING UI WINDOWS", "COMMITTING WINDOW STATE",
-    "PROBING NATIVE RUNTIMES", "ACTIVATING PLUGIN ENGINES",
+    "WAITING FOR R1/R3/R5 READY", "CREATING PANELS / INPUT ROUTES", "PROTECTING UI WINDOWS",
+    "COMMITTING WINDOW STATE",    "PROBING NATIVE RUNTIMES",        "ACTIVATING PLUGIN ENGINES",
+};
+// Wall-clock budgets driving the intro rail's fractional fill while a stage
+// runs on a worker.  Exceeding the budget leaves the fill parked at the
+// published clamp; it never changes the stage's real status.
+constexpr uint64_t kBootstrapStageBudgetMs[kBootstrapStageCount] = {
+    90000u, 8000u, 15000u, 10000u, 15000u, 15000u,
 };
 
 // Runs the driver chain off the owner thread so the intro keeps animating while
@@ -404,6 +425,27 @@ sao_status_t publish_intro_bootstrap(sao_platform_ctx* ctx, uint32_t stage_index
     return sao_ui_intro_publish_bootstrap(ctx, &state);
 }
 
+// Fractional per-stage fill so the rail keeps animating while a long stage
+// (driver bring-up in particular) runs on the worker.  The fill is clamped
+// below 1.0 — a full bar is only published by the terminal READY state.
+sao_status_t publish_intro_bootstrap_progress(sao_platform_ctx* ctx, uint32_t stage_index,
+                                              float progress) {
+    SaoUiLinkStartBootstrap state{};
+    state.struct_size = sizeof(state);
+    state.stage_index = stage_index;
+    state.stage_count = kBootstrapStageCount;
+    state.stage_progress = progress < 0.0F    ? 0.0F
+                           : progress > 0.95F ? 0.95F
+                                              : progress;
+    state.flags = 0u;
+    char caption[SAO_UI_LINKSTART_BOOTSTRAP_CAPTION_CAPACITY]{};
+    const uint32_t resolved_index = stage_index < kBootstrapStageCount ? stage_index : 0u;
+    (void)std::snprintf(caption, sizeof(caption), "%s|%s", kBootstrapCaptions[resolved_index],
+                        kBootstrapWaits[resolved_index]);
+    state.caption_utf8 = caption;
+    return sao_ui_intro_publish_bootstrap(ctx, &state);
+}
+
 // WM_QUIT is pushed back so the later message loop still observes it.
 struct IntroPumpResult {
     sao_status_t status = SAO_STATUS_OK;
@@ -423,21 +465,41 @@ IntroPumpResult pump_intro_frame(sao_platform_ctx* ctx) {
          count < kMaximumMessagesPerFrame && PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE);
          ++count) {
         if (msg.message == WM_QUIT) {
+            char diagnostic[128]{};
+            (void)snprintf(diagnostic, sizeof(diagnostic),
+                           "SAO_BOOTSTRAP_QUIT wparam=%llu thread=%lu",
+                           static_cast<unsigned long long>(msg.wParam),
+                           static_cast<unsigned long>(GetCurrentThreadId()));
+            consolePrintLine(diagnostic);
             PostQuitMessage(static_cast<int>(msg.wParam));
             result.alive = false;
             break;
         }
         int32_t handled = 0;
         result.status = sao_ui_handle_message(ctx, msg.message, msg.wParam, msg.lParam, &handled);
-        if (result.status != SAO_STATUS_OK)
+        if (result.status != SAO_STATUS_OK) {
+            char diagnostic[160]{};
+            (void)snprintf(diagnostic, sizeof(diagnostic),
+                           "SAO_BOOTSTRAP_PUMP_FAIL source=message message=0x%04X status=%d",
+                           msg.message, static_cast<int>(result.status));
+            consolePrintLine(diagnostic);
             return result;
+        }
         if (!handled) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
-    if (result.alive)
+    if (result.alive) {
         result.status = sao_ui_intro_pump(ctx);
+        if (result.status != SAO_STATUS_OK) {
+            char diagnostic[128]{};
+            (void)snprintf(diagnostic, sizeof(diagnostic),
+                           "SAO_BOOTSTRAP_PUMP_FAIL source=intro status=%d",
+                           static_cast<int>(result.status));
+            consolePrintLine(diagnostic);
+        }
+    }
     return result;
 }
 
@@ -455,6 +517,7 @@ bool shouldEmitRtIoReady(const AppState& state, bool validation_ready) noexcept 
 }
 
 int App::run() {
+    (void)diagnosticOutputHandle();
     // 1. Parse the command line first — --help / --version must never trigger
     //    any subsystem init, so we return early if the parser tells us to.
     int rc = parseCommandLine();
@@ -824,6 +887,9 @@ int App::verifyLicense() {
     sao_status_t s = sao_license_verify(&r);
     state_.license_active = s != SAO_STATUS_NOT_IMPLEMENTED;
     if (s != SAO_STATUS_OK || !r.valid) {
+        tracePrintfImpl(state_, "LICENSE_VERIFY_FAIL status=%d valid=%d msg=%s",
+                        static_cast<int>(s), static_cast<int>(r.valid),
+                        r.error_msg[0] ? r.error_msg : "<none>");
         return SAO_EXIT_LICENSE_INVALID;
     }
     state_.streaming_entitled = isPaidLicenseTier(r.tier);
@@ -948,8 +1014,7 @@ int App::runBootstrapUnderIntro() {
         quit_requested = !result.alive;
         return result.status;
     };
-    const auto run_background_stage = [&](const char* caption,
-                                          IntroBootstrapWorker::Step step,
+    const auto run_background_stage = [&](const char* caption, IntroBootstrapWorker::Step step,
                                           void* user_data,
                                           void (*cancel)(void*)) -> IntroBackgroundResult {
         IntroBackgroundResult result{};
@@ -957,21 +1022,54 @@ int App::runBootstrapUnderIntro() {
         worker.add(caption, step, user_data);
         result.operation_status = worker.start();
         bool cancel_requested = false;
+        const ULONGLONG stage_started = GetTickCount64();
+        ULONGLONG last_fill_publish = stage_started;
+        float last_fill = 0.0F;
         while (result.operation_status == SAO_STATUS_OK && !worker.finished()) {
             if (!quit_requested && result.pump_status == SAO_STATUS_OK)
                 result.pump_status = advance_intro();
-            if (!cancel_requested &&
-                (quit_requested || result.pump_status != SAO_STATUS_OK)) {
+            if (!cancel_requested && (quit_requested || result.pump_status != SAO_STATUS_OK)) {
                 if (cancel != nullptr)
                     cancel(user_data);
                 cancel_requested = true;
             }
-            if (!worker.finished())
+            if (!worker.finished()) {
                 worker.wait_for_frame(!quit_requested && result.pump_status == SAO_STATUS_OK);
+                // Fractional fill keeps the rail alive while a long stage
+                // runs — stage 1's helper/driver bring-up can legitimately
+                // take tens of seconds.  Best-effort: a publish failure here
+                // never gates bootstrap.
+                if (cover_with_intro && !worker.finished() &&
+                    active_stage < kBootstrapStageCount) {
+                    const ULONGLONG now = GetTickCount64();
+                    if (now - last_fill_publish >= 120u) {
+                        const uint64_t budget = kBootstrapStageBudgetMs[active_stage] != 0u
+                                                    ? kBootstrapStageBudgetMs[active_stage]
+                                                    : 8000u;
+                        const float fill =
+                            0.95F * std::min(1.0F, static_cast<float>(now - stage_started) /
+                                                       static_cast<float>(budget));
+                        if (fill > last_fill + 0.01F) {
+                            (void)publish_intro_bootstrap_progress(platform, active_stage, fill);
+                            last_fill = fill;
+                        }
+                        last_fill_publish = now;
+                    }
+                }
+            }
         }
         worker.join();
         if (result.operation_status == SAO_STATUS_OK)
             result.operation_status = worker.result();
+        if (result.operation_status != SAO_STATUS_OK || result.pump_status != SAO_STATUS_OK) {
+            tracePrintfImpl(state_,
+                            "BOOTSTRAP_BACKGROUND_RESULT caption=%s operation=%d pump=%d "
+                            "cancel=%d quit=%d",
+                            caption != nullptr ? caption : "<unknown>",
+                            static_cast<int>(result.operation_status),
+                            static_cast<int>(result.pump_status), cancel_requested ? 1 : 0,
+                            quit_requested ? 1 : 0);
+        }
         return result;
     };
     const auto prepare_intro_stage = [&](uint32_t stage_index) -> sao_status_t {
@@ -995,11 +1093,10 @@ int App::runBootstrapUnderIntro() {
     if (stage_status == SAO_STATUS_OK && quit_requested)
         return quit_bootstrap();
     if (stage_status == SAO_STATUS_OK && cover_with_intro) {
-        const IntroBackgroundResult result =
-            run_background_stage(kBootstrapCaptions[0], &bootstrap_step_drivers, &context,
-                                 &bootstrap_cancel_drivers);
-        stage_status = result.operation_status != SAO_STATUS_OK ? result.operation_status
-                                                                : result.pump_status;
+        const IntroBackgroundResult result = run_background_stage(
+            kBootstrapCaptions[0], &bootstrap_step_drivers, &context, &bootstrap_cancel_drivers);
+        stage_status =
+            result.operation_status != SAO_STATUS_OK ? result.operation_status : result.pump_status;
     } else if (stage_status == SAO_STATUS_OK) {
         stage_status = sao_platform_bringup_drivers(&cfg, platform);
     }
@@ -1061,8 +1158,8 @@ int App::runBootstrapUnderIntro() {
     if (cover_with_intro) {
         const IntroBackgroundResult result = run_background_stage(
             kBootstrapCaptions[2], &bootstrap_step_capture_shield, &context, nullptr);
-        stage_status = result.operation_status != SAO_STATUS_OK ? result.operation_status
-                                                                : result.pump_status;
+        stage_status =
+            result.operation_status != SAO_STATUS_OK ? result.operation_status : result.pump_status;
     } else {
         stage_status = sao_platform_bringup_capture_shield(&cfg, platform);
     }
@@ -1110,8 +1207,8 @@ int App::runBootstrapUnderIntro() {
     if (cover_with_intro) {
         const IntroBackgroundResult result = run_background_stage(
             kBootstrapCaptions[4], &bootstrap_step_runtimes, &runtime_context, nullptr);
-        stage_status = result.operation_status != SAO_STATUS_OK ? result.operation_status
-                                                                : result.pump_status;
+        stage_status =
+            result.operation_status != SAO_STATUS_OK ? result.operation_status : result.pump_status;
     } else {
         stage_status = bootstrap_step_runtimes(&runtime_context);
     }
@@ -1160,8 +1257,8 @@ int App::runBootstrapUnderIntro() {
     active_stage = 7u;
     sao_status_t capture_sweep_pump_status = SAO_STATUS_OK;
     if (cover_with_intro) {
-        const IntroBackgroundResult result = run_background_stage(
-            "READY", &bootstrap_step_capture_sweep, &context, nullptr);
+        const IntroBackgroundResult result =
+            run_background_stage("READY", &bootstrap_step_capture_sweep, &context, nullptr);
         stage_status = result.operation_status;
         capture_sweep_pump_status = result.pump_status;
     } else {
@@ -1231,8 +1328,8 @@ int App::bringUpUi() {
     }
     user_menu_.processCommandLine(GetCommandLineW(), false);
     if (!state_.safe_mode) {
-        const sao_status_t sweep_status = sao_platform_bringup_capture_sweep(
-            static_cast<sao_platform_ctx*>(state_.platform_ctx));
+        const sao_status_t sweep_status =
+            sao_platform_bringup_capture_sweep(static_cast<sao_platform_ctx*>(state_.platform_ctx));
         if (sweep_status != SAO_STATUS_OK) {
             tracePrintfImpl(state_, "UI_CAPTURE_SWEEP_DEGRADED status=%d",
                             static_cast<int>(sweep_status));
@@ -1266,59 +1363,118 @@ int App::runRtIoOperator() {
 }
 
 int App::runMessageLoop() {
+    // Deadline-driven frame pump instead of a SetTimer+GetMessageW loop.
+    // WM_TIMER is only synthesized while the queue is otherwise idle and is
+    // coalesced under load; even with timeBeginPeriod(1) its effective
+    // delivery bottoms out near the ~10-16 ms quantum — capping high-refresh
+    // panels at ~60 Hz — and a delayed/coalesced timer after a long idle
+    // stretch starves sao_ui_tick so input appears frozen.  Instead we drain
+    // the queue with PeekMessage, sleep the precise remainder of each frame
+    // via MsgWaitForMultipleObjects (woken immediately by any new input), and
+    // run the frame work on a monotonic QPC deadline.
     const UINT frame_ms = static_cast<UINT>(uiFrameIntervalMs());
-    const UINT_PTR timer_id = SetTimer(nullptr, 0, frame_ms, nullptr);
-    if (timer_id == 0) {
-        return SAO_EXIT_UI_ONLINE_FAIL;
-    }
+    const double frame_sec = static_cast<double>(frame_ms) / 1000.0;
     if (frame_ms < 16)
         (void)timeBeginPeriod(1);
-    MSG msg{};
-    BOOL result = 0;
-    while ((result = GetMessageW(&msg, nullptr, 0, 0)) > 0) {
-        int32_t handled = 0;
-        sao_status_t status = SAO_STATUS_OK;
-        if (msg.message == WM_TIMER && msg.wParam == timer_id) {
-            handled = 1;
-            tickUserGuideWebView();
-            status = sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
-                                 static_cast<uint32_t>(uiFrameIntervalMs()));
-            if (status == SAO_STATUS_OK)
-                serviceFirstRunGuide();
-            const int32_t restart_result = boot_residency_take_prompt_result();
-            if (restart_result == BOOT_RESIDENCY_RESTART_ACCEPTED)
-                consolePrintLine("BOOT_RESIDENCY_RESTART_SCHEDULED");
-            else if (restart_result == BOOT_RESIDENCY_ERROR)
-                consolePrintLine("BOOT_RESIDENCY_RESTART_SCHEDULE_FAILED");
-        } else {
-            status = sao_ui_handle_message(static_cast<sao_platform_ctx*>(state_.platform_ctx),
-                                           msg.message, msg.wParam, msg.lParam, &handled);
+    const auto now_sec = [] {
+        static thread_local double freq = 0.0;
+        if (freq == 0.0) {
+            LARGE_INTEGER f{};
+            QueryPerformanceFrequency(&f);
+            freq = static_cast<double>(f.QuadPart);
         }
+        LARGE_INTEGER c{};
+        QueryPerformanceCounter(&c);
+        return static_cast<double>(c.QuadPart) / freq;
+    };
+    double next_frame = now_sec() + frame_sec;
+    WPARAM exit_wparam = 0;
+    bool quit = false;
+    while (!quit) {
+        // Drain the queue before considering sleep — a busy queue must not
+        // shift the deadline.  Capped at 64 messages per pass so a flooded
+        // queue cannot starve the frame tick either.
+        unsigned drained = 0;
+        MSG msg{};
+        while (drained < 64u && PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            ++drained;
+            if (msg.message == WM_QUIT) {
+                exit_wparam = msg.wParam;
+                quit = true;
+                break;
+            }
+            // Foreign WM_TIMERs (tooltip/IME/component timers, TIMERPROC
+            // callbacks) belong to DispatchMessageW, not the UI message
+            // contract.  Our own frame timer was removed with the deadline
+            // pump, so nothing should route timers through the handler.
+            if (msg.message == WM_TIMER) {
+                DispatchMessageW(&msg);
+                continue;
+            }
+            int32_t handled = 0;
+            const sao_status_t status =
+                sao_ui_handle_message(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                                      msg.message, msg.wParam, msg.lParam, &handled);
+            if (status != SAO_STATUS_OK) {
+                tracePrintfImpl(state_, "UI_LOOP_FAIL message=0x%04X wparam=%llu status=%d",
+                                static_cast<unsigned int>(msg.message),
+                                static_cast<unsigned long long>(msg.wParam),
+                                static_cast<int>(status));
+                if (frame_ms < 16)
+                    (void)timeEndPeriod(1);
+                return SAO_EXIT_UI_ONLINE_FAIL;
+            }
+            if (!handled) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        if (quit)
+            break;
+        const double now = now_sec();
+        if (now < next_frame) {
+            DWORD wait_ms = static_cast<DWORD>((next_frame - now) * 1000.0);
+            if (wait_ms == 0)
+                wait_ms = 1;
+            (void)MsgWaitForMultipleObjects(0, nullptr, FALSE, wait_ms, QS_ALLINPUT);
+            continue;
+        }
+        // Deadline reached — roll forward by one frame; if we fell far
+        // behind (debugger break, long modal op) realign instead of
+        // bursting catch-up frames.
+        next_frame += frame_sec;
+        if (now > next_frame + frame_sec * 4.0)
+            next_frame = now + frame_sec;
+        tickUserGuideWebView();
+        const sao_status_t status =
+            sao_ui_tick(static_cast<sao_platform_ctx*>(state_.platform_ctx),
+                        static_cast<uint32_t>(uiFrameIntervalMs()));
+        if (status == SAO_STATUS_OK)
+            serviceFirstRunGuide();
+        const int32_t restart_result = boot_residency_take_prompt_result();
+        if (restart_result == BOOT_RESIDENCY_RESTART_ACCEPTED)
+            consolePrintLine("BOOT_RESIDENCY_RESTART_SCHEDULED");
+        else if (restart_result == BOOT_RESIDENCY_ERROR)
+            consolePrintLine("BOOT_RESIDENCY_RESTART_SCHEDULE_FAILED");
         if (status != SAO_STATUS_OK) {
-            tracePrintfImpl(state_, "UI_LOOP_FAIL message=0x%04X wparam=%llu status=%d",
-                            static_cast<unsigned int>(msg.message),
-                            static_cast<unsigned long long>(msg.wParam),
+            tracePrintfImpl(state_, "UI_LOOP_FAIL message=frame_deadline status=%d",
                             static_cast<int>(status));
-            KillTimer(nullptr, timer_id);
             if (frame_ms < 16)
                 (void)timeEndPeriod(1);
             return SAO_EXIT_UI_ONLINE_FAIL;
         }
-        if (!handled) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
     }
-    KillTimer(nullptr, timer_id);
     if (frame_ms < 16)
         (void)timeEndPeriod(1);
-    if (result < 0)
-        return SAO_EXIT_UI_ONLINE_FAIL;
-    return playExitAnimation(static_cast<int>(msg.wParam));
+    return playExitAnimation(static_cast<int>(exit_wparam));
 }
 
 int App::playExitAnimation(int exit_code) noexcept {
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER)
+    tracePrintfImpl(state_, "OUTRO_REQUEST code=%d online=%d started=%d shutdown=%d safe=%d smoke=%d operator=%d session_end=%d",
+                    exit_code, state_.ui_online, exit_animation_started_, shutdown_called_,
+                    state_.safe_mode, state_.smoke_mode, state_.rt_io_operator,
+                    user_menu_.sessionEnding());
     if (exit_code != SAO_EXIT_OK || exit_animation_started_ || shutdown_called_ ||
         !state_.ui_online || state_.platform_ctx == nullptr || state_.smoke_mode ||
         state_.safe_mode || state_.rt_io_operator || state_.exit_after_init ||
@@ -1330,14 +1486,18 @@ int App::playExitAnimation(int exit_code) noexcept {
     user_menu_.beginExit();
     const bool prompt_closed = boot_residency_close_prompt();
     const bool guide_closed = shutdownUserGuideWebView();
+    tracePrintfImpl(state_, "OUTRO_PANELS prompt_closed=%d guide_closed=%d", prompt_closed, guide_closed);
     if (!prompt_closed || !guide_closed)
         return exit_code;
     auto* ctx = static_cast<sao_platform_ctx*>(state_.platform_ctx);
-    if (sao_ui_outro_show(ctx) != SAO_STATUS_OK) {
+    const sao_status_t show_status = sao_ui_outro_show(ctx);
+    tracePrintfImpl(state_, "OUTRO_SHOW status=%d", static_cast<int>(show_status));
+    if (show_status != SAO_STATUS_OK) {
         (void)sao_ui_outro_cancel(ctx);
         return exit_code;
     }
-    const ULONGLONG deadline = GetTickCount64() + 1500u;
+    const ULONGLONG started = GetTickCount64();
+    const ULONGLONG deadline = started + 2500u;
     while (GetTickCount64() < deadline && !user_menu_.sessionEnding() &&
            !GetSystemMetrics(SM_SHUTTINGDOWN)) {
         MSG pending{};
@@ -1365,12 +1525,16 @@ int App::playExitAnimation(int exit_code) noexcept {
             GetSystemMetrics(SM_SHUTTINGDOWN) || GetTickCount64() >= deadline)
             break;
         int32_t active = 0;
-        if (sao_ui_outro_pump(ctx, &active) != SAO_STATUS_OK || active == 0)
+        const sao_status_t pump_status = sao_ui_outro_pump(ctx, &active);
+        if (pump_status != SAO_STATUS_OK || active == 0) {
+            tracePrintfImpl(state_, "OUTRO_PUMP_END status=%d active=%d elapsed_ms=%llu",
+                            static_cast<int>(pump_status), active, GetTickCount64() - started);
             break;
-        (void)MsgWaitForMultipleObjectsEx(0, nullptr,
-                                          static_cast<DWORD>(uiFrameIntervalMs()), QS_ALLINPUT,
-                                          MWMO_INPUTAVAILABLE);
+        }
+        (void)MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(uiFrameIntervalMs()),
+                                          QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
+    tracePrintfImpl(state_, "OUTRO_RETURN code=%d elapsed_ms=%llu", exit_code, GetTickCount64() - started);
     (void)sao_ui_outro_cancel(ctx);
 #endif
     return exit_code;

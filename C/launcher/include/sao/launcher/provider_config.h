@@ -37,6 +37,11 @@ struct PluginsProviderConfiguration {
     std::vector<std::wstring> manifests;
     std::wstring runtime_manifest_path;
     std::wstring python_home;
+    // Shared package roots appended to each Python plugin's sys.path
+    // (legacy plugins import shared packages such as `gui_modules` from a
+    // platform-level directory outside their own plugin dir).
+    std::vector<std::wstring> python_module_dirs;
+    std::wstring dotnet_root;
     bool workspace_walkup = false;
     uint32_t max_depth = 1;
 };
@@ -48,9 +53,8 @@ struct LauncherProviderConfiguration {
     PluginsProviderConfiguration plugins;
 };
 
-sao_status_t loadLauncherProviderConfiguration(
-    const wchar_t* base_dir,
-    const wchar_t* config_path) noexcept;
+sao_status_t loadLauncherProviderConfiguration(const wchar_t* base_dir,
+                                               const wchar_t* config_path) noexcept;
 
 LauncherProviderConfiguration launcherProviderConfigurationSnapshot();
 

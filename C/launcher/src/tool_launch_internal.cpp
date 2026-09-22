@@ -27,6 +27,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace sao::launcher::tool_launch {
@@ -34,12 +35,61 @@ namespace {
 
 constexpr wchar_t kAiEditorLaunchMutex[] =
     L"Local\\SAO.Auto.AiEditor.Launch.v1";
-constexpr std::uint32_t kAiEditorHandshakeTimeoutMs = 5000;
+constexpr std::uint32_t kAiEditorHandshakeTimeoutMs = 15000;
+constexpr std::uint32_t kAiEditorLaunchAttempts = 2;
 constexpr std::uint32_t kAiEditorShutdownTimeoutMs = 3000;
 constexpr std::uint32_t kAiEditorPanelRetireAttempts = 64;
 constexpr DWORD kAiEditorPanelRetireRetryDelayMs = 1;
 constexpr std::int32_t kUnsetExitCode =
     (std::numeric_limits<std::int32_t>::min)();
+
+void append_trace_line(const wchar_t* message) noexcept {
+    wchar_t enabled[2]{};
+    if (message == nullptr ||
+        GetEnvironmentVariableW(L"SAO_AI_EDITOR_TRACE", enabled,
+                                static_cast<DWORD>(std::size(enabled))) == 0u ||
+        enabled[0] != L'1') {
+        return;
+    }
+    wchar_t directory[MAX_PATH]{};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", directory,
+                                static_cast<DWORD>(std::size(directory))) == 0u) {
+        return;
+    }
+    const auto directory_path = std::filesystem::path(directory) / L"SAOAuto";
+    std::error_code error;
+    std::filesystem::create_directories(directory_path, error);
+    if (error) {
+        return;
+    }
+    const auto path = directory_path / L"ai-editor-trace.log";
+    const HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == nullptr || file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    wchar_t line[1024]{};
+    const int length = _snwprintf_s(line, std::size(line), _TRUNCATE,
+                                    L"[pid=%lu tid=%lu] owner.%ls\r\n",
+                                    static_cast<unsigned long>(GetCurrentProcessId()),
+                                    static_cast<unsigned long>(GetCurrentThreadId()),
+                                    message);
+    if (length > 0) {
+        DWORD written = 0;
+        (void)WriteFile(file, line, static_cast<DWORD>(length * sizeof(wchar_t)), &written,
+                        nullptr);
+        OutputDebugStringW(line);
+    }
+    CloseHandle(file);
+}
+
+void trace_status(const wchar_t* stage, std::int32_t status = 0) noexcept {
+    wchar_t message[768]{};
+    (void)_snwprintf_s(message, std::size(message), _TRUNCATE, L"%ls status=%d",
+                       stage != nullptr ? stage : L"", static_cast<int>(status));
+    append_trace_line(message);
+}
 
 sao_status_t map_os_error(DWORD error) noexcept {
     switch (error) {
@@ -280,6 +330,23 @@ void emit_launch_failure(sao_status_t status) noexcept {
 #endif
 }
 
+void emit_launch_retry(std::uint32_t attempt, sao_status_t status) noexcept {
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+    (void)sao_core_logf(SAO_LOG_WARN, "launcher.ai_editor",
+                        "AI Editor launch attempt %u failed transiently: %d",
+                        static_cast<unsigned>(attempt), static_cast<int>(status));
+#else
+    (void)attempt;
+    (void)status;
+#endif
+}
+
+bool retryable_launch_status(sao_status_t status) noexcept {
+    return status == SAO_STATUS_ERR_TIMEOUT ||
+           status == SAO_STATUS_ERR_PROCESS_GONE ||
+           status == SAO_STATUS_ERR_OS_CALL_FAILED;
+}
+
 void release_process_locked(AiEditorProcessOwner::State& state) noexcept {
     if (state.process != nullptr) {
         CloseHandle(state.process);
@@ -466,6 +533,7 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
     try {
         detail::PackagePaths package;
         sao_status_t status = detail::resolve_package(state->base_dir, package);
+        trace_status(L"launch.resolve_package", status);
         if (status != SAO_STATUS_OK) {
             publish_failure(state, generation, status);
             return;
@@ -514,6 +582,7 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
 
         sao_ai_editor_launcher_t launcher = nullptr;
         std::int32_t abi_status = sao_ai_editor_create(&config, &launcher);
+        trace_status(L"launcher.create", abi_status);
         if (abi_status != SAO_AI_EDITOR_OK || launcher == nullptr) {
             publish_failure(state, generation,
                             map_ai_editor_status(abi_status));
@@ -521,11 +590,28 @@ void launch_ai_editor(const std::shared_ptr<AiEditorProcessOwner::State>& state,
         }
 
         std::int32_t exit_code = kUnsetExitCode;
-        abi_status = sao_ai_editor_launch(launcher, &exit_code);
-        if (abi_status != SAO_AI_EDITOR_OK) {
+        sao_status_t launch_status = SAO_STATUS_OK;
+        bool handshake_completed = false;
+        for (std::uint32_t attempt = 1;
+             attempt <= kAiEditorLaunchAttempts; ++attempt) {
+            exit_code = kUnsetExitCode;
+            abi_status = sao_ai_editor_launch(launcher, &exit_code);
+            launch_status = map_ai_editor_status(abi_status);
+            trace_status(L"launcher.launch", abi_status);
+            if (abi_status == SAO_AI_EDITOR_OK) {
+                handshake_completed = true;
+                break;
+            }
+            if (attempt < kAiEditorLaunchAttempts &&
+                retryable_launch_status(launch_status)) {
+                emit_launch_retry(attempt, launch_status);
+                continue;
+            }
+            break;
+        }
+        if (!handshake_completed) {
             sao_ai_editor_destroy(launcher);
-            publish_failure(state, generation,
-                            map_ai_editor_status(abi_status), exit_code);
+            publish_failure(state, generation, launch_status, exit_code);
             return;
         }
 
@@ -829,13 +915,21 @@ sao_status_t AiEditorProcessOwner::open() noexcept {
 }
 
 sao_status_t AiEditorProcessOwner::toggle() noexcept {
+    trace_status(L"toggle.begin");
     try {
 #if defined(SAO_LAUNCHER_HAS_AI_EDITOR_ABI)
     const auto state = state_;
-    if (!state) return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (!state) {
+        trace_status(L"toggle.no_state", SAO_STATUS_ERR_NOT_INITIALIZED);
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
     const auto compositor = borrow_platform_compositor();
+    trace_status(L"toggle.compositor", compositor == nullptr
+                                              ? SAO_STATUS_ERR_NOT_INITIALIZED
+                                              : SAO_STATUS_OK);
     if (!compositor) return SAO_STATUS_ERR_NOT_INITIALIZED;
     const auto owner_status = sao_ui_compositor_require_owner_thread(compositor);
+    trace_status(L"toggle.owner", owner_status);
     if (owner_status != SAO_STATUS_OK) return owner_status;
     sao_ai_editor_main_panel_t panel{};
     bool pending = false;
@@ -909,6 +1003,8 @@ sao_status_t AiEditorProcessOwner::service_ui() noexcept {
         std::int32_t exit_code = kUnsetExitCode;
         const std::int32_t abi_status =
             sao_ai_editor_status(launcher, &running, &exit_code);
+        if (abi_status != SAO_AI_EDITOR_OK || !running)
+            trace_status(L"service.child_status", abi_status);
         if (abi_status != SAO_AI_EDITOR_OK || !running) {
             if (panel != nullptr) {
                 const sao_status_t owner_status =
@@ -958,18 +1054,22 @@ sao_status_t AiEditorProcessOwner::service_ui() noexcept {
 
         const sao_ui_compositor_handle_t compositor = borrow_platform_compositor();
         if (compositor == nullptr) {
+            trace_status(L"service.compositor", SAO_STATUS_ERR_NOT_INITIALIZED);
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
         const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(compositor);
         if (owner_status != SAO_STATUS_OK) {
+            trace_status(L"service.owner", owner_status);
             return owner_status;
         }
 
         if (panel == nullptr && !show_requested) return SAO_STATUS_OK;
         if (panel == nullptr) {
             sao_ai_editor_main_panel_t created = nullptr;
+            trace_status(L"service.panel_create.begin");
             const std::int32_t create_status =
                 sao_ai_editor_main_panel_create(compositor, launcher, &created);
+            trace_status(L"service.panel_create", create_status);
             if (create_status != SAO_AI_EDITOR_OK || created == nullptr) {
                 return create_status == SAO_AI_EDITOR_OK
                            ? SAO_STATUS_ERR_OS_CALL_FAILED
@@ -1069,6 +1169,7 @@ sao_status_t AiEditorProcessOwner::service_ui() noexcept {
         }
         if (show_requested) {
             const std::int32_t show_status = sao_ai_editor_main_panel_show(panel);
+            trace_status(L"service.panel_show", show_status);
             if (show_status != SAO_AI_EDITOR_OK) {
                 return map_ai_editor_status(show_status);
             }
@@ -1080,7 +1181,10 @@ sao_status_t AiEditorProcessOwner::service_ui() noexcept {
             }
             if (suppressed) return map_ai_editor_status(sao_ai_editor_main_panel_hide(panel));
         }
-        return map_ai_editor_status(sao_ai_editor_main_panel_tick(panel));
+        const std::int32_t tick_status = sao_ai_editor_main_panel_tick(panel);
+        if (tick_status != SAO_AI_EDITOR_OK)
+            trace_status(L"service.panel_tick", tick_status);
+        return map_ai_editor_status(tick_status);
     } catch (const std::bad_alloc&) {
         return SAO_STATUS_ERR_UNKNOWN;
     } catch (...) {

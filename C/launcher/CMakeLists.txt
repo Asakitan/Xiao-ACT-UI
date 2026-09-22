@@ -190,9 +190,11 @@ endif()
 if (TARGET sao::plugins::loader AND TARGET sao::rt_io AND TARGET sao::ui)
     list(APPEND SAO_LAUNCHER_HEADERS
         src/entity_provider_catalog_internal.h
-        src/entity_provider_publication_internal.h)
+        src/entity_provider_publication_internal.h
+        src/plugin_tabs_publication_internal.h)
     list(APPEND SAO_LAUNCHER_SOURCES
-        src/entity_provider_publication_internal.cpp)
+        src/entity_provider_publication_internal.cpp
+        src/plugin_tabs_publication_internal.cpp)
 endif()
 
 if (TARGET sao::shell::stub)
@@ -223,7 +225,8 @@ endif()
 if (TARGET sao::plugins::loader)
     add_library(sao_launcher_plugins_provider STATIC src/plugins_provider.cpp)
     target_include_directories(sao_launcher_plugins_provider PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/platform/core/include)
     target_link_libraries(sao_launcher_plugins_provider PRIVATE
         sao::plugins::loader comdlg32)
     if (TARGET sao::sdk AND TARGET sao::ui)
@@ -607,6 +610,22 @@ if (TARGET sao::server::freetier::telemetry_client)
 else()
     message(STATUS
         "launcher: telemetry_client not available; rollout telemetry will no-op")
+endif()
+
+# runtime installer slice — init_pipeline's SAO_LAUNCHER_HAS_RUNTIME_INSTALLER
+# arm links sao::runtime_installer so a configured
+# plugins.runtime_manifest drives the real
+# load_manifest→bind_manifest→ensure_all(manifest_configured) chain at
+# bring-up; every failed installer call is fail-closed.  The library is
+# already an SAO_RUNTIME_SHARED_TARGETS member, so this is only an import
+# edge, not a topology change.
+if (TARGET sao::runtime_installer)
+    target_link_libraries(SaoAuto PRIVATE sao::runtime_installer)
+    target_compile_definitions(SaoAuto PRIVATE SAO_LAUNCHER_HAS_RUNTIME_INSTALLER=1)
+else()
+    message(STATUS
+        "launcher: runtime_installer not available; manifest-configured "
+        "runtime installs report capability-missing")
 endif()
 
 target_compile_definitions(SaoAuto PRIVATE

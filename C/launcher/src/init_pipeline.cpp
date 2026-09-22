@@ -33,6 +33,27 @@
 #include "settings_profiles.h"
 #include "settings_theme_internal.h"
 #include "tool_launch_internal.h"
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+#include "platform_timer_owner_internal.h"
+#endif
+
+#if __has_include("sao/core/status.h")
+#include "sao/core/status.h"
+// The SAO_STATUS_* macros in init_pipeline.h and the SaoStatus spellings in
+// sao_core/sao_status.h are aliases of the canonical sao_status_e values.
+// These asserts fail the build if the three historical code spaces drift
+// back out of sync (the old -1/-3/-2 block overlapped the platform enum).
+static_assert(SAO_STATUS_NOT_IMPLEMENTED == SAO_STATUS_ERR_NOT_IMPLEMENTED);
+static_assert(SAO_STATUS_INTERNAL == SAO_STATUS_ERR_INTERNAL);
+static_assert(SAO_STATUS_INVALID_ARGUMENT == SAO_STATUS_ERR_INVALID_ARGUMENT);
+static_assert(SAO_STATUS_LICENSE_INVALID == SAO_STATUS_ERR_LICENSE_INVALID);
+static_assert(SAO_STATUS_LICENSE_EXPIRED == SAO_STATUS_ERR_LICENSE_EXPIRED);
+static_assert(SAO_STATUS_LICENSE_HWID_MISMATCH == SAO_STATUS_ERR_LICENSE_HWID_MISMATCH);
+static_assert(SAO_STATUS_SHELL_TAMPERED == SAO_STATUS_ERR_SHELL_TAMPERED);
+static_assert(SAO_STATUS_PLATFORM_INIT_FAIL == SAO_STATUS_ERR_PLATFORM_INIT_FAIL);
+static_assert(SAO_STATUS_PLUGIN_LOAD_FAIL == SAO_STATUS_ERR_PLUGIN_LOAD_FAIL);
+static_assert(SAO_STATUS_UI_ONLINE_FAIL == SAO_STATUS_ERR_UI_ONLINE_FAIL);
+#endif
 
 // Sibling-owned surface that may be absent pre-merge; __has_include keeps
 // this TU compiling in every preset and activates the wiring sites when
@@ -55,6 +76,7 @@
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION) &&                                           \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
 #include "entity_provider_publication_internal.h"
+#include "plugin_tabs_publication_internal.h"
 #include "sao/plugins/loader/entity_provider.h"
 #endif
 
@@ -80,7 +102,27 @@
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
 #undef SAO_STATUS_OK
 #include "sao/core/logging.h"
+#include "sao/core/diag_log.h"
 #endif
+
+// Launcher-side pp_diag breadcrumb writer (encrypted in non-debug builds,
+// same channel the helper uses).  Guarded so targets that compile this TU
+// without sao::core degrade to a no-op.
+namespace {
+void wnd_diag_mark(uint32_t tag, int32_t value) noexcept {
+#if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
+    char line[96]{};
+    const int n = std::snprintf(line, sizeof(line),
+                                "wnd_diag tag=0x%04X status=%d pid=%lu",
+                                tag, value,
+                                static_cast<unsigned long>(::GetCurrentProcessId()));
+    if (n > 0)
+        sao_diag_write(line, static_cast<size_t>(n));
+#else
+    (void)tag; (void)value;
+#endif
+}
+} // namespace
 
 #if defined(SAO_LAUNCHER_PLATFORM_COMPOSITION_PROVIDER) &&                                         \
     !defined(SAO_LAUNCHER_COMPOSITION_TEST_PROVIDER)
@@ -88,6 +130,7 @@
 #include "sao/rt_io/engine_registry.h"
 #include "sao/rt_io/helper_bootstrap.h"
 #include "sao/rt_io/proxy.h"
+#include "sao/rt_io/time_util/wall_clock.h"
 #include "sao/rt_io/window_rect.h"
 #include "sao/sdk/sao_sdk.h"
 #include "sao/sdk/sao_sdk_platform_internal.h"
@@ -326,15 +369,15 @@ void ui_fine_timer_release() {
         (void)timeEndPeriod(1);
 }
 
-// Refresh-matched frame pacing: the SetTimer + sao_ui_tick cadence follows
+// Refresh-matched frame pacing: the deadline pump + sao_ui_tick cadence follows
 // the display's committed refresh rate instead of a fixed 16 ms so
 // 120/144/165/240 Hz panels receive sub-60 Hz-locked frames.  Mirrors the
 // scheduler probe (platform/ui/src/scheduler.cpp detect_refresh_hz_impl):
 // dmDisplayFrequency — the mode actually committed to each active display —
 // wins over GetDeviceCaps which can lag on dynamic-refresh panels; 0/1 are
 // the hardware-default sentinels.  Result is clamped to 60-240 Hz (16-4 ms)
-// so a bogus probe never starves the loop.  Detected once — the WM_TIMER is
-// created with this interval at loop entry, and a monitor hot-plug mid-run
+// so a bogus probe never starves the loop.  Detected once — the frame pump
+// consumes this interval at loop entry, and a monitor hot-plug mid-run
 // is a rare enough event that re-probing inside the tick isn't worth the
 // EnumDisplayDevicesW walk.
 int32_t ui_frame_interval_ms() {
@@ -400,7 +443,11 @@ std::atomic<unsigned int> g_streaming_apply_in_flight{0};
 // `render/overlay_host.py` (L465, L1004).
 constexpr SaoUiDcMutationRect kCaptureShieldRectScrub{0, 0, 1, 1};
 constexpr uint32_t kCaptureShieldScrubSettleMs = 40;
-constexpr uint32_t kCaptureShieldScrubTimeoutMs = 2000;
+// The first dispatched op pays the one-time tagWND calibration plus the CR3 /
+// VA→PA / physical-write round trips through the helper; 2s routinely clipped
+// the cold-path completion. 8s keeps background staging responsive while still
+// bounding a stalled transaction.
+constexpr uint32_t kCaptureShieldScrubTimeoutMs = 8000;
 constexpr uint32_t kOverlayExstyleScrubMask =
     0x00000008u | 0x00000020u | 0x00000080u | 0x00200000u | 0x08000000u;
 constexpr uint32_t kCaptureShieldDispatchWaitMs = kCaptureShieldScrubTimeoutMs + 500u;
@@ -694,10 +741,12 @@ sao_launcher_composition_test_hooks_t g_composition_test_hooks{};
 // Runtime installer hook (installer-core track owns the real ABI)
 //
 // The launcher does not include installer headers directly. The installer
-// track exposes sao_runtime_installer_ensure_all(...) once landed; until
-// then (and for tests) we route through a function pointer that ships as
-// pass-through no-op. Tests inject a mock via the setter below to observe
-// the pre-plugins call site without dragging in the real installer.
+// track exposes sao_runtime_installer_ensure_all(...) — it is linked into
+// this SaoAuto target whenever CMake's guarded sao::runtime_installer
+// block defines SAO_LAUNCHER_HAS_RUNTIME_INSTALLER — and the TU-static
+// hook below swaps the pass-through for the real ABI at init. Tests
+// inject a mock via the setter below to observe the pre-plugins call
+// site without dragging in the real installer.
 //
 // Signatures mirror the ABI the installer-core track publishes:
 //   * progress_cb receives (kind_opaque_id_utf8, bytes_done, bytes_total,
@@ -710,21 +759,22 @@ sao_launcher_composition_test_hooks_t g_composition_test_hooks{};
 //     so the Panel shows plugin runtimes as unavailable.
 // ---------------------------------------------------------------------------
 
-// Pass-through default. The installer-core track DOES ship a matching ABI
-// (sao_runtime_installer_ensure_all / load_manifest / bind_manifest /
-// manifest_release are exported by the sao_runtime_installer target), but
-// this SaoAuto target intentionally does not link it: no launcher preset
-// defines SAO_LAUNCHER_HAS_RUNTIME_INSTALLER, so the hook stays on this
-// passthrough and the guarded extern declarations below stay dormant.
+// Pass-through fallback for the configurations where the installer is
+// not linked (sao::runtime_installer absent from the build, or tests
+// exercising the unbound path).  The installer-core track ships the
+// matching ABI (sao_runtime_installer_ensure_all / load_manifest /
+// bind_manifest / manifest_release are exported by the
+// sao_runtime_installer target); the guarded extern block below swaps
+// this hook for the real entry at TU init when
+// SAO_LAUNCHER_HAS_RUNTIME_INSTALLER is defined.
 //
-// Consequence: with SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL off, or when no
-// runtime_manifest is configured (true for every shipped provider config),
-// this returns OK and plugin hosts use their pre-installed runtimes.  When
-// a manifest IS configured the caller reports SAO_STATUS_NOT_IMPLEMENTED
-// and records the failure so the Panel marks plugin runtimes unavailable --
-// honest fail-closed instead of pretending an install ran.  Enabling the
-// real installer is a CMake-side switch: link sao_runtime_installer and
-// define SAO_LAUNCHER_HAS_RUNTIME_INSTALLER for this target.
+// Consequence: with no runtime_manifest configured (true for every
+// shipped provider config) this call site is never reached, so this
+// passthrough is unreachable in production; when a manifest IS
+// configured in a build without the installer linked, the caller
+// reports SAO_STATUS_NOT_IMPLEMENTED and records the failure so the
+// Panel marks plugin runtimes unavailable -- honest fail-closed
+// instead of pretending an install ran.
 sao_status_t
 runtime_installer_ensure_all_passthrough(const wchar_t* /*base_dir*/,
                                          sao::launcher::runtime_installer_glue::ProgressFn
@@ -1051,10 +1101,9 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
         state.license_active = s != SAO_STATUS_NOT_IMPLEMENTED;
         if (s != SAO_STATUS_OK || !r.valid) {
             return SAO_EXIT_LICENSE_INVALID;
-        } else {
-            state.streaming_entitled = isPaidLicenseTier(r.tier);
-            license_verified = true;
         }
+        state.streaming_entitled = isPaidLicenseTier(r.tier);
+        license_verified = true;
     }
 
     // Step 6 — shell integrity.  Explicit enablement makes every failure fatal.
@@ -1161,6 +1210,14 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
                 if (msg.message == WM_QUIT)
                     return static_cast<int>(msg.wParam);
+                // Foreign WM_TIMERs (component/TIMERPROC timers) belong to
+                // DispatchMessageW; only our own kUiFrameTimerId timers route
+                // through the handler for sao_ui_tick.
+                if (msg.message == WM_TIMER &&
+                    msg.wParam != static_cast<WPARAM>(kUiFrameTimerId)) {
+                    DispatchMessageW(&msg);
+                    continue;
+                }
                 int32_t handled = 0;
                 if (sao_ui_handle_message(static_cast<sao_platform_ctx*>(state.platform_ctx),
                                           msg.message, msg.wParam, msg.lParam,
@@ -1181,35 +1238,96 @@ int runPipeline(const sao_launcher_init_hooks_t* hooks, sao::launcher::AppState&
             Sleep(0);
         }
     } else {
-        const UINT frame_ms = static_cast<UINT>(ui_frame_interval_ms());
-        if (SetTimer(nullptr, kUiFrameTimerId, frame_ms, nullptr) == 0) {
-            return SAO_EXIT_UI_ONLINE_FAIL;
-        }
-        if (frame_ms < 16)
+        // Frame pump driven by a monotonic deadline instead of WM_TIMER.
+        // WM_TIMER is synthesized only when the queue is otherwise empty and
+        // is coalesced/dropped under load; even with timeBeginPeriod(1) its
+        // effective delivery bottoms out near 10-16 ms and it can starve
+        // entirely once the queue stays busy — the visible symptoms were a
+        // ~60 Hz ceiling on high-refresh panels and the loop stalling after
+        // long idle stretches (NerveGear unresponsive).  We wait on the
+        // queue with MsgWaitForMultipleObjects for the precise remaining
+        // slice of each frame, dispatch whatever arrived, and run
+        // sao_ui_tick on the deadline — sub-16 ms cadence that survives a
+        // busy queue.
+        const int32_t frame_interval_ms = ui_frame_interval_ms();
+        const double frame_sec = static_cast<double>(frame_interval_ms) / 1000.0;
+        if (frame_interval_ms < 16)
             ui_fine_timer_engage();
         MSG msg{};
-        BOOL result = 0;
-        while ((result = GetMessageW(&msg, nullptr, 0, 0)) > 0) {
-            int32_t handled = 0;
-            if (sao_ui_handle_message(static_cast<sao_platform_ctx*>(state.platform_ctx),
-                                      msg.message, msg.wParam, msg.lParam,
-                                      &handled) != SAO_STATUS_OK) {
-                KillTimer(nullptr, kUiFrameTimerId);
-                if (frame_ms < 16)
+        auto now_sec = [] {
+            static thread_local double freq = 0.0;
+            if (freq == 0.0) {
+                LARGE_INTEGER f{};
+                QueryPerformanceFrequency(&f);
+                freq = static_cast<double>(f.QuadPart);
+            }
+            LARGE_INTEGER c{};
+            QueryPerformanceCounter(&c);
+            return static_cast<double>(c.QuadPart) / freq;
+        };
+        double next_frame = now_sec() + frame_sec;
+        int exit_code = SAO_EXIT_OK;
+        bool quit = false;
+        while (!quit) {
+            // Drain up to 64 queued messages per pass before considering
+            // sleep — a flooded queue must neither shift the deadline nor
+            // starve the frame tick (same bound as App::runMessageLoop).
+            unsigned drained = 0;
+            while (drained < 64u && PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                ++drained;
+                if (msg.message == WM_QUIT) {
+                    exit_code = static_cast<int>(msg.wParam);
+                    quit = true;
+                    break;
+                }
+                // Foreign WM_TIMERs belong to DispatchMessageW; only our own
+                // kUiFrameTimerId timers route through the handler for
+                // sao_ui_tick (same guard as App::runMessageLoop).
+                if (msg.message == WM_TIMER &&
+                    msg.wParam != static_cast<WPARAM>(kUiFrameTimerId)) {
+                    DispatchMessageW(&msg);
+                    continue;
+                }
+                int32_t handled = 0;
+                if (sao_ui_handle_message(
+                        static_cast<sao_platform_ctx*>(state.platform_ctx), msg.message,
+                        msg.wParam, msg.lParam, &handled) != SAO_STATUS_OK) {
                     ui_fine_timer_release();
+                    return SAO_EXIT_UI_ONLINE_FAIL;
+                }
+                if (!handled) {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            if (quit)
+                break;
+            const double now = now_sec();
+            if (now < next_frame) {
+                double remaining = next_frame - now;
+                // Wake early on any new message; the waitable duration is
+                // a millisecond granularity approximation of the leftover
+                // slice, with a 1 ms floor to avoid a CPU spin.
+                DWORD wait_ms = static_cast<DWORD>(remaining * 1000.0);
+                if (wait_ms == 0)
+                    wait_ms = 1;
+                (void)MsgWaitForMultipleObjects(0, nullptr, FALSE, wait_ms, QS_ALLINPUT);
+                continue;
+            }
+            // Deadline reached — roll it forward by one interval; if we fell
+            // far behind (debugger break, long modal op) realign instead of
+            // bursting catch-up frames.
+            next_frame += frame_sec;
+            if (now > next_frame + frame_sec * 4.0)
+                next_frame = now + frame_sec;
+            if (sao_ui_tick(static_cast<sao_platform_ctx*>(state.platform_ctx),
+                            static_cast<uint32_t>(ui_frame_interval_ms())) != SAO_STATUS_OK) {
+                ui_fine_timer_release();
                 return SAO_EXIT_UI_ONLINE_FAIL;
             }
-            if (!handled) {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
         }
-        KillTimer(nullptr, kUiFrameTimerId);
-        if (frame_ms < 16)
-            ui_fine_timer_release();
-        if (result < 0)
-            return SAO_EXIT_UI_ONLINE_FAIL;
-        return static_cast<int>(msg.wParam);
+        ui_fine_timer_release();
+        return exit_code;
     }
 
     return SAO_EXIT_OK;
@@ -1963,25 +2081,52 @@ AntiDebugWorkerState& anti_debug_worker_state() {
     return state;
 }
 
+void write_anti_debug_diagnostic(const char* line, int length) noexcept {
+    if (line == nullptr || length <= 0)
+        return;
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (output == nullptr || output == INVALID_HANDLE_VALUE)
+        output = GetStdHandle(STD_ERROR_HANDLE);
+    if (output == nullptr || output == INVALID_HANDLE_VALUE)
+        return;
+    DWORD written = 0u;
+    (void)WriteFile(output, line, static_cast<DWORD>(length), &written, nullptr);
+}
+
 void log_anti_debug_result(const char* phase, sao_status_t status,
                            const SaoSecurityAntiDebugEvidence& evidence) noexcept {
-    if (status == SAO_STATUS_OK && evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_ALLOW) {
+    const bool clean =
+        status == SAO_STATUS_OK && evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_ALLOW;
+    if (clean)
         return;
-    }
+    char diagnostic[640]{};
+    const int length =
+        sprintf_s(diagnostic, sizeof(diagnostic),
+                  "SAO_ANTI_DEBUG phase=%s status=%d verdict=%u evaluated=0x%llx strong=0x%llx "
+                  "positive=0x%llx unavailable=0x%llx reason=0x%llx first_check=0x%llx "
+                  "first_state=%u first_native=%d\r\n",
+                  phase, static_cast<int>(status), evidence.verdict,
+                  static_cast<unsigned long long>(evidence.evaluated_mask),
+                  static_cast<unsigned long long>(evidence.strong_mask),
+                  static_cast<unsigned long long>(evidence.positive_mask),
+                  static_cast<unsigned long long>(evidence.unavailable_mask),
+                  static_cast<unsigned long long>(evidence.reason_bits),
+                  static_cast<unsigned long long>(evidence.first_check), evidence.first_state,
+                  evidence.first_native_status);
+    write_anti_debug_diagnostic(diagnostic, length);
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
-    (void)sao_core_logf(
-        evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_BLOCK ? SAO_LOG_ERROR : SAO_LOG_WARN,
-        "launcher.security.anti_debug",
-        "%s status=%d verdict=%u positive_mask=0x%llx unavailable_mask=0x%llx reason_bits=0x%llx",
-        phase, static_cast<int>(status), evidence.verdict,
-        static_cast<unsigned long long>(evidence.positive_mask),
-        static_cast<unsigned long long>(evidence.unavailable_mask),
-        static_cast<unsigned long long>(evidence.reason_bits));
-#else
-    std::fprintf(stderr, "anti_debug %s status=%d verdict=%u positive=0x%llx unavailable=0x%llx\n",
-                 phase, static_cast<int>(status), evidence.verdict,
-                 static_cast<unsigned long long>(evidence.positive_mask),
-                 static_cast<unsigned long long>(evidence.unavailable_mask));
+    if (!clean) {
+        (void)sao_core_logf(evidence.verdict == SAO_SECURITY_ANTI_DEBUG_VERDICT_BLOCK
+                                ? SAO_LOG_ERROR
+                                : SAO_LOG_WARN,
+                            "launcher.security.anti_debug",
+                            "%s status=%d verdict=%u positive_mask=0x%llx unavailable_mask=0x%llx "
+                            "reason_bits=0x%llx",
+                            phase, static_cast<int>(status), evidence.verdict,
+                            static_cast<unsigned long long>(evidence.positive_mask),
+                            static_cast<unsigned long long>(evidence.unavailable_mask),
+                            static_cast<unsigned long long>(evidence.reason_bits));
+    }
 #endif
 }
 
@@ -2439,6 +2584,10 @@ struct sao_platform_ctx {
     sao_rt_io_proxy_handle_t rt_io_proxy;
     uint64_t rt_io_strict_transaction_id = 0u;
     uint64_t rt_io_strict_chain_generation = 0u;
+    // Latched by sao_platform_cancel_bringup_drivers; the post-open
+    // checkpoint in bringup_drivers polls it because pending-open cancel
+    // is a no-op once the V3 open has already committed.
+    std::atomic<bool> rt_io_open_cancel_requested{false};
     std::mutex window_rect_state_mutex;
     sao_rt_io_window_rect_controller_t window_rect_controller;
     SaoRtIoWindowToken window_rect_token;
@@ -2460,6 +2609,9 @@ struct sao_platform_ctx {
     sao_ui_compositor_handle_t compositor;
     sao_ui_input_router_deep_handle_t keyboard_router = nullptr;
     bool sdk_compositor_bound;
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    bool platform_timer_owner_bound = false;
+#endif
     bool sdk_streaming_apply_bound = false;
     // SDK panel-open binding, streaming-flow persisted-settings reader and
     // the license-entitlement subscription each latch their own flag so
@@ -2509,6 +2661,10 @@ struct sao_platform_ctx {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
     sao::launcher::entity_provider_publication::EntityProviderPublicationState
         entity_provider_publication;
+    sao_ui_plugin_tabs_handle_t plugin_tabs = nullptr;
+    bool plugin_tabs_online = false;
+    bool entity_refresh_active = false;
+    bool entity_callback_active = false;
 #endif
     std::unique_ptr<sao::launcher::settings_owner::SettingsOwner> settings_owner;
     std::unique_ptr<sao::launcher::tool_launch::AiEditorProcessOwner> ai_editor;
@@ -2569,8 +2725,7 @@ void capture_linkstart_completion(sao_platform_ctx* ctx,
         reason == SAO_UI_LINKSTART_COMPLETION_NONE ? fallback : reason;
     ctx->linkstart_pending_completion = false;
     if (ctx->startup_topmost_forced && ctx->compositor != nullptr) {
-        (void)sao_ui_compositor_set_topmost(ctx->compositor,
-                                            ctx->builtin_action_state.topmost);
+        (void)sao_ui_compositor_set_topmost(ctx->compositor, ctx->builtin_action_state.topmost);
         ctx->startup_topmost_forced = false;
     }
 }
@@ -3193,6 +3348,9 @@ void sync_entity_publication_authority(sao_platform_ctx* ctx) noexcept {
     target.fisheye_live = source.fisheye_live;
     target.theme = source.theme;
     target.about = source.about;
+    // user_menu mirrors the action-side authority so the published About
+    // column only exposes the 用户 row while the launcher menu exists.
+    target.user_menu = source.user_menu;
     // runtime_installer mirrors the action-side authority so the Panel
     // catalog can hide plugin-runtime entries when the installer failed
     // without the launcher having to walk the plugin registry a second
@@ -3474,18 +3632,51 @@ sao_status_t refresh_entity(void* user_data) {
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     }
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(ctx->compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    if (ctx->entity_refresh_active || ctx->entity_callback_active)
+        return SAO_UI_STATUS_ERR_BUSY;
+    if (ctx->ui_exiting)
+        return SAO_STATUS_ERR_CANCELLED;
+    struct Refresh {
+        bool& active;
+        explicit Refresh(bool& value) : active(value) { active = true; }
+        ~Refresh() { active = false; }
+    } refresh(ctx->entity_refresh_active);
+    const sao_status_t runtime_status = sync_plugin_runtime_authority(ctx);
+    if (runtime_status != SAO_STATUS_OK) {
+        ctx->builtin_action_state.authority.publication_available = false;
+        sync_entity_publication_authority(ctx);
+        (void)ctx->entity_action_routes.close_invocation_gate();
+        if (ctx->plugin_tabs != nullptr) {
+            (void)sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+            (void)sao_ui_plugin_tabs_set_items(ctx->plugin_tabs, nullptr, 0);
+        }
+        return runtime_status;
+    }
     ctx->builtin_action_state.authority.publication_available = true;
     sync_entity_publication_authority(ctx);
     ctx->entity_provider_publication.topmost = ctx->builtin_action_state.topmost;
     ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
-    const sao_status_t status = sao::launcher::entity_provider_publication::refresh(
+    sao_status_t status = sao::launcher::entity_provider_publication::refresh(
         ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
         ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot_v2,
         &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
         &sao_ui_entity_shell_set_roots);
+    if (status == SAO_STATUS_OK && ctx->plugin_tabs != nullptr) {
+        status = sao::launcher::plugin_tabs_publication::publish(
+            ctx->plugin_tabs, ctx->entity_action_routes, ctx->entity_provider_publication,
+            ctx->plugins_registry != nullptr);
+    }
     if (status != SAO_STATUS_OK) {
         ctx->builtin_action_state.authority.publication_available = false;
         sync_entity_publication_authority(ctx);
+        (void)ctx->entity_action_routes.close_invocation_gate();
+        if (ctx->plugin_tabs != nullptr) {
+            (void)sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+            (void)sao_ui_plugin_tabs_set_items(ctx->plugin_tabs, nullptr, 0);
+        }
     }
     return status;
 #else
@@ -3578,15 +3769,24 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         if (ctx == nullptr) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+        if (ctx->entity_refresh_active || ctx->entity_callback_active ||
+            !ctx->builtin_action_state.authority.publication_available)
+            return SAO_STATUS_ERR_CANCELLED;
+#endif
         sao::launcher::entity_action_routes::EntityActionRoute route;
         const sao_status_t route_status = ctx->entity_action_routes.resolve(action_token, route);
         if (route_status == SAO_STATUS_OK) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
             sao::launcher::entity_provider_publication::OwnedEntityActionResult result;
-            return sao::launcher::entity_provider_publication::invoke_v2(
+            ctx->entity_callback_active = true;
+            const sao_status_t invoke_status = sao::launcher::entity_provider_publication::invoke_v2(
                 route, ctx->entity_shell,
                 &sao::plugins::loader::sao_plugins_entity_provider_invoke_v2,
                 &sao_ui_entity_shell_get_snapshot, &sao_ui_entity_shell_home, &result);
+            ctx->entity_callback_active = false;
+            const sao_status_t refresh_status = refresh_entity(ctx);
+            return invoke_status == SAO_STATUS_OK ? refresh_status : invoke_status;
 #else
             return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
@@ -3610,6 +3810,15 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     switch (action) {
     case SAO_UI_ENTITY_ACTION_OPEN_ABOUT:
         break;
+    case SAO_UI_ENTITY_ACTION_OPEN_USER_MENU: {
+        if (ctx == nullptr || ctx->user_menu == nullptr) {
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+        }
+        // Route through the same path as an empty command line: shows the
+        // launcher UserMenu panel (settings / hotkeys / guide / exit).
+        static_cast<sao::launcher::UserMenu*>(ctx->user_menu)->processCommandLine(L"", true);
+        return SAO_STATUS_OK;
+    }
     case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
     case SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE:
     case SAO_UI_ENTITY_ACTION_SET_FISHEYE_PROCEDURAL:
@@ -3731,6 +3940,48 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
     }
     return SAO_STATUS_ERR_NOT_FOUND;
 }
+
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+sao_status_t SAO_UI_CALL plugin_tab_action(int32_t action_id, void* user_data) {
+    auto* ctx = static_cast<sao_platform_ctx*>(user_data);
+    if (ctx == nullptr || ctx->compositor == nullptr)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(ctx->compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+    if (!ctx->plugin_tabs_online || ctx->startup_menu_pending || ctx->ui_exiting ||
+        !ctx->builtin_action_state.authority.publication_available)
+        return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (ctx->linkstart != nullptr) {
+        bool intro_active = false;
+        const sao_status_t status = sao_ui_linkstart_is_active(ctx->linkstart, &intro_active);
+        if (status != SAO_STATUS_OK)
+            return status;
+        if (intro_active)
+            return SAO_STATUS_ERR_NOT_INITIALIZED;
+    }
+    if (!sao::launcher::entity_action_routes::is_dynamic_token(action_id))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    return entity_action(static_cast<SaoUiEntityAction>(action_id), ctx);
+}
+
+sao_status_t sync_plugin_tabs_visibility(sao_platform_ctx* ctx) noexcept {
+    if (ctx->plugin_tabs == nullptr)
+        return SAO_STATUS_OK;
+    bool intro_active = false;
+    if (ctx->linkstart != nullptr) {
+        const sao_status_t status = sao_ui_linkstart_is_active(ctx->linkstart, &intro_active);
+        if (status != SAO_STATUS_OK) {
+            (void)sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+            return status;
+        }
+    }
+    return sao_ui_plugin_tabs_set_visible(
+        ctx->plugin_tabs, ctx->plugin_tabs_online && !ctx->startup_menu_pending &&
+                              !ctx->ui_exiting && !intro_active &&
+                              ctx->builtin_action_state.authority.publication_available);
+}
+#endif
 
 uint32_t rt_io_operator_restore_mask(const SaoRtIoProductionStateWireV1& state) noexcept {
     uint32_t mask = 0u;
@@ -4541,8 +4792,7 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
     if (status != SAO_STATUS_OK) {
         return delete_and_fail("settings_panel_vt_state_bind", status);
     }
-    status = ctx->settings_owner->get_truthy("topmost", true,
-                                             ctx->builtin_action_state.topmost);
+    status = ctx->settings_owner->get_truthy("topmost", true, ctx->builtin_action_state.topmost);
     if (status != SAO_STATUS_OK)
         return delete_and_fail("settings_owner_topmost", status);
     ctx->builtin_action_state.streaming_entitled = cfg->streaming_entitled != 0;
@@ -4565,6 +4815,10 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
     action_authority.fisheye_live = false;
     action_authority.theme = true;
     action_authority.about = true;
+    // The launcher UserMenu is created in bringUpUi() after the shell is
+    // online; when the About column dispatches before that, entity_action
+    // returns NOT_INITIALIZED rather than advertising a missing panel.
+    action_authority.user_menu = true;
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
     // Shared-panel rows (contract B): advertise panel presence.  The
     // settings/hotkey owners were bound above and every shared Owner is
@@ -4666,8 +4920,7 @@ sao_status_t sao_platform_bringup_surface(const sao_platform_config* cfg,
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("ui_compositor_create", status);
     }
-    status = sao_ui_compositor_set_topmost(ctx->compositor,
-                                           ctx->builtin_action_state.topmost);
+    status = sao_ui_compositor_set_topmost(ctx->compositor, ctx->builtin_action_state.topmost);
     if (status != SAO_STATUS_OK)
         return rollback_and_fail("ui_compositor_set_topmost", status);
     status = sao_ui_overlay_host_set_size_fn(ctx->overlay_host, &resize_linkstart_for_host, ctx);
@@ -4773,6 +5026,10 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_pl
     if (status != SAO_STATUS_OK) {
         return trace_platform_bringup_failure("rt_io_proxy_open_v3", status);
     }
+    if (ctx->rt_io_open_cancel_requested.load(std::memory_order_acquire)) {
+        return trace_platform_bringup_failure("rt_io_proxy_open_v3_cancelled",
+                                              SAO_STATUS_ERR_CANCELLED);
+    }
     if (vt_hypervisor_requested) {
         // VT is opt-in: startup only records current chain status so the
         // Advanced panel reflects reality.  The strict init itself runs
@@ -4783,8 +5040,7 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_pl
         vt_options.struct_size = sizeof(vt_options);
         vt_options.timeout_ms = 60000u;
         sao_launcher_rt_io_operator_report_t vt_report{};
-        sao_status_t vt_status =
-            sao_platform_rt_io_operator_status(ctx, &vt_options, &vt_report);
+        sao_status_t vt_status = sao_platform_rt_io_operator_status(ctx, &vt_options, &vt_report);
         ctx->vt_hypervisor_last_status.store(vt_status, std::memory_order_release);
         ctx->vt_hypervisor_state.store(vt_status == SAO_STATUS_OK ? 1 : 2,
                                        std::memory_order_release);
@@ -4831,6 +5087,7 @@ sao_status_t sao_platform_bringup_drivers(const sao_platform_config* cfg, sao_pl
 sao_status_t sao_platform_cancel_bringup_drivers(sao_platform_ctx* ctx) {
     if (ctx == nullptr)
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    ctx->rt_io_open_cancel_requested.store(true, std::memory_order_release);
     return sao_rt_io_proxy_cancel_pending_open();
 }
 
@@ -4942,6 +5199,14 @@ sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_pl
     if (status != SAO_STATUS_OK) {
         return rollback_and_fail("ui_entity_shell_set_nervgear_mode", status);
     }
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    status = sao_ui_plugin_tabs_create(ctx->compositor, &plugin_tab_action, ctx, &ctx->plugin_tabs);
+    if (status != SAO_STATUS_OK)
+        return rollback_and_fail("ui_plugin_tabs_create", status);
+    status = sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+    if (status != SAO_STATUS_OK)
+        return rollback_and_fail("ui_plugin_tabs_hide", status);
+#endif
     sao::launcher::hotkey::clear_callbacks();
     sao::launcher::hotkey::set_callback("toggle_sao_menu", [ctx] {
         if (sao_ui_entity_shell_home(ctx->entity_shell) == SAO_STATUS_OK) {
@@ -5084,10 +5349,14 @@ sao_status_t sao_platform_bringup_capture_shield(const sao_platform_config* cfg,
     }
     if (dwm_thumbnail_available) {
         int32_t method_status = sao_security_anti_screencap_dwm_thumbnail_deny(render_hwnd);
-        if (method_status != 0)
+        if (method_status == SAO_STATUS_NOT_IMPLEMENTED) {
+            (void)trace_platform_bringup_failure("capture_dwm_thumbnail_degraded", method_status);
+        } else if (method_status != 0) {
             return trace_platform_bringup_failure("capture_dwm_thumbnail_render", method_status);
-        // Hidden control windows may not own a DWM thumbnail surface.
-        (void)deny_secondary_dwm_thumbnail(control_hwnd);
+        } else {
+            // Hidden control windows may not own a DWM thumbnail surface.
+            (void)deny_secondary_dwm_thumbnail(control_hwnd);
+        }
     }
     if (ctx->screencap_protection) {
         if (!capture_method_available(capture_methods, "wda_user32") ||
@@ -5175,11 +5444,14 @@ sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_
     if (render_hwnd == nullptr || control_hwnd == nullptr || owner_hwnd == nullptr)
         return SAO_STATUS_ERR_HANDLE_INVALID;
 
+    wnd_diag_mark(0x4F00u, 0);
     sao_status_t status =
         ensure_dc_mutation_registration(ctx, control_hwnd, ctx->dc_mutation_control);
+    wnd_diag_mark(0x4F01u, status);
     if (status != SAO_STATUS_OK)
         return trace_platform_bringup_failure("dc_mutation_register_control", status);
     status = ensure_dc_mutation_registration(ctx, owner_hwnd, ctx->dc_mutation_owner);
+    wnd_diag_mark(0x4F02u, status);
     if (status != SAO_STATUS_OK)
         return trace_platform_bringup_failure("dc_mutation_register_owner", status);
 
@@ -5234,6 +5506,7 @@ sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_
             &verified_controller, &verified_token)) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
+    wnd_diag_mark(0x4F05u, 0);
 
     char exstyle_args[64]{};
     (void)sprintf_s(exstyle_args, sizeof(exstyle_args), "{\"mask\":%u}", kOverlayExstyleScrubMask);
@@ -5244,9 +5517,13 @@ sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_
             return SAO_STATUS_OK;
         if (ctx->wnd_scrub_completed_operations != operation_index)
             return trace_platform_bringup_failure(wait_stage, SAO_STATUS_INTERNAL);
+        sao_status_t op_status = SAO_STATUS_OK;
+        wnd_diag_mark(0x4F10u | (operation_index << 8), 0);
         if (ctx->wnd_scrub_pending_submission == nullptr) {
             sao_ui_dc_mutation_submission_handle_t submission = nullptr;
             const sao_status_t admission_status = submit(&submission);
+            wnd_diag_mark(0x4F20u | (operation_index << 8),
+                          static_cast<int32_t>(admission_status));
             if (admission_status != SAO_STATUS_OK) {
                 sao_ui_dc_mutation_submission_destroy(submission);
                 return trace_platform_bringup_failure(admission_stage, admission_status);
@@ -5259,6 +5536,8 @@ sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_
         SaoDcMutationDispatchResult result{};
         const sao_status_t wait_status = sao_ui_dc_mutation_submission_wait(
             ctx->wnd_scrub_pending_submission, kCaptureShieldDispatchWaitMs, &result);
+        wnd_diag_mark(0x4F30u | (operation_index << 8),
+                      static_cast<int32_t>(wait_status));
         if (wait_status != SAO_STATUS_OK) {
             return trace_platform_bringup_failure(
                 wait_status == SAO_STATUS_ERR_TIMEOUT ? timeout_stage : wait_stage, wait_status);
@@ -5266,6 +5545,8 @@ sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_
         const auto completed_submission = ctx->wnd_scrub_pending_submission;
         ctx->wnd_scrub_pending_submission = nullptr;
         sao_ui_dc_mutation_submission_destroy(completed_submission);
+        wnd_diag_mark(0x4F40u | (operation_index << 8),
+                      static_cast<int32_t>(result.dispatch_status));
         if (result.completed != 1u ||
             result.abi_version != SAO_UI_DC_MUTATION_DISPATCH_RESULT_ABI_VERSION ||
             result.struct_size != sizeof(result)) {
@@ -5274,8 +5555,26 @@ sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_
         if (result.dispatch_status != SAO_STATUS_OK)
             return trace_platform_bringup_failure(dispatch_stage, result.dispatch_status);
         ctx->wnd_scrub_completed_operations = operation_index + 1u;
+        (void)op_status;
         return SAO_STATUS_OK;
     };
+
+    // Pre-flight probe: every tracked op below resolves tagWND through the
+    // user32 call gadget.  When the gadget cannot be resolved at all, the
+    // stage reports the missing capability (-10) instead of an ambiguous
+    // lookup miss (-22), so BOOTSTRAP_DEGRADED logging stays truthful.
+    if (sao_rt_io_tw_available() == 0)
+        return trace_platform_bringup_failure("wnd_scrub_tw_resolver",
+                                              SAO_STATUS_ERR_CAPABILITY_MISSING);
+    wnd_diag_mark(0x4F06u, 0);
+    // Functional probe: resolving an existing overlay hwnd proves the gadget
+    // call path end-to-end on this thread, so a zero here stays -22 but is
+    // reported under its own substage instead of merging with the worker-side
+    // calibration miss.
+    if (sao_rt_io_tw(static_cast<void*>(control_hwnd)) == 0)
+        return trace_platform_bringup_failure("wnd_scrub_tw_resolve_control",
+                                              SAO_STATUS_ERR_NOT_FOUND);
+    wnd_diag_mark(0x4F07u, 0);
 
     status = complete_tracked(
         0u, "wnd_scrub_admission_rect_control", "wnd_scrub_wait_rect_control",
@@ -5315,6 +5614,7 @@ sao_status_t sao_platform_bringup_wnd_scrub(const sao_platform_config* cfg, sao_
         ctx->wnd_scrub_drain_pending.store(true, std::memory_order_release);
         return SAO_STATUS_INTERNAL;
     }
+    wnd_diag_mark(0x4F0Eu, 0);
     ctx->wnd_scrub_applied = true;
     ctx->restore_theme_on_rollback = false;
     ctx->settings_save_enabled = true;
@@ -5353,6 +5653,33 @@ sao_status_t sao_platform_bringup(const sao_platform_config* cfg, sao_platform_c
 sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings) noexcept {
     if (!ctx)
         return SAO_STATUS_INVALID_ARGUMENT;
+    if (ctx->compositor != nullptr) {
+        const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(ctx->compositor);
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+    }
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    if (ctx->entity_refresh_active || ctx->entity_callback_active)
+        return SAO_UI_STATUS_ERR_BUSY;
+    const sao_status_t route_status = ctx->entity_action_routes.close_invocation_gate();
+    if (route_status != SAO_STATUS_OK)
+        return trace_platform_bringup_failure("teardown_entity_invocations", route_status);
+    ctx->plugin_tabs_online = false;
+    if (ctx->plugin_tabs != nullptr) {
+        const sao_status_t hide_status = sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+        if (hide_status != SAO_STATUS_OK)
+            return trace_platform_bringup_failure("teardown_plugin_tabs_hide", hide_status);
+    }
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    if (ctx->platform_timer_owner_bound) {
+        const sao_status_t timer_status = sao::launcher::platform_timer_owner::unbind_owner();
+        if (timer_status != SAO_STATUS_OK)
+            return timer_status;
+        ctx->platform_timer_owner_bound = false;
+    }
+#endif
+    ctx->ui_exiting = true;
 #if defined(SAO_LAUNCHER_HAS_LICENSE_ENTITLEMENT)
     // Drop the entitlement watch before anything else: a late license
     // callback mid-teardown would re-enter refresh_entity against a
@@ -5406,8 +5733,8 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
         const sao_sdk_status_t panel_unbind_status =
             sao_sdk_platform_bind_panel_open(nullptr, nullptr);
         if (panel_unbind_status != SAO_SDK_OK)
-            return trace_platform_bringup_failure(
-                "teardown_sdk_panel_open", map_sdk_runtime_status(panel_unbind_status));
+            return trace_platform_bringup_failure("teardown_sdk_panel_open",
+                                                  map_sdk_runtime_status(panel_unbind_status));
         ctx->sdk_panel_open_bound = false;
     }
 #endif
@@ -5420,8 +5747,8 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
         g_streaming_apply_ctx.store(nullptr, std::memory_order_release);
         const sao_sdk_status_t unbind_status = sao_sdk_platform_bind_streaming_mode_apply(nullptr);
         if (unbind_status != SAO_SDK_OK)
-            return trace_platform_bringup_failure(
-                "teardown_sdk_streaming", map_sdk_runtime_status(unbind_status));
+            return trace_platform_bringup_failure("teardown_sdk_streaming",
+                                                  map_sdk_runtime_status(unbind_status));
         while (g_streaming_apply_in_flight.load(std::memory_order_acquire) != 0U) {
             std::this_thread::yield();
         }
@@ -5470,14 +5797,22 @@ sao_status_t teardown_platform_context(sao_platform_ctx* ctx, bool save_settings
             return trace_platform_bringup_failure("teardown_input_router", router_status);
         ctx->keyboard_router = nullptr;
     }
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    if (ctx->plugin_tabs != nullptr) {
+        const sao_status_t tabs_status = sao_ui_plugin_tabs_try_destroy(ctx->plugin_tabs);
+        if (tabs_status != SAO_STATUS_OK)
+            return trace_platform_bringup_failure("teardown_plugin_tabs", tabs_status);
+        ctx->plugin_tabs = nullptr;
+    }
+#endif
     const sao_status_t sound_status = sao_ui_sound_shutdown();
     if (sound_status != SAO_STATUS_OK)
         return trace_platform_bringup_failure("teardown_sound", sound_status);
     if (ctx->sdk_compositor_bound) {
         const sao_sdk_status_t unbind_status = sao_sdk_platform_unbind_ui_compositor();
         if (unbind_status != SAO_SDK_OK)
-            return trace_platform_bringup_failure(
-                "teardown_sdk_compositor", map_sdk_runtime_status(unbind_status));
+            return trace_platform_bringup_failure("teardown_sdk_compositor",
+                                                  map_sdk_runtime_status(unbind_status));
         ctx->sdk_compositor_bound = false;
     }
     if (ctx->compositor) {
@@ -5617,9 +5952,11 @@ sao_status_t start_linkstart_intro(sao_platform_ctx* ctx) {
     bool linkstart_started = false;
     ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
     ctx->linkstart_pending_completion = false;
+    wnd_diag_mark(0x4F80u, 0);
     SaoOverlayHostClientRect host_bounds{};
     if (sao_ui_overlay_host_get_client_rect(ctx->overlay_host, &host_bounds) == SAO_STATUS_OK &&
         host_bounds.width > 0 && host_bounds.height > 0) {
+        wnd_diag_mark(0x4F81u, host_bounds.width);
         SaoUiLinkStartConfig linkstart_config{};
         linkstart_config.struct_size = sizeof(linkstart_config);
         linkstart_config.width_px = static_cast<uint32_t>(host_bounds.width);
@@ -5627,11 +5964,13 @@ sao_status_t start_linkstart_intro(sao_platform_ctx* ctx) {
         sao_ui_linkstart_handle_t linkstart = nullptr;
         const sao_status_t create_status =
             sao_ui_linkstart_create(ctx->compositor, nullptr, &linkstart_config, &linkstart);
+        wnd_diag_mark(0x4F82u, static_cast<int32_t>(create_status));
         if (create_status == SAO_STATUS_OK && linkstart != nullptr) {
             const uint32_t dpi = sao_ui_overlay_host_current_dpi(ctx->overlay_host);
             sao_status_t linkstart_status =
                 sao_ui_linkstart_resize(linkstart, static_cast<uint32_t>(host_bounds.width),
                                         static_cast<uint32_t>(host_bounds.height), dpi);
+            wnd_diag_mark(0x4F83u, static_cast<int32_t>(linkstart_status));
             if (linkstart_status == SAO_STATUS_OK)
                 linkstart_status = sao_ui_linkstart_show(linkstart);
             if (linkstart_status == SAO_STATUS_OK) {
@@ -5656,6 +5995,7 @@ sao_status_t start_linkstart_intro(sao_platform_ctx* ctx) {
     }
     if (!linkstart_started && ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_NONE)
         ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_RENDER_FAILED;
+    wnd_diag_mark(0x4F84u, linkstart_started ? 1 : static_cast<int32_t>(ctx->linkstart_completion_reason));
     return linkstart_started ? SAO_STATUS_OK : SAO_STATUS_UI_ONLINE_FAIL;
 }
 
@@ -5663,7 +6003,18 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->overlay_host || !ctx->compositor || !ctx->entity_shell) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(ctx->compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
     sao_status_t status = SAO_STATUS_OK;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    ctx->plugin_tabs_online = false;
+    if (ctx->plugin_tabs != nullptr) {
+        status = sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+        if (status != SAO_STATUS_OK)
+            return status;
+    }
+#endif
     if (ctx->keyboard_router == nullptr) {
         status = sao_ui_input_router_deep_create(ctx->compositor, &ctx->keyboard_router);
         if (status != SAO_STATUS_OK)
@@ -5682,7 +6033,9 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
         (void)sao_core_logf(SAO_LOG_WARN, "launcher.entity_provider",
                             "initial catalog publication failed: status=%d", status);
 #endif
-        return status;
+        status = sao_ui_entity_shell_bring_online(ctx->entity_shell);
+        if (status != SAO_STATUS_OK)
+            return status;
     }
 #else
     status = sao_ui_entity_shell_bring_online(ctx->entity_shell);
@@ -5699,8 +6052,8 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     status = sao_ui_overlay_host_set_visible(ctx->overlay_host, true);
     if (status != SAO_STATUS_OK)
         return status;
-    status = sao_ui_compositor_set_topmost(
-        ctx->compositor, ctx->startup_topmost_forced || ctx->builtin_action_state.topmost);
+    status = sao_ui_compositor_set_topmost(ctx->compositor, ctx->startup_topmost_forced ||
+                                                                ctx->builtin_action_state.topmost);
     if (status != SAO_STATUS_OK)
         return status;
     status = tick_shared_fisheye(ctx);
@@ -5733,6 +6086,17 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     // launcher 轮询 sao_ui_linkstart_poll_finished 后做衔接动作。
     if (ctx->linkstart == nullptr)
         (void)start_linkstart_intro(ctx);
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    if (!ctx->platform_timer_owner_bound) {
+        status = sao::launcher::platform_timer_owner::bind_owner();
+        if (status != SAO_STATUS_OK)
+            return status;
+        ctx->platform_timer_owner_bound = true;
+    }
+#endif
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    ctx->plugin_tabs_online = true;
+#endif
     return SAO_STATUS_OK;
 }
 
@@ -5740,6 +6104,33 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->overlay_host || !ctx->entity_shell) {
         return SAO_STATUS_INVALID_ARGUMENT;
     }
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(ctx->compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    if (ctx->entity_refresh_active || ctx->entity_callback_active)
+        return SAO_UI_STATUS_ERR_BUSY;
+    const sao_status_t route_status = ctx->entity_action_routes.close_invocation_gate();
+    if (route_status != SAO_STATUS_OK)
+        return route_status;
+    ctx->plugin_tabs_online = false;
+    if (ctx->plugin_tabs != nullptr) {
+        const sao_status_t hide_status = sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+        if (hide_status != SAO_STATUS_OK)
+            return hide_status;
+        const sao_status_t clear_status = sao_ui_plugin_tabs_set_items(ctx->plugin_tabs, nullptr, 0);
+        if (clear_status != SAO_STATUS_OK)
+            return clear_status;
+    }
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    if (ctx->platform_timer_owner_bound) {
+        const sao_status_t timer_status = sao::launcher::platform_timer_owner::unbind_owner();
+        if (timer_status != SAO_STATUS_OK)
+            return timer_status;
+        ctx->platform_timer_owner_bound = false;
+    }
+#endif
     ctx->startup_menu_pending = false;
     if (ctx->linkstart != nullptr) {
         (void)sao_ui_linkstart_dismiss_with_reason(ctx->linkstart,
@@ -5762,9 +6153,6 @@ sao_status_t sao_ui_take_offline(sao_platform_ctx* ctx) {
 #endif
     sao_status_t status = SAO_STATUS_OK;
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
-    // entity_provider_publication::clear() calls close_invocation_gate()
-    // itself as its first step; we do not close it separately here to avoid
-    // duplicating the transition-in-progress guard against the same store.
     ctx->builtin_action_state.authority.publication_available = false;
     sync_entity_publication_authority(ctx);
     status = sao::launcher::entity_provider_publication::clear(
@@ -5824,6 +6212,13 @@ sao_status_t tick_linkstart(sao_platform_ctx* ctx) {
 sao_status_t sao_ui_intro_show(sao_platform_ctx* ctx, int32_t hold_for_bootstrap) {
     if (!ctx || !ctx->overlay_host || !ctx->compositor)
         return SAO_STATUS_INVALID_ARGUMENT;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    if (ctx->plugin_tabs != nullptr) {
+        const sao_status_t hide_status = sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+        if (hide_status != SAO_STATUS_OK)
+            return hide_status;
+    }
+#endif
     sao_status_t status = sao_ui_overlay_host_set_visible(ctx->overlay_host, true);
     if (status == SAO_STATUS_OK) {
         const sao_status_t topmost_status = sao_ui_compositor_set_topmost(ctx->compositor, true);
@@ -5835,8 +6230,7 @@ sao_status_t sao_ui_intro_show(sao_platform_ctx* ctx, int32_t hold_for_bootstrap
     }
     if (status != SAO_STATUS_OK) {
         if (ctx->startup_topmost_forced) {
-            (void)sao_ui_compositor_set_topmost(ctx->compositor,
-                                                ctx->builtin_action_state.topmost);
+            (void)sao_ui_compositor_set_topmost(ctx->compositor, ctx->builtin_action_state.topmost);
             ctx->startup_topmost_forced = false;
         }
         // Nothing was painted, so do not leave a bare surface on screen.
@@ -5896,6 +6290,10 @@ sao_status_t sao_ui_intro_release_bootstrap(sao_platform_ctx* ctx, int32_t faile
                     ctx->linkstart_completion_reason == SAO_UI_LINKSTART_COMPLETION_DEVICE_LOST)) {
         return SAO_STATUS_OK;
     }
+    // Rebase the tick clock at release: bootstrap staging stalls the
+    // GetTickCount64 delta, and the first post-release tick would otherwise
+    // jump `elapsed_ms` past total_duration and skip the CONNECTED tail.
+    ctx->linkstart_last_tick = GetTickCount64();
     return sao_ui_linkstart_release_bootstrap_hold(ctx->linkstart, failed);
 }
 
@@ -5945,23 +6343,71 @@ sao_status_t sao_ui_intro_pump(sao_platform_ctx* ctx) {
 sao_status_t sao_ui_outro_show(sao_platform_ctx* ctx) {
     if (!ctx || !ctx->compositor || !ctx->overlay_host || !ctx->linkstart)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(ctx->compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
     if (ctx->ui_exiting)
         return SAO_STATUS_OK;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    if (ctx->entity_refresh_active || ctx->entity_callback_active)
+        return SAO_UI_STATUS_ERR_BUSY;
+    const sao_status_t route_status = ctx->entity_action_routes.close_invocation_gate();
+    if (route_status != SAO_STATUS_OK)
+        return route_status;
+    ctx->plugin_tabs_online = false;
+    if (ctx->plugin_tabs != nullptr) {
+        const sao_status_t hide_status = sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+        if (hide_status != SAO_STATUS_OK)
+            return hide_status;
+    }
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    if (ctx->platform_timer_owner_bound) {
+        const sao_status_t timer_status = sao::launcher::platform_timer_owner::unbind_owner();
+        if (timer_status != SAO_STATUS_OK)
+            return timer_status;
+        ctx->platform_timer_owner_bound = false;
+    }
+#endif
     ctx->ui_exiting = true;
     ctx->startup_menu_pending = false;
     ctx->linkstart_pending_completion = false;
     ctx->linkstart_completion_reason = SAO_UI_LINKSTART_COMPLETION_NONE;
     if (ctx->entity_shell) {
-        SaoUiEntityShellSnapshot shell{};
-        const sao_status_t snapshot_status =
-            sao_ui_entity_shell_get_snapshot(ctx->entity_shell, &shell);
-        if (snapshot_status != SAO_STATUS_OK)
-            return snapshot_status;
-        if (shell.overlay_visible) {
-            const sao_status_t hide_status = sao_ui_entity_shell_insert(ctx->entity_shell);
-            if (hide_status != SAO_STATUS_OK)
-                return hide_status;
+        const sao_status_t status = sao_ui_entity_shell_take_offline(ctx->entity_shell);
+        if (status != SAO_STATUS_OK)
+            return status;
+    }
+    try {
+        size_t count = 0;
+        sao_status_t status = sao_ui_panel_enumerate(ctx->compositor, nullptr, 0, &count);
+        if (status != SAO_STATUS_OK)
+            return status;
+        std::vector<sao_ui_panel_handle_t> panels(count);
+        status = sao_ui_panel_enumerate(ctx->compositor, panels.data(), panels.size(), &count);
+        if (status != SAO_STATUS_OK)
+            return status;
+        panels.resize(count);
+        for (const auto panel : panels) {
+            status = sao_ui_panel_set_visible(panel, false);
+            if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_HANDLE_INVALID)
+                return status;
         }
+        status = sao_ui_compositor_list_layers(ctx->compositor, nullptr, 0, &count);
+        if (status != SAO_STATUS_OK)
+            return status;
+        std::vector<sao_ui_layer_handle_t> layers(count);
+        status = sao_ui_compositor_list_layers(ctx->compositor, layers.data(), layers.size(), &count);
+        if (status != SAO_STATUS_OK)
+            return status;
+        layers.resize(count);
+        for (const auto layer : layers) {
+            status = sao_ui_layer_set_visible(layer, false);
+            if (status != SAO_STATUS_OK)
+                return status;
+        }
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
     }
     const sao_status_t visible_status = sao_ui_overlay_host_set_visible(ctx->overlay_host, true);
     if (visible_status != SAO_STATUS_OK)
@@ -6017,6 +6463,9 @@ sao_status_t sao_ui_outro_cancel(sao_platform_ctx* ctx) {
 sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     if (!ctx || !ctx->entity_shell || !ctx->compositor)
         return SAO_STATUS_INVALID_ARGUMENT;
+    const sao_status_t owner_status = sao_ui_compositor_require_owner_thread(ctx->compositor);
+    if (owner_status != SAO_STATUS_OK)
+        return owner_status;
     if (ctx->ui_exiting) {
         int32_t active = 0;
         return sao_ui_outro_pump(ctx, &active);
@@ -6033,6 +6482,9 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
         if (ctx->builtin_action_state.streaming_entitled != streaming_entitled) {
             ctx->builtin_action_state.streaming_entitled = streaming_entitled;
             ctx->builtin_action_state.authority.streaming = streaming_entitled;
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+            if (ctx->plugin_tabs_online)
+#endif
             (void)refresh_entity(ctx);
         }
     }
@@ -6040,18 +6492,23 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     const char* failure_stage = "ui_tick_entity_shell";
     sao_status_t status = sao_ui_entity_shell_tick(ctx->entity_shell, elapsed_ms);
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    auto& refresh_elapsed = ctx->entity_provider_publication.refresh_elapsed_ms;
+    constexpr auto refresh_interval = sao::launcher::entity_provider_publication::kRefreshIntervalMs;
+    const bool refresh_due =
+        elapsed_ms >= refresh_interval - std::min(refresh_elapsed, refresh_interval);
+    refresh_elapsed = refresh_due ? 0 : refresh_elapsed + elapsed_ms;
     const sao_status_t provider_status =
-        status == SAO_STATUS_OK && ctx->builtin_action_state.authority.publication_available
-            ? sao::launcher::entity_provider_publication::poll(
-                  ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
-                  elapsed_ms, ctx->nervgear_mode,
-                  &sao::plugins::loader::sao_plugins_entity_provider_snapshot_v2,
-                  &sao::plugins::loader::sao_plugins_entity_provider_snapshot,
-                  &sao_ui_entity_shell_set_roots)
-            : (status == SAO_STATUS_OK ? refresh_entity(ctx) : status);
+        status != SAO_STATUS_OK ? status
+                : (ctx->plugin_tabs_online && !ctx->entity_refresh_active &&
+                    !ctx->entity_callback_active && refresh_due
+                   ? refresh_entity(ctx) : SAO_STATUS_OK);
     if (provider_status != SAO_STATUS_OK) {
         ctx->builtin_action_state.authority.publication_available = false;
         sync_entity_publication_authority(ctx);
+        if (ctx->plugin_tabs != nullptr) {
+            (void)sao_ui_plugin_tabs_set_visible(ctx->plugin_tabs, false);
+            (void)sao_ui_plugin_tabs_set_items(ctx->plugin_tabs, nullptr, 0);
+        }
     }
 #if defined(SAO_LAUNCHER_CORE_LOG_PROVIDER)
     if (provider_status != SAO_STATUS_OK) {
@@ -6059,10 +6516,6 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
                             "catalog refresh deferred: status=%d", provider_status);
     }
 #endif
-    if (status == SAO_STATUS_OK && provider_status != SAO_STATUS_OK) {
-        failure_stage = "ui_tick_entity_provider";
-        status = provider_status;
-    }
 #endif
     if (ctx->ai_editor) {
         const sao_status_t ai_editor_status = ctx->ai_editor->service_ui();
@@ -6118,6 +6571,32 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
     // Link Start 开场：驱动完成边沿。 show() 已由 sao_ui_bring_online 开头调用；
     // tick 内部自己推进到 total_duration 后转入 inactive 并隐藏图层。
     (void)tick_linkstart(ctx);
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PLATFORM_SDK)
+    if (status == SAO_STATUS_OK && ctx->platform_timer_owner_bound &&
+        ctx->plugins_registry != nullptr) {
+        bool intro_active = false;
+        sao_status_t timer_status = ctx->linkstart == nullptr
+                                        ? SAO_STATUS_OK
+                                        : sao_ui_linkstart_is_active(ctx->linkstart, &intro_active);
+        if (timer_status == SAO_STATUS_OK && !intro_active)
+            timer_status = sao::launcher::platform_timer_owner::pump();
+        if (timer_status != SAO_STATUS_OK) {
+            failure_stage = "ui_tick_platform_timers";
+            status = timer_status;
+        }
+    }
+#endif
+#if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+    if (ctx->plugin_tabs != nullptr) {
+        sao_status_t tabs_status = sync_plugin_tabs_visibility(ctx);
+        if (tabs_status == SAO_STATUS_OK)
+            tabs_status = sao_ui_plugin_tabs_tick(ctx->plugin_tabs, elapsed_ms);
+        if (status == SAO_STATUS_OK && tabs_status != SAO_STATUS_OK) {
+            failure_stage = "ui_tick_plugin_tabs";
+            status = tabs_status;
+        }
+    }
+#endif
     sao_status_t compositor_status = sao_ui_compositor_tick(ctx->compositor);
     if (compositor_status != SAO_STATUS_OK && ctx->linkstart_pending_completion) {
         const auto reason = compositor_status == SAO_STATUS_ERR_DEVICE_LOST
@@ -6138,8 +6617,12 @@ sao_status_t sao_ui_tick(sao_platform_ctx* ctx, uint32_t elapsed_ms) {
             menu_status = sao_ui_entity_shell_insert(ctx->entity_shell);
         if (menu_status == SAO_STATUS_OK && !shell.menu_visible)
             menu_status = sao_ui_entity_shell_home(ctx->entity_shell);
-        if (menu_status == SAO_STATUS_OK)
+        if (menu_status == SAO_STATUS_OK) {
             ctx->startup_menu_pending = false;
+    #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)
+            menu_status = sync_plugin_tabs_visibility(ctx);
+    #endif
+        }
         if (status == SAO_STATUS_OK && menu_status != SAO_STATUS_OK) {
             failure_stage = "ui_tick_startup_menu";
             status = menu_status;
@@ -6228,6 +6711,30 @@ sao_status_t sao_ui_handle_message(sao_platform_ctx* ctx, uint32_t message, uint
                 static_cast<int64_t>(l_param), &consumed);
             if (route_status != SAO_STATUS_OK && route_status != SAO_STATUS_ERR_NOT_FOUND)
                 return route_status;
+            const bool entity_key = w_param == VK_LEFT || w_param == VK_UP ||
+                w_param == VK_RIGHT || w_param == VK_DOWN || w_param == VK_RETURN ||
+                w_param == VK_SPACE || w_param == VK_ESCAPE;
+            if (!consumed && !ctx->ui_exiting && message == WM_KEYDOWN && entity_key &&
+                (GetAsyncKeyState(VK_CONTROL) & 0x8000) == 0 &&
+                (GetAsyncKeyState(VK_SHIFT) & 0x8000) == 0 &&
+                (GetAsyncKeyState(VK_MENU) & 0x8000) == 0 &&
+                (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
+                (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0) {
+                sao_ui_widget_handle_t focused_widget = nullptr;
+                sao_ui_panel_handle_t focused_panel = nullptr;
+                const sao_status_t focus_status = sao_ui_input_router_get_focus(
+                    ctx->keyboard_router, &focused_widget, &focused_panel);
+                if (focus_status != SAO_STATUS_OK)
+                    return focus_status;
+                SaoUiEntityShellSnapshot shell{};
+                if (focused_widget == nullptr && focused_panel == nullptr &&
+                    sao_ui_entity_shell_get_snapshot(ctx->entity_shell, &shell) == SAO_STATUS_OK &&
+                    shell.online && shell.overlay_visible && shell.menu_visible) {
+                    *out_handled = 1;
+                    (void)sao_ui_entity_shell_handle_key(ctx->entity_shell, static_cast<uint32_t>(w_param), 0);
+                    return SAO_STATUS_OK;
+                }
+            }
             *out_handled = consumed ? 1 : 0;
             return SAO_STATUS_OK;
         }

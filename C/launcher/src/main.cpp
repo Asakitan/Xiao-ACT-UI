@@ -7,6 +7,8 @@
 
 #include <windows.h>
 #include <objbase.h>
+#include <cstdio>
+#include <cstring>
 #include "sao/launcher/app.h"
 
 // wWinMain signature per the Windows SDK.  We ignore the hInstance /
@@ -33,5 +35,28 @@ extern "C" int WINAPI wWinMain(_In_ HINSTANCE       /*hInstance*/,
                              static_cast<SIZE_T>(-1),
                              static_cast<SIZE_T>(-1));
 
-    return sao::launcher::App::instance().run();
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE diagnostic_output = nullptr;
+    if (output != nullptr && output != INVALID_HANDLE_VALUE) {
+        if (DuplicateHandle(GetCurrentProcess(), output, GetCurrentProcess(), &diagnostic_output,
+                            0u, FALSE, DUPLICATE_SAME_ACCESS) == FALSE) {
+            diagnostic_output = output;
+        }
+    }
+    const int exit_code = sao::launcher::App::instance().run();
+    if (diagnostic_output != nullptr && diagnostic_output != INVALID_HANDLE_VALUE) {
+        char line[64]{};
+        const int length = std::snprintf(line, sizeof(line), "SAO_PROCESS_RETURN code=%d\r\n",
+                                         exit_code);
+        if (length > 0) {
+            DWORD written = 0u;
+            (void)WriteFile(diagnostic_output, line, static_cast<DWORD>(std::strlen(line)),
+                            &written, nullptr);
+        }
+    }
+    if (diagnostic_output != output && diagnostic_output != nullptr &&
+        diagnostic_output != INVALID_HANDLE_VALUE) {
+        (void)CloseHandle(diagnostic_output);
+    }
+    return exit_code;
 }

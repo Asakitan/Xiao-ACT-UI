@@ -81,6 +81,9 @@ struct EntityBuiltinAuthorityState {
     // sync_entity_publication_authority so both catalogs agree on
     // dispatchability without adding a second registry.
     bool about = false;
+    // Mirror of entity_builtin_action::Authority::user_menu — true when the
+    // launcher UserMenu exists so the About column can expose the 用户 row.
+    bool user_menu = false;
     // Mirror of entity_builtin_action::Authority::runtime_installer. When
     // false the Panel exposes plugin runtimes as unavailable and hides the
     // reload/plugin-manager entries so users cannot try to activate hosts

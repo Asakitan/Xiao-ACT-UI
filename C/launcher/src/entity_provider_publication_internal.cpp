@@ -419,6 +419,18 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
          authority.theme,
          {false, false, false}},
     }};
+    const std::array<SaoUiMenuItem, 2> about_rows{{
+        {"用户",
+         "sao:user",
+         SAO_UI_ENTITY_ACTION_OPEN_USER_MENU,
+         authority.user_menu,
+         {false, false, false}},
+        {"使用指南",
+         "sao:info",
+         SAO_UI_ENTITY_ACTION_OPEN_ABOUT,
+         authority.about,
+         {false, false, false}},
+    }};
     std::vector<SaoUiEntityRootItem> roots{
         {sizeof(SaoUiEntityRootItem),
          "Control",
@@ -463,8 +475,8 @@ sao_status_t set_route_snapshot(sao_ui_entity_shell_handle_t shell,
          SAO_UI_ENTITY_ACTION_OPEN_ABOUT,
          authority.publication_available,
          {0, 0, 0},
-         nullptr,
-         0},
+         about_rows.data(),
+         about_rows.size()},
     };
     roots.reserve(kBuiltinRootCount + contributions.size());
     for (std::size_t index = 0; index < contributions.size(); ++index) {

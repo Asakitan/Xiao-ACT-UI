@@ -50,6 +50,9 @@ struct Authority {
     bool fisheye_live = false;
     bool theme = false;
     bool about = false;
+    // Whether the launcher UserMenu (tray panel carrying settings/hotkeys/
+    // guide/close/exit) is bound and can be opened from the About column.
+    bool user_menu = false;
     // Tracks whether the launcher-side runtime installer completed successfully
     // for every plugin runtime the manifest enumerated. When set to false the
     // Panel surfaces plugin runtimes as unavailable so users understand why a

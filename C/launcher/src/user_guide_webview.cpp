@@ -148,7 +148,9 @@ void cancel_mouse(GuideState& state) noexcept {
         COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE, 0, POINT{});
 }
 
-void fail(GuideState& state, const std::source_location location = std::source_location::current()) noexcept;
+void fail(GuideState& state,
+          const std::source_location location = std::source_location::current(),
+          unsigned long last_error = 0) noexcept;
 
 void apply_visibility(GuideState& state) noexcept {
     CallbackScope scope(state);
@@ -215,10 +217,10 @@ void status_body(GuideState& state, bool failure) {
         reinterpret_cast<const uint8_t*>(text.data()), text.size());
 }
 
-void fail(GuideState& state, const std::source_location location) noexcept {
+void fail(GuideState& state, const std::source_location location, unsigned long last_error) noexcept {
     if (state.closing || state.failed) return;
     state.failed = true;
-    std::fprintf(stderr, "Guide composition failed at %s:%u\n", location.function_name(), location.line());
+    std::fprintf(stderr, "Guide composition failed at %s:%u gle=%lu\n", location.function_name(), location.line(), last_error);
     state.ready = false;
     try { status_body(state, true); } catch (...) { OutputDebugStringW(L"Guide error UI failed\n"); }
     apply_visibility(state);
@@ -605,6 +607,35 @@ bool openUserGuideInWebView(const wchar_t* path, bool native_intro_completed) no
         state->native_intro_completed = native_intro_completed;
         state->startup_deadline = GetTickCount64() + 15000;
         if (!state->parent) return false;
+        wchar_t module[32768]{};
+        const DWORD module_length = GetModuleFileNameW(nullptr, module, _countof(module));
+        if (!module_length || module_length >= _countof(module)) return false;
+        std::wstring loader_path(module, module_length);
+        loader_path.erase(loader_path.find_last_of(L"\\/") + 1);
+        loader_path += L"WebView2Loader.dll";
+        // Loader absent from this layout → let the caller fall back to the
+        // non-WebView path instead of composing a status panel that can
+        // only fail.  A present-but-broken loader still reports via fail().
+        if (GetFileAttributesW(loader_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            // Bootstrap staging runs the payload out of the per-generation
+            // runtime directory while WebView2Loader.dll stays next to the
+            // install-root bootstrap executable.  SAO_INSTALL_ROOT is set for
+            // the payload by build_environment_block, so resolve the loader
+            // there before concluding the guide is unavailable.
+            wchar_t install_root[32768]{};
+            const DWORD root_length = GetEnvironmentVariableW(
+                L"SAO_INSTALL_ROOT", install_root, _countof(install_root));
+            if (root_length == 0 || root_length >= _countof(install_root))
+                return false;
+            std::wstring candidate(install_root, root_length);
+            const wchar_t tail = candidate.empty() ? L'\0' : candidate.back();
+            if (tail != L'\\' && tail != L'/')
+                candidate.push_back(L'\\');
+            candidate += L"WebView2Loader.dll";
+            if (GetFileAttributesW(candidate.c_str()) == INVALID_FILE_ATTRIBUTES)
+                return false;
+            loader_path = std::move(candidate);
+        }
         SaoOverlayHostClientRect client{};
         if (sao_ui_overlay_host_get_client_rect(sao_ui_compositor_host(compositor), &client) != SAO_STATUS_OK) return false;
         SaoPanelConfig panel{};
@@ -644,14 +675,12 @@ bool openUserGuideInWebView(const wchar_t* path, bool native_intro_completed) no
         }
         if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) { fail(*state); return true; }
         state->com_initialized = true;
-        wchar_t module[32768]{};
-        const DWORD length = GetModuleFileNameW(nullptr, module, _countof(module));
-        if (!length || length >= _countof(module)) { fail(*state); return true; }
-        std::wstring loader_path(module, length);
-        loader_path.erase(loader_path.find_last_of(L"\\/") + 1);
-        loader_path += L"WebView2Loader.dll";
         state->loader = LoadLibraryW(loader_path.c_str());
-        if (!state->loader) { fail(*state); return true; }
+        if (!state->loader) {
+            const DWORD loader_error = GetLastError();
+            fail(*state, std::source_location::current(), loader_error);
+            return true;
+        }
         state->create_environment = reinterpret_cast<CreateEnvironmentFn>(GetProcAddress(state->loader, "CreateCoreWebView2EnvironmentWithOptions"));
         if (!state->create_environment) { fail(*state); return true; }
         std::wstring profile = profile_path(false);
