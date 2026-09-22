@@ -3991,6 +3991,14 @@ int32_t AiEditorSettings::save(const ScopeStore& scopes,
     if (status != SAO_AI_EDITOR_OK) {
         const int32_t rollback_status =
             rollback_secret_mutations(secrets, mutations, applied);
+        result = Json{{"stage", "scope_config_save"},
+                      {"operation", "write_text_atomic"},
+                      {"atomicWriteStage", atomic_write_last_stage()},
+                      {"atomicWriteError", atomic_write_last_error()},
+                      {"scope", scope},
+                      {"pluginId", plugin_id},
+                      {"status", status},
+                      {"rollbackStatus", rollback_status}};
         return rollback_status != SAO_AI_EDITOR_OK ? rollback_status : status;
     }
 

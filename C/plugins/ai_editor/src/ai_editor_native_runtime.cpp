@@ -79,6 +79,47 @@ void stop_mcp_notifications(NativeRuntime* runtime, SaoAiEditorMcpClient* client
     mcp_notification_gates.erase(runtime);
 }
 
+void runtime_trace_stage(const wchar_t* stage, int32_t status = 0) {
+    wchar_t enabled[2]{};
+    if (stage == nullptr ||
+        GetEnvironmentVariableW(L"SAO_AI_EDITOR_TRACE", enabled,
+                                static_cast<DWORD>(std::size(enabled))) == 0u ||
+        enabled[0] != L'1') {
+        return;
+    }
+    wchar_t directory[MAX_PATH]{};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", directory,
+                                static_cast<DWORD>(std::size(directory))) == 0u) {
+        return;
+    }
+    const auto directory_path = std::filesystem::path(directory) / L"SAOAuto";
+    std::error_code error;
+    std::filesystem::create_directories(directory_path, error);
+    if (error) {
+        return;
+    }
+    const auto path = directory_path / L"ai-editor-trace.log";
+    const HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == nullptr || file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    wchar_t line[1024]{};
+    const int length = _snwprintf_s(line, std::size(line), _TRUNCATE,
+                                    L"[pid=%lu tid=%lu] runtime.%ls status=%d\r\n",
+                                    static_cast<unsigned long>(GetCurrentProcessId()),
+                                    static_cast<unsigned long>(GetCurrentThreadId()), stage,
+                                    static_cast<int>(status));
+    if (length > 0) {
+        DWORD written = 0;
+        (void)WriteFile(file, line, static_cast<DWORD>(length * sizeof(wchar_t)), &written,
+                        nullptr);
+        OutputDebugStringW(line);
+    }
+    CloseHandle(file);
+}
+
 bool valid_sha256_hex(std::string_view value) noexcept {
     if (value.size() != 64U)
         return false;
@@ -939,6 +980,12 @@ NativeRuntime::NativeRuntime(RuntimeOptions options)
 }
 
 NativeRuntime::~NativeRuntime() {
+    // Let the deferred built-in MCP registration reach a terminal state before
+    // closing the client it writes into. The registration worker never outlives
+    // `this`; joining here also serializes builtin_mcp_* field publication.
+    if (builtin_mcp_worker_.joinable()) {
+        builtin_mcp_worker_.join();
+    }
     // Detach the shared extapi surface first so in-flight extapi publishes
     // stop resolving this runtime before member teardown starts.
     extapi::detach_runtime(this);
@@ -1059,6 +1106,7 @@ std::optional<WebviewPanelState> NativeRuntime::active_webview_panel() const {
 }
 
 int32_t NativeRuntime::initialize() {
+    runtime_trace_stage(L"initialize.begin");
     auto cleanup_vt = [&]() -> int32_t {
         if (extension_host_ != nullptr) {
             const int32_t command_status =
@@ -1123,14 +1171,18 @@ int32_t NativeRuntime::initialize() {
     }
     const int32_t status = scopes_.initialize(options_.workspace_root, options_.system_root,
                                               options_.plugin_roots_json);
+    runtime_trace_stage(L"scopes.initialize", status);
     if (status != SAO_AI_EDITOR_OK) {
         return status;
     }
     secrets_ = std::make_unique<SecretStore>(scopes_.secret_vault_path());
     SaoAiEditorMcpClient* mcp_raw = nullptr;
+    runtime_trace_stage(L"mcp_client.create.begin");
     if (sao_ai_editor_mcp_client_create(&mcp_raw) != SAO_AI_EDITOR_OK) {
+        runtime_trace_stage(L"mcp_client.create.failed", SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
+    runtime_trace_stage(L"mcp_client.create.done");
     mcp_client_.reset(mcp_raw);
     mcp_notification_gates[this] = std::make_shared<McpNotificationGate>();
     // Forward every MCP notification (tools/list_changed, prompts/list_changed,
@@ -1139,21 +1191,47 @@ int32_t NativeRuntime::initialize() {
     // sao.event / mcp.notification without having to poll the MCP APIs.
     sao_ai_editor_mcp_client_set_notification_forwarder(
         mcp_client_.get(), this, &NativeRuntime::mcp_notification_trampoline);
-    builtin_mcp_registration_status_ = register_builtin_mcp_server();
+    runtime_trace_stage(L"mcp_client.forwarder.done");
+    runtime_trace_stage(L"mcp_client.builtin_register.defer");
+    builtin_mcp_registration_status_.store(SAO_AI_EDITOR_ERR_BUSY,
+                                           std::memory_order_release);
+    try {
+        builtin_mcp_worker_ = std::thread([this] {
+            runtime_trace_stage(L"mcp_client.builtin_register.begin");
+            const int32_t registration_status = register_builtin_mcp_server();
+            builtin_mcp_registration_status_.store(registration_status,
+                                                   std::memory_order_release);
+            runtime_trace_stage(L"mcp_client.builtin_register.done", registration_status);
+            emit("mcp.serverRegistered",
+                 Json{{"name", "kernel_map"}, {"status", registration_status}});
+        });
+    } catch (...) {
+        builtin_mcp_registration_status_.store(SAO_AI_EDITOR_ERR_OS_CALL_FAILED,
+                                               std::memory_order_release);
+        runtime_trace_stage(L"mcp_client.builtin_register.failed",
+                            SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
+    }
+    runtime_trace_stage(L"plugin_contributions.begin");
     register_plugin_manifest_contributions();
+    runtime_trace_stage(L"plugin_contributions.done");
     auth_flow_ = std::make_unique<AuthDeviceFlow>(secrets_.get());
     extension_host_ = std::make_unique<ExtensionHost>(*this);
+    runtime_trace_stage(L"extension_host.created");
     // Bind this runtime's roots + pointer into the shared extapi surface so
     // both dispatch doors (Node extension host and the standalone shim C
     // ABI) resolve the same workspace, vault and registries.
     extapi::configure(options_.workspace_root, options_.system_root,
                       options_.plugin_roots_json);
     extapi::attach_runtime(this);
+    runtime_trace_stage(L"extapi.attached");
     if (!kernel_map_bridge_owner_) {
+        runtime_trace_stage(L"kernel_map.acquire.begin");
         if (!sao::ai_editor::kernel_map::acquire_shared_bridge_owner()) {
+            runtime_trace_stage(L"kernel_map.acquire.failed", SAO_AI_EDITOR_ERR_OS_CALL_FAILED);
             return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
         }
         kernel_map_bridge_owner_ = true;
+        runtime_trace_stage(L"kernel_map.acquire.done");
     }
     // kernel_map wiring: surface the four native kernelMap.* tool descriptors
     // on tools/list and register the sao.kernelMap.* command handlers.  Both
@@ -1164,6 +1242,7 @@ int32_t NativeRuntime::initialize() {
     // channel serialising the operator's requests.
     int32_t registration_status =
         sao::ai_editor::kernel_map::register_kernel_map_tools(tools_, kernel_map_bridge);
+    runtime_trace_stage(L"kernel_map.tools", registration_status);
     if (registration_status != SAO_AI_EDITOR_OK) {
         const int32_t rollback_status = cleanup_kernel_map();
         return rollback_status != SAO_AI_EDITOR_OK && rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
@@ -1172,6 +1251,7 @@ int32_t NativeRuntime::initialize() {
     }
     registration_status = sao::ai_editor::kernel_map::register_kernel_map_commands(
         *extension_host_, kernel_map_bridge);
+    runtime_trace_stage(L"kernel_map.commands", registration_status);
     if (registration_status != SAO_AI_EDITOR_OK) {
         const int32_t rollback_status = cleanup_kernel_map();
         return rollback_status != SAO_AI_EDITOR_OK && rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
@@ -1188,6 +1268,7 @@ int32_t NativeRuntime::initialize() {
 
     registration_status = kernel_map_panel_->register_with_runtime(
         webview_panels_, resolve_panel_assets(options_.system_root, "kernel_map_panel"));
+    runtime_trace_stage(L"kernel_map.panel", registration_status);
     if (registration_status != SAO_AI_EDITOR_OK) {
         const int32_t rollback_status = cleanup_kernel_map();
         return rollback_status != SAO_AI_EDITOR_OK && rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
@@ -1208,6 +1289,7 @@ int32_t NativeRuntime::initialize() {
     });
     registration_status = mcp_management_panel_->register_with_runtime(
         webview_panels_, resolve_panel_assets(options_.system_root, "mcp_management_panel"));
+    runtime_trace_stage(L"mcp_management.panel", registration_status);
     if (registration_status != SAO_AI_EDITOR_OK) {
         const int32_t rollback_status = cleanup_kernel_map();
         return rollback_status != SAO_AI_EDITOR_OK && rollback_status != SAO_AI_EDITOR_ERR_NOT_FOUND
@@ -1216,6 +1298,7 @@ int32_t NativeRuntime::initialize() {
     }
     vt_bridge_ = std::make_shared<sao::ai_editor::vt::Bridge>();
     registration_status = sao::ai_editor::vt::register_vt_tools(tools_, vt_bridge_);
+    runtime_trace_stage(L"vt.tools", registration_status);
     if (registration_status != SAO_AI_EDITOR_OK) {
         const int32_t vt_rollback_status = cleanup_vt();
         if (vt_rollback_status != SAO_AI_EDITOR_OK &&
@@ -1229,6 +1312,7 @@ int32_t NativeRuntime::initialize() {
                    : registration_status;
     }
     registration_status = sao::ai_editor::vt::register_vt_commands(*extension_host_, vt_bridge_);
+    runtime_trace_stage(L"vt.commands", registration_status);
     if (registration_status != SAO_AI_EDITOR_OK) {
         const int32_t vt_rollback_status = cleanup_vt();
         if (vt_rollback_status != SAO_AI_EDITOR_OK &&
@@ -1241,6 +1325,7 @@ int32_t NativeRuntime::initialize() {
                    ? kernel_map_rollback_status
                    : registration_status;
     }
+    runtime_trace_stage(L"initialize.end", SAO_AI_EDITOR_OK);
     return SAO_AI_EDITOR_OK;
 }
 
@@ -1284,7 +1369,6 @@ void NativeRuntime::register_plugin_manifest_contributions() {
 }
 
 int32_t NativeRuntime::register_builtin_mcp_server() {
-    builtin_mcp_server_path_.clear();
     if (mcp_client_ == nullptr) {
         return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
     }
@@ -1301,12 +1385,17 @@ int32_t NativeRuntime::register_builtin_mcp_server() {
     if (!std::filesystem::is_regular_file(server_path, error) || error) {
         return SAO_AI_EDITOR_ERR_NOT_FOUND;
     }
-    builtin_mcp_server_path_ = wide_to_utf8(server_path.native());
+    std::string server_path_utf8;
+    {
+        std::lock_guard<std::mutex> guard(builtin_mcp_mutex_);
+        builtin_mcp_server_path_ = wide_to_utf8(server_path.native());
+        server_path_utf8 = builtin_mcp_server_path_;
+    }
     const Json config{{"name", "kernel_map"},
                       {"transport", "stdio"},
-                      {"command", builtin_mcp_server_path_},
+                      {"command", server_path_utf8},
                       {"cwd", wide_to_utf8(server_path.parent_path().native())},
-                      {"startupMs", 15000u}};
+                      {"startupMs", 2000u}};
     const std::string serialized = dump_json(config);
     return sao_ai_editor_mcp_client_register(mcp_client_.get(), serialized.data(),
                                              static_cast<std::uint32_t>(serialized.size()));
@@ -1328,10 +1417,16 @@ Json NativeRuntime::mcp_management_snapshot() {
         prompts.is_object() ? prompts.value("items", Json::array()) : Json::array();
     const Json resource_items =
         resources.is_object() ? resources.value("items", Json::array()) : Json::array();
+    const int32_t builtin_status = builtin_mcp_registration_status_.load();
+    std::string builtin_path;
+    {
+        std::lock_guard<std::mutex> guard(builtin_mcp_mutex_);
+        builtin_path = builtin_mcp_server_path_;
+    }
     return Json{{"registration",
                  {{"name", "kernel_map"},
-                  {"status", builtin_mcp_registration_status_},
-                  {"path", builtin_mcp_server_path_}}},
+                  {"status", builtin_status},
+                  {"path", builtin_path}}},
                 {"plugin",
                  {{"mcp_registered", plugin_mcp_registered_count_},
                   {"chat_providers", manifest_chat_providers_},

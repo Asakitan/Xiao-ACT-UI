@@ -400,7 +400,7 @@ int pymini_host_load_plugin(loader::plugin_context_t* ctx,
         if (out_err)
             *out_err = exception_tag(e) + " " + e.what();
         g_hosts.erase(plugin_id);
-        return -5;
+        return SAO_ERR_UNKNOWN;
     }
     g_hosts[plugin_id] = std::move(s);
     return 0;

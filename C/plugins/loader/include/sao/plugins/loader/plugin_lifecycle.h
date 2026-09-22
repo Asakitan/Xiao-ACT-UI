@@ -163,6 +163,12 @@ struct host_adapter_vtable {
                                               void* host_user_data);
     // 宿主的用户数据 (host 自身的 state pointer)
     void* host_user_data;
+    // 可选: 取适配器侧保留的详细错误文本 (load/unload 失败的真实原因)。
+    // 成功时 *out_utf8 为宿主分配字符串, 由 free_error_string 释放。
+    int32_t (SAO_PLUGINS_CALL* get_last_error)(void* host_user_data,
+                                             plugin_handle_t plugin, char** out_utf8);
+    // 可选: 释放 get_last_error 返回的字符串。
+    void(SAO_PLUGINS_CALL* free_error_string)(char* utf8);
 };
 
 // 注册一个宿主适配器 (每 language 一份)。

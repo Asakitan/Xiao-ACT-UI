@@ -145,6 +145,7 @@ enum class platform_resource_kind : uint8_t {
     compositor_layer,
     file_result,
     window,
+    ui_panel,
 };
 
 struct platform_resource_record {
@@ -890,6 +891,11 @@ int32_t unregister_platform_resource(const plugin_context_platform_provider& pro
                                      const platform_resource_record& resource) noexcept {
     try {
         switch (resource.kind) {
+        case platform_resource_kind::ui_panel:
+            return provider.unregister_ui_panel == nullptr
+                       ? SAO_PLUGINS_ERR_UNSUPPORTED
+                       : provider.unregister_ui_panel(provider.user_data, session,
+                                                      resource.provider_token);
         case platform_resource_kind::hotkey:
             return provider.unregister_hotkey == nullptr
                        ? SAO_PLUGINS_ERR_UNSUPPORTED
@@ -1352,6 +1358,8 @@ int32_t plugin_context_release_resources(plugin_context_t* ctx) noexcept {
 int32_t plugin_context_destroy(plugin_context_t* ctx) noexcept {
     if (ctx == nullptr)
         return SAO_OK;
+    if (plugin_context_platform_is_current_thread(ctx))
+        return SAO_PLUGINS_ERR_BUSY;
     bool destruction_started = false;
     try {
         const int32_t begin_status = begin_context_destruction(ctx);
@@ -1388,6 +1396,28 @@ sao_plugins_ctx_register_platform_provider(const plugin_context_platform_provide
     }
     plugin_context_platform_provider copy{};
     std::memcpy(&copy, provider, std::min<size_t>(provider->struct_size, sizeof(copy)));
+    if (provider->struct_size < offsetof(plugin_context_platform_provider, register_ui_panel) +
+                                    sizeof(copy.register_ui_panel))
+        copy.register_ui_panel = nullptr;
+    if (provider->struct_size < offsetof(plugin_context_platform_provider, unregister_ui_panel) +
+                                    sizeof(copy.unregister_ui_panel))
+        copy.unregister_ui_panel = nullptr;
+    if (provider->struct_size <
+        offsetof(plugin_context_platform_provider, set_compositor_layer_mmf_source) +
+            sizeof(copy.set_compositor_layer_mmf_source))
+        copy.set_compositor_layer_mmf_source = nullptr;
+    if (provider->struct_size <
+        offsetof(plugin_context_platform_provider, set_compositor_layer_shared_texture_source) +
+            sizeof(copy.set_compositor_layer_shared_texture_source))
+        copy.set_compositor_layer_shared_texture_source = nullptr;
+    if (provider->struct_size <
+        offsetof(plugin_context_platform_provider, compositor_gpu_interop_available) +
+            sizeof(copy.compositor_gpu_interop_available))
+        copy.compositor_gpu_interop_available = nullptr;
+    if (provider->struct_size <
+        offsetof(plugin_context_platform_provider, compositor_layer_shared_texture_active) +
+            sizeof(copy.compositor_layer_shared_texture_active))
+        copy.compositor_layer_shared_texture_active = nullptr;
     if (copy.retain == nullptr || copy.release == nullptr || copy.create_session == nullptr ||
         copy.quiesce_session == nullptr || copy.destroy_session == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
@@ -1593,16 +1623,15 @@ sao_plugins_ctx_unsubscribe(plugin_context_t* ctx, uint32_t token) {
                 std::find_if(ctx->subscriptions.begin(), ctx->subscriptions.end(),
                              [token](const auto& item) { return item->token == token; });
             if (found == ctx->subscriptions.end())
-                return SAO_ERR_HANDLE_INVALID;
+                return SAO_OK;
             subscription = *found;
         }
         const int32_t status = quiesce_event_subscription(subscription);
         if (status != SAO_OK)
             return status;
         std::lock_guard lock(ctx->mutex);
-        const auto old_size = ctx->subscriptions.size();
         std::erase(ctx->subscriptions, subscription);
-        return ctx->subscriptions.size() != old_size ? SAO_OK : SAO_ERR_HANDLE_INVALID;
+        return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -1771,10 +1800,132 @@ sao_plugins_ctx_set_defaults(plugin_context_t* ctx, const char* defaults_json_ut
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_ui_panel(
     plugin_context_t* ctx, const char* panel_id, const char* meta_json_utf8,
     render_callback_fn render, action_callback_fn on_action, void* user_data) {
-    if (render != nullptr || on_action != nullptr || user_data != nullptr) {
+    if (ctx == nullptr || panel_id == nullptr || panel_id[0] == '\0')
+        return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
+    if (render == nullptr && on_action == nullptr)
+        return add_extension(ctx, extension_kind::ui_panel, panel_id, meta_json_utf8);
+    parsed_context_json metadata;
+    if (!parse_context_json(meta_json_utf8, metadata) || !metadata.value.is_object())
+        return SAO_ERR_INVALID_ARGUMENT;
+    platform_call_lease lease;
+    if (!lease.acquire(ctx))
         return SAO_PLUGINS_ERR_UNSUPPORTED;
+    const auto& provider = lease.provider();
+    if (provider.register_ui_panel == nullptr || provider.unregister_ui_panel == nullptr)
+        return SAO_PLUGINS_ERR_UNSUPPORTED;
+    uint32_t token = 0;
+    try {
+        {
+            std::lock_guard lock(ctx->mutex);
+            if (has_platform_key_locked(ctx, platform_resource_kind::ui_panel, panel_id))
+                return SAO_PLUGINS_ERR_ALREADY_EXISTS;
+            token = allocate_context_token_locked(ctx);
+            if (token == 0)
+                return SAO_ERR_OS_CALL_FAILED;
+            ctx->platform_resources.push_back(
+                {platform_resource_kind::ui_panel, token, 0, panel_id});
+        }
+        plugin_context_platform_token_t provider_token = 0;
+        int32_t status = SAO_ERR_OS_CALL_FAILED;
+        try {
+            status = provider.register_ui_panel(
+                provider.user_data, lease.session(), panel_id, metadata.text.c_str(), render,
+                on_action, user_data, &provider_token);
+        } catch (...) {
+            status = SAO_ERR_OS_CALL_FAILED;
+        }
+        {
+            std::lock_guard lock(ctx->mutex);
+            for (auto& resource : ctx->platform_resources)
+                if (resource.kind == platform_resource_kind::ui_panel && resource.loader_token == token)
+                    resource.provider_token = provider_token;
+        }
+        if (status == SAO_OK && provider_token == 0)
+            status = SAO_ERR_HANDLE_INVALID;
+        if (status == SAO_OK)
+            status = add_extension(ctx, extension_kind::ui_panel, panel_id, metadata.text.c_str());
+        if (status == SAO_OK)
+            return SAO_OK;
+        if (provider_token != 0) {
+            const int32_t rollback = provider.unregister_ui_panel(
+                provider.user_data, lease.session(), provider_token);
+            if (rollback != SAO_OK && rollback != SAO_ERR_HANDLE_INVALID)
+                return rollback;
+        }
+        std::lock_guard lock(ctx->mutex);
+        std::erase_if(ctx->platform_resources, [token](const auto& resource) {
+            return resource.kind == platform_resource_kind::ui_panel && resource.loader_token == token;
+        });
+        return status;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    return add_extension(ctx, extension_kind::ui_panel, panel_id, meta_json_utf8);
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_unregister_ui_panel(
+    plugin_context_t* ctx, const char* panel_id) {
+    if (ctx == nullptr || panel_id == nullptr || panel_id[0] == '\0')
+        return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        const auto remove_metadata = [ctx, panel_id] {
+            auto& registry = registry_storage();
+            std::unique_lock lock(registry.mutex);
+            std::erase_if(registry.extensions, [ctx, panel_id](const auto& entry) {
+                return entry.kind == extension_kind::ui_panel && entry.plugin_id == ctx->plugin_id &&
+                       entry.id == panel_id;
+            });
+        };
+        bool has_resource = false;
+        {
+            std::lock_guard lock(ctx->mutex);
+            has_resource = has_platform_key_locked(ctx, platform_resource_kind::ui_panel, panel_id);
+        }
+        if (!has_resource) {
+            remove_metadata();
+            return SAO_OK;
+        }
+        platform_call_lease lease;
+        if (!lease.acquire(ctx, true))
+            return SAO_PLUGINS_ERR_UNSUPPORTED;
+        platform_resource_record resource;
+        {
+            std::lock_guard lock(ctx->mutex);
+            const auto found = std::find_if(ctx->platform_resources.begin(), ctx->platform_resources.end(),
+                [panel_id](const auto& entry) {
+                    return entry.kind == platform_resource_kind::ui_panel && entry.key == panel_id;
+                });
+            if (found == ctx->platform_resources.end())
+                return SAO_OK;
+            if (found->pending_destroy || found->provider_token == 0)
+                return SAO_PLUGINS_ERR_BUSY;
+            resource = *found;
+            found->pending_destroy = true;
+        }
+        const int32_t status = unregister_platform_resource(lease.provider(), lease.session(), resource);
+        {
+            std::lock_guard lock(ctx->mutex);
+            if (status != SAO_OK && status != SAO_ERR_HANDLE_INVALID) {
+                for (auto& entry : ctx->platform_resources)
+                    if (entry.kind == resource.kind && entry.loader_token == resource.loader_token)
+                        entry.pending_destroy = false;
+                return status;
+            }
+            std::erase_if(ctx->platform_resources, [&resource](const auto& entry) {
+                return (entry.kind == resource.kind && entry.loader_token == resource.loader_token) ||
+                       (entry.kind == platform_resource_kind::window && entry.key == resource.key);
+            });
+        }
+        remove_metadata();
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_render_hook(
@@ -1838,7 +1989,7 @@ sao_plugins_ctx_unregister_render_hook(plugin_context_t* ctx, uint32_t token) {
                                     candidate.loader_token == token;
                          });
         if (found == ctx->platform_resources.end()) {
-            return SAO_ERR_HANDLE_INVALID;
+            return SAO_OK;
         }
         resource = *found;
     }
@@ -1925,7 +2076,7 @@ sao_plugins_ctx_clear_overlay(plugin_context_t* ctx, const char* surface_utf8) {
                                     candidate.key == surface_utf8;
                          });
         if (found == ctx->platform_resources.end()) {
-            return SAO_ERR_HANDLE_INVALID;
+            return SAO_OK;
         }
         resource = *found;
     }
@@ -2527,7 +2678,7 @@ sao_plugins_ctx_unregister_hotkey(plugin_context_t* ctx, const char* hotkey_id) 
                                     candidate.key == hotkey_id;
                          });
         if (found == ctx->platform_resources.end()) {
-            return SAO_ERR_HANDLE_INVALID;
+            return SAO_OK;
         }
         resource = *found;
     }
@@ -2634,7 +2785,7 @@ sao_plugins_ctx_clear_timer(plugin_context_t* ctx, const char* token) {
                 return candidate.kind == platform_resource_kind::timer && candidate.key == token;
             });
         if (found == ctx->platform_resources.end()) {
-            return SAO_ERR_HANDLE_INVALID;
+            return SAO_OK;
         }
         resource = *found;
     }
@@ -2875,7 +3026,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_open_file(
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_open_window(
     plugin_context_t* ctx, const char* panel_id_utf8, uint32_t width, uint32_t height) {
     if (ctx == nullptr || panel_id_utf8 == nullptr || panel_id_utf8[0] == '\0' ||
-        !valid_compositor_dimensions(width, height)) {
+        !valid_compositor_dimensions(width == 0 ? 1 : width, height == 0 ? 1 : height)) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
     platform_call_lease lease;
@@ -2887,13 +3038,21 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_open_window(
     }
 
     uint32_t loader_token = 0;
+    plugin_context_platform_token_t previous_token = 0;
     try {
         std::lock_guard lock(ctx->mutex);
-        if (has_platform_key_locked(ctx, platform_resource_kind::window, panel_id_utf8)) {
-            return SAO_PLUGINS_ERR_ALREADY_EXISTS;
+        for (const auto& resource : ctx->platform_resources) {
+            if (resource.kind == platform_resource_kind::window && resource.key == panel_id_utf8) {
+                if (resource.pending_destroy || resource.provider_token == 0)
+                    return SAO_PLUGINS_ERR_BUSY;
+                loader_token = resource.loader_token;
+                previous_token = resource.provider_token;
+                break;
+            }
         }
-        loader_token = allocate_context_token_locked(ctx);
-        if (loader_token != 0) {
+        if (previous_token == 0)
+            loader_token = allocate_context_token_locked(ctx);
+        if (loader_token != 0 && previous_token == 0) {
             ctx->platform_resources.push_back(
                 {platform_resource_kind::window, loader_token, 0, panel_id_utf8});
         }
@@ -2916,6 +3075,9 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_open_window(
     } catch (...) {
         status = SAO_ERR_OS_CALL_FAILED;
     }
+    if (previous_token != 0)
+        return status != SAO_OK ? status :
+            (provider_token == previous_token ? SAO_OK : SAO_ERR_HANDLE_INVALID);
     if (provider_token != 0) {
         std::lock_guard lock(ctx->mutex);
         const auto found =
@@ -3286,6 +3448,206 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_composit
     try {
         return map_platform_status(provider.set_compositor_layer_input(
             provider.user_data, lease.session(), resource_lease.resource().provider_token, &spec));
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_set_compositor_layer_mmf_source(plugin_context_t* ctx, const char* name_utf8,
+                                                const char* mmf_name_utf8) {
+    if (ctx == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        std::string layer_name;
+        int32_t status = copy_compositor_layer_name(name_utf8, layer_name);
+        if (status != SAO_OK)
+            return status;
+        std::string mmf_name;
+        if (mmf_name_utf8 != nullptr) {
+            size_t length = 0;
+            if (!bounded_c_string_length(mmf_name_utf8,
+                                         SAO_PLUGIN_CONTEXT_COMPOSITOR_LAYER_NAME_MAX_BYTES,
+                                         length))
+                return SAO_ERR_INVALID_ARGUMENT;
+            if (length != 0) {
+                status = copy_compositor_layer_name(mmf_name_utf8, mmf_name);
+                if (status != SAO_OK)
+                    return status;
+            }
+        }
+        platform_call_lease lease;
+        if (!lease.acquire(ctx))
+            return SAO_PLUGINS_ERR_UNSUPPORTED;
+        const auto& provider = lease.provider();
+        if (provider.struct_size <
+                offsetof(plugin_context_platform_provider, set_compositor_layer_mmf_source) +
+                    sizeof(provider.set_compositor_layer_mmf_source) ||
+            provider.set_compositor_layer_mmf_source == nullptr)
+            return SAO_PLUGINS_ERR_UNSUPPORTED;
+        compositor_resource_lease resource_lease;
+        status = resource_lease.acquire(ctx, layer_name);
+        if (status != SAO_OK)
+            return status;
+        return map_platform_status(provider.set_compositor_layer_mmf_source(
+            provider.user_data, lease.session(), resource_lease.resource().provider_token,
+            mmf_name.empty() ? nullptr : mmf_name.c_str()));
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_set_compositor_layer_shared_texture_source(
+    plugin_context_t* ctx, const char* name_utf8, uint64_t handle, uint32_t width, uint32_t height) {
+    plugin_context_shared_texture_spec spec{};
+    spec.struct_size = sizeof(spec);
+    spec.shared_handle = handle;
+    spec.width = width;
+    spec.height = height;
+    spec.timeout_ms = 8;
+    return sao_plugins_ctx_set_compositor_layer_shared_texture_source_ex(ctx, name_utf8, &spec);
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_set_compositor_layer_shared_texture_source_ex(
+    plugin_context_t* ctx, const char* name_utf8, const plugin_context_shared_texture_spec* spec) {
+    if (ctx == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        plugin_context_shared_texture_spec source{};
+        int32_t status = SAO_OK;
+        if (spec != nullptr) {
+            status = copy_external_entity_struct(spec, sizeof(source), source);
+            if (status != SAO_OK)
+                return status;
+        }
+        if (source.shared_handle == 0)
+            source = {};
+        if (source.handle_kind > 1u || source.reserved != 0 ||
+            source.shared_handle > (std::numeric_limits<uintptr_t>::max)() ||
+            source.width > static_cast<uint32_t>(INT32_MAX) ||
+            source.height > static_cast<uint32_t>(INT32_MAX))
+            return SAO_ERR_INVALID_ARGUMENT;
+        if (source.shared_handle != 0 &&
+            (!valid_compositor_dimensions(source.width, source.height) ||
+             static_cast<size_t>(source.width) > (std::numeric_limits<size_t>::max)() / 4u ||
+             static_cast<size_t>(source.height) >
+                 (std::numeric_limits<size_t>::max)() / (static_cast<size_t>(source.width) * 4u)))
+            return SAO_ERR_INVALID_ARGUMENT;
+        std::string layer_name;
+        status = copy_compositor_layer_name(name_utf8, layer_name);
+        if (status != SAO_OK)
+            return status;
+        platform_call_lease lease;
+        if (!lease.acquire(ctx))
+            return SAO_PLUGINS_ERR_UNSUPPORTED;
+        const auto& provider = lease.provider();
+        if (provider.struct_size <
+                offsetof(plugin_context_platform_provider,
+                         set_compositor_layer_shared_texture_source) +
+                    sizeof(provider.set_compositor_layer_shared_texture_source) ||
+            provider.set_compositor_layer_shared_texture_source == nullptr)
+            return SAO_PLUGINS_ERR_UNSUPPORTED;
+        compositor_resource_lease resource_lease;
+        status = resource_lease.acquire(ctx, layer_name);
+        if (status != SAO_OK)
+            return status;
+        const auto& resource = resource_lease.resource();
+        if (source.shared_handle != 0 &&
+            (source.width > resource.compositor_width || source.height > resource.compositor_height))
+            return SAO_ERR_INVALID_ARGUMENT;
+        source.struct_size = sizeof(source);
+        return map_platform_status(provider.set_compositor_layer_shared_texture_source(
+            provider.user_data, lease.session(), resource.provider_token, &source));
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_compositor_gpu_interop_available(plugin_context_t* ctx, bool* out_available) {
+    if (out_available != nullptr)
+        *out_available = false;
+    if (ctx == nullptr || out_available == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        {
+            std::lock_guard lock(ctx->mutex);
+            if (ctx->platform_closing)
+                return SAO_PLUGINS_ERR_BUSY;
+            if (!ctx->platform_bound)
+                return SAO_OK;
+        }
+        platform_call_lease lease;
+        if (!lease.acquire(ctx))
+            return SAO_PLUGINS_ERR_BUSY;
+        const auto& provider = lease.provider();
+        if (provider.struct_size <
+                offsetof(plugin_context_platform_provider, compositor_gpu_interop_available) +
+                    sizeof(provider.compositor_gpu_interop_available) ||
+            provider.compositor_gpu_interop_available == nullptr)
+            return SAO_OK;
+        bool available = false;
+        const int32_t provider_status = provider.compositor_gpu_interop_available(
+            provider.user_data, lease.session(), &available);
+        if (provider_status == SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_INITIALIZED ||
+            provider_status == SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_NOT_IMPLEMENTED ||
+            provider_status == SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_UNSUPPORTED ||
+            provider_status == SAO_PLUGIN_CONTEXT_PLATFORM_STATUS_ERR_DEVICE_LOST)
+            return SAO_OK;
+        const int32_t status = map_platform_status(provider_status);
+        if (status == SAO_OK)
+            *out_available = available;
+        return status;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_compositor_layer_shared_texture_active(plugin_context_t* ctx,
+                                                       const char* name_utf8, bool* out_active) {
+    if (out_active != nullptr)
+        *out_active = false;
+    if (ctx == nullptr || out_active == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
+    try {
+        std::string layer_name;
+        int32_t status = copy_compositor_layer_name(name_utf8, layer_name);
+        if (status != SAO_OK)
+            return status;
+        platform_call_lease lease;
+        if (!lease.acquire(ctx))
+            return SAO_PLUGINS_ERR_UNSUPPORTED;
+        const auto& provider = lease.provider();
+        if (provider.struct_size <
+                offsetof(plugin_context_platform_provider, compositor_layer_shared_texture_active) +
+                    sizeof(provider.compositor_layer_shared_texture_active) ||
+            provider.compositor_layer_shared_texture_active == nullptr)
+            return SAO_PLUGINS_ERR_UNSUPPORTED;
+        compositor_resource_lease resource_lease;
+        status = resource_lease.acquire(ctx, layer_name);
+        if (status != SAO_OK)
+            return status;
+        bool active = false;
+        status = map_platform_status(provider.compositor_layer_shared_texture_active(
+            provider.user_data, lease.session(), resource_lease.resource().provider_token, &active));
+        if (status == SAO_OK)
+            *out_active = active;
+        return status;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }

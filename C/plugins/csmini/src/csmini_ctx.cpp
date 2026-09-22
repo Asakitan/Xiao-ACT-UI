@@ -29,10 +29,12 @@
 #include "csmini_interp.h"
 
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/plugin_manifest.h"
 #include "sao/plugins/sdk_binding/binding_common.h"
 #include "sao/plugins/sdk_binding/binding_engine.h"
 #include "sao/plugins/script_ctx/ctx_surface.h"
+#include "sao/plugins/script_ctx/menu_navigation.h"
 #include "sao/plugins/script_ctx/runtime_bridge.h"
 #include "sao/plugins/script_ctx/script_ui.h"
 
@@ -43,8 +45,12 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <mutex>
+#include <thread>
+#include <string_view>
 #include <unordered_map>
 
 namespace sao::plugins::csmini {
@@ -345,6 +351,342 @@ bool parse_token(const std::string& tok, uint32_t* out) {
     return true;
 }
 
+namespace menu_nav = script::menu_navigation;
+
+bool menu_callable(const CsRef& value) {
+    return value && (value->kind == cs_kind::func || value->kind == cs_kind::builtin ||
+                     value->kind == cs_kind::bound_method);
+}
+
+std::string menu_callable_key(const CsRef& value) {
+    if (value->kind == cs_kind::bound_method) {
+        const auto* bound = static_cast<CsBoundMethodObj*>(value.get());
+        return std::to_string(reinterpret_cast<uintptr_t>(bound->fn.get())) + ":" +
+               std::to_string(reinterpret_cast<uintptr_t>(bound->self.get()));
+    }
+    return std::to_string(reinterpret_cast<uintptr_t>(value.get()));
+}
+
+struct menu_tree {
+    std::vector<menu_nav::Node> roots;
+    std::vector<std::vector<menu_nav::Node>> pending;
+    menu_tree() { pending.reserve(menu_nav::max_nodes + 1); }
+    ~menu_tree() {
+        pending.push_back(std::move(roots));
+        while (!pending.empty()) {
+            auto level = std::move(pending.back());
+            pending.pop_back();
+            for (auto& node : level)
+                if (!node.children.empty()) pending.push_back(std::move(node.children));
+        }
+    }
+};
+
+struct menu_values {
+    std::vector<CsRef> values;
+    ~menu_values() { for (auto& value : values) value.reset(); }
+};
+
+struct menu_state {
+    interpreter* i{};
+    CsRef builder;
+    std::shared_ptr<CsRef> action_handler;
+    std::string id, root, name, icon;
+    double priority{};
+    menu_nav::State navigation;
+    struct identity {
+        CsRef callable;
+        std::string id;
+        uint64_t seen{};
+    };
+    struct candidate {
+        std::vector<menu_nav::Row> rows;
+        uint64_t revision{};
+        std::shared_ptr<menu_state> prepared;
+        uint64_t base_generation{};
+        bool committed{};
+    };
+    std::unordered_map<std::string, identity> identities;
+    std::unordered_map<std::string, CsRef> commands;
+    std::unordered_map<std::thread::id, candidate> candidates;
+    std::vector<menu_nav::Row> published;
+    std::string tree_content;
+    uint64_t next_id{}, revision{};
+    uint64_t generation{};
+    bool building{};
+
+    void rebuild(menu_nav::State requested, uint64_t& issued_id) {
+        struct work {
+            CsRef value;
+            std::vector<menu_nav::Node>* level{};
+            bool exit{};
+            std::vector<CsRef> items;
+            size_t index{};
+            bool sequence{};
+        };
+        menu_tree tree;
+        menu_values values;
+        std::vector<work> stack;
+        std::unordered_set<const CsObj*> ancestors;
+        std::unordered_map<std::string, size_t> occurrences;
+        std::unordered_map<const std::vector<menu_nav::Node>*, std::unordered_map<std::string, size_t>> labels;
+        std::unordered_map<const std::vector<menu_nav::Node>*, size_t> parents{{&tree.roots, 0}};
+        auto semantics = nlohmann::json::array();
+        auto next_identities = identities;
+        std::unordered_map<std::string, CsRef> next_commands;
+        std::vector<std::string> seen;
+        size_t nodes = 0, expansions = 0, bytes = 0;
+        const auto fail = [&](const std::string& message) {
+            i->raise_exc("ArgumentException", message, {});
+        };
+        const auto text = [&](const std::string& value, size_t maximum) {
+            if (value.find('\0') != std::string::npos || value.size() > maximum ||
+                value.size() > menu_nav::max_text_bytes - bytes)
+                fail("menu text budget exceeded or embedded NUL");
+            bytes += value.size();
+        };
+        text(id, 1024); text(name, 1024); text(icon, 256);
+        stack.push_back({builder, &tree.roots});
+        while (!stack.empty()) {
+            work current = std::move(stack.back());
+            stack.pop_back();
+            if (current.exit) {
+                ancestors.erase(current.value.get());
+                if (current.level) { labels.erase(current.level); parents.erase(current.level); }
+                continue;
+            }
+            if (current.sequence) {
+                if (current.index < current.items.size()) {
+                    const auto value = current.items[current.index++];
+                    auto* level = current.level;
+                    stack.push_back(std::move(current));
+                    stack.push_back({value, level});
+                }
+                continue;
+            }
+            if (cs_is_null(current.value) || !ancestors.insert(current.value.get()).second)
+                fail("invalid menu value or ancestor cycle");
+            values.values.push_back(current.value);
+            stack.push_back({current.value, nullptr, true});
+            if (menu_callable(current.value)) {
+                if (++expansions > 2 * (menu_nav::max_nodes + 1)) fail("menu expansion budget exceeded");
+                stack.push_back({i->call0(current.value, {}), current.level});
+                continue;
+            }
+            if (auto* array = as_array(current.value)) {
+                if (++expansions > 2 * (menu_nav::max_nodes + 1) || array->v.size() > menu_nav::max_nodes)
+                    fail("menu sequence budget exceeded");
+                current.items = array->v;
+                current.sequence = true;
+                stack.push_back(std::move(current));
+                continue;
+            }
+            const auto* item = as_dict(current.value);
+            if (!item || ++nodes > menu_nav::max_nodes) fail("invalid menu row or node budget exceeded");
+            const auto get = [&](const char* key) { return dict_get(item, cs_str(key)); };
+            const auto string = [&](const char* key) {
+                const auto value = get(key);
+                return cs_is_null(value) ? std::string{} : cs_to_str(*i, value);
+            };
+            menu_nav::Node node;
+            node.row.label = string("label");
+            node.row.icon = string("icon");
+            CsRef children;
+            for (const auto* key : {"children", "items", "submenu"}) {
+                children = get(key);
+                if (children) { node.submenu = true; break; }
+            }
+            const CsRef command = get("command");
+            const bool callable = menu_callable(command);
+            if (!cs_is_null(command) && !callable) fail("menu command is not callable");
+            const auto delegate = node.submenu && menu_callable(children) ? children : command;
+            const std::string base = menu_callable(delegate) ? "fn:" + menu_callable_key(delegate) :
+                "label:" + node.row.label;
+            const std::string identity_key = base + ":" + std::to_string(occurrences[base]++);
+            auto retained = next_identities.find(identity_key);
+            if (retained == next_identities.end()) {
+                if (issued_id == UINT64_MAX) fail("menu identity exhausted");
+                retained = next_identities.emplace(identity_key,
+                    identity{delegate, "menu-" + std::to_string(++issued_id), 0}).first;
+            }
+            seen.push_back(identity_key);
+            const std::string explicit_id = string("id");
+            if (!explicit_id.empty()) node.key = "id:" + explicit_id;
+            else if (menu_callable(delegate)) node.key = retained->second.id;
+            else node.key = "label:" + std::to_string(labels[current.level][node.row.label]++) + ":" + node.row.label;
+            node.row.action_id = string("action_id");
+            if (node.row.action_id.empty()) node.row.action_id = string("action");
+            const bool explicit_action = !node.row.action_id.empty();
+            if (node.row.action_id.starts_with(menu_nav::navigation_prefix))
+                fail("reserved menu action namespace");
+            if (node.row.action_id.empty()) node.row.action_id = retained->second.id;
+            const auto enabled = get("can_activate");
+            node.row.can_activate = (node.submenu || callable || explicit_action) &&
+                (cs_is_null(enabled) || cs_truthy(enabled));
+            node.row.keep_open = cs_truthy(get("keep_menu_open"));
+            node.row.close_before = cs_truthy(get("close_menu_before"));
+            const auto payload = get("payload");
+            node.row.payload_json = cs_is_null(payload) ? "{}" : jstr(*i, payload);
+            text(node.key, 1024); text(node.row.label, node.submenu ? 1019 : 1024); text(node.row.icon, 256);
+            text(node.row.action_id, 1024); text(node.row.payload_json, 16384);
+            semantics.push_back({parents.at(current.level), node.key, node.submenu, node.row.label,
+                node.row.icon, node.row.action_id, node.row.payload_json, node.row.can_activate,
+                node.row.keep_open, node.row.close_before});
+            if (!node.submenu && callable) next_commands.emplace(node.row.action_id, command);
+            current.level->push_back(std::move(node));
+            if (current.level->back().submenu) {
+                parents[&current.level->back().children] = nodes;
+                stack.back().level = &current.level->back().children;
+                stack.push_back({children, &current.level->back().children});
+            }
+        }
+        std::string error;
+        if (!requested.replace(tree.roots, error)) fail(error);
+        auto rows = requested.rows();
+        auto content = semantics.dump();
+        uint64_t next_revision = revision;
+        if (revision == 0 || rows != published || content != tree_content) {
+            if (revision == UINT64_MAX) fail("menu revision exhausted");
+            ++next_revision;
+        }
+        for (const auto& key : seen) next_identities.at(key).seen = next_revision;
+        for (auto it = next_identities.begin(); it != next_identities.end();) {
+            if (next_revision - it->second.seen >= 64) it = next_identities.erase(it);
+            else ++it;
+        }
+        navigation = std::move(requested);
+        published = std::move(rows);
+        tree_content = std::move(content);
+        identities.swap(next_identities);
+        commands.swap(next_commands);
+        revision = next_revision;
+    }
+
+    std::shared_ptr<menu_state> prepare(menu_nav::State requested) {
+        if (building || generation == UINT64_MAX)
+            i->raise_exc("InvalidOperationException", "menu rebuild is reentrant or generation exhausted", {});
+        struct rebuild_guard {
+            bool& active;
+            explicit rebuild_guard(bool& value) : active(value) { active = true; }
+            ~rebuild_guard() { active = false; }
+        } guard(building);
+        auto next = std::make_shared<menu_state>();
+        next->i = i;
+        next->builder = builder;
+        next->id = id;
+        next->name = name;
+        next->icon = icon;
+        next->priority = priority;
+        next->identities = identities;
+        next->published = published;
+        next->tree_content = tree_content;
+        next->revision = revision;
+        next->rebuild(std::move(requested), next_id);
+        return next;
+    }
+
+    void commit(candidate& snapshot) {
+        if (snapshot.committed) return;
+        auto& next = *snapshot.prepared;
+        navigation = std::move(next.navigation);
+        published.swap(next.published);
+        tree_content.swap(next.tree_content);
+        identities.swap(next.identities);
+        commands.swap(next.commands);
+        revision = next.revision;
+        ++generation;
+        snapshot.committed = true;
+        snapshot.prepared.reset();
+    }
+};
+
+int32_t SAO_PLUGINS_CALL menu_snapshot(void* rows, uint32_t capacity, uint32_t stride,
+    uint32_t* count, uint64_t* revision, loader::entity_snapshot_content_token_t* token,
+    uint32_t* out_stride, void* user_data) {
+    if (!user_data || !count || !revision || !token || !out_stride) return SAO_ERR_INVALID_ARGUMENT;
+    auto& menu = *static_cast<menu_state*>(user_data);
+    try {
+        cs_guard guard(*menu.i);
+        if (menu.building) return SAO_ERR_INVALID_ARGUMENT;
+        const auto thread = std::this_thread::get_id();
+        const bool probe = !rows && capacity == 0 && stride == 0;
+        if (probe) {
+            auto next = menu.prepare(menu.navigation);
+            menu_state::candidate candidate{next->published, next->revision, next, menu.generation};
+            menu.candidates.insert_or_assign(thread, std::move(candidate));
+        }
+        const auto found = menu.candidates.find(thread);
+        if (found == menu.candidates.end()) return SAO_ERR_INVALID_ARGUMENT;
+        auto& snapshot = found->second;
+        *count = static_cast<uint32_t>(snapshot.rows.size());
+        *revision = snapshot.revision;
+        *token = snapshot.revision;
+        *out_stride = snapshot.rows.empty() ? 0 : probe ? sizeof(loader::entity_menu_row_v2) : stride;
+        if (!snapshot.committed && snapshot.base_generation != menu.generation)
+            return SAO_ERR_BUFFER_TOO_SMALL;
+        if (snapshot.rows.empty()) { menu.commit(snapshot); return SAO_OK; }
+        if (probe || !rows || capacity < *count || stride < sizeof(loader::entity_menu_row_v2) ||
+            stride % alignof(loader::entity_menu_row_v2) != 0 ||
+            uint64_t(stride) * *count > (std::numeric_limits<int32_t>::max)())
+            return SAO_ERR_BUFFER_TOO_SMALL;
+        for (size_t index = 0; index < snapshot.rows.size(); ++index) {
+            const auto& source = snapshot.rows[index];
+            const loader::entity_menu_row_v2 row{
+                sizeof(loader::entity_menu_row_v2), menu.id.c_str(), menu.name.c_str(), menu.icon.c_str(),
+                menu.priority, source.label.c_str(), source.icon.c_str(), source.action_id.c_str(),
+                source.payload_json.c_str(), static_cast<uint8_t>(source.can_activate),
+                static_cast<uint8_t>(source.keep_open), static_cast<uint8_t>(source.close_before), {}};
+            std::memcpy(static_cast<uint8_t*>(rows) + index * stride, &row, sizeof(row));
+        }
+        menu.commit(snapshot);
+        return SAO_OK;
+    } catch (...) { return SAO_ERR_OS_CALL_FAILED; }
+}
+
+int32_t SAO_PLUGINS_CALL menu_action(const char* action, const char* payload,
+    loader::entity_action_result_sink_v2_fn sink, void* sink_data, void* user_data) {
+    if (!action || !payload || !sink || !user_data) return SAO_ERR_INVALID_ARGUMENT;
+    auto& menu = *static_cast<menu_state*>(user_data);
+    try {
+        cs_guard guard(*menu.i);
+        if (menu.building) return SAO_ERR_INVALID_ARGUMENT;
+        bool handled = false;
+        std::string output;
+        auto navigation = menu.navigation;
+        const auto route = navigation.activate(action);
+        if (route == menu_nav::NavigationResult::handled) {
+            auto next = menu.prepare(std::move(navigation));
+            menu_state::candidate candidate{{}, next->revision, next, menu.generation};
+            menu.commit(candidate);
+            handled = true;
+        } else if (route == menu_nav::NavigationResult::not_navigation) {
+            const auto row = std::find_if(menu.published.begin(), menu.published.end(), [&](const auto& value) {
+                return value.action_id == action && value.can_activate;
+            });
+            if (row != menu.published.end()) {
+                const auto command = menu.commands.find(action);
+                CsRef result;
+                if (command != menu.commands.end()) {
+                    const auto fn = command->second;
+                    result = menu.i->call0(fn, {});
+                    handled = true;
+                } else if (menu.action_handler && menu_callable(*menu.action_handler)) {
+                    const auto fn = *menu.action_handler;
+                    cs_args args;
+                    args.pos = {cs_str(action), parse_json(*menu.i, payload)};
+                    result = menu.i->call(fn, args, {});
+                    handled = true;
+                }
+                if (handled) output = jstr(*menu.i, result);
+            }
+        }
+        const loader::entity_action_result_v2 result{sizeof(loader::entity_action_result_v2),
+            loader::kEntityActionAbiVersion2, static_cast<uint8_t>(handled), {},
+            handled && !output.empty() ? output.c_str() : nullptr};
+        return sink(&result, sink_data);
+    } catch (...) { return SAO_ERR_OS_CALL_FAILED; }
+}
+
 // ═══ ctx builder ═══
 struct ctx_builder {
     interpreter& i;
@@ -352,6 +694,10 @@ struct ctx_builder {
     CsRef engines;          // dict name→engine object (get_engine lookup)
     CsRef ledgers;          // {"panels": {}, "hotkeys": {}, "timers": {}, ...}
     std::string root_utf8;
+    std::vector<std::unique_ptr<menu_state>> menus;
+    std::shared_ptr<CsRef> menu_action_handler = std::make_shared<CsRef>();
+
+    explicit ctx_builder(interpreter& value) : i(value), engines(cs_dict()), ledgers(cs_dict()) {}
 
     // ── reflective engine surface state (binding_engine.h contract) ──
     // Lazily bound, builder-owned SaoSdkContext used to reach
@@ -786,16 +1132,51 @@ struct ctx_builder {
             c(), name.c_str(), cp, mb, cl, sc, carrier);
         return cs_bool(r == 0);
     }
-    CsRef m_gpu_interop(interpreter&, const cs_args&) { return cs_false(); }
-    CsRef m_layer_shared_tex(interpreter&, const cs_args&) {
-        return cs_false();
+    CsRef compositor_result(const char* operation, int32_t status, bool result = true) {
+        if (status != 0)
+            i.raise_exc("InvalidOperationException", std::string(operation) +
+                " failed with status " + std::to_string(status), {});
+        return cs_bool(result);
     }
-    CsRef m_layer_mmf(interpreter&, const cs_args&) { return cs_false(); }
+    std::string compositor_name(const cs_args& a, size_t index, bool allow_empty = false) {
+        const auto* value = as_str(pos_or(a, index));
+        if (!value || (!allow_empty && value->v.empty()) || value->v.find('\0') != std::string::npos)
+            i.raise_exc("ArgumentException", "invalid compositor source or layer name", {});
+        return value->v;
+    }
+    CsRef m_gpu_interop(interpreter&, const cs_args&) {
+        bool available = false;
+        const int32_t status = sao_plugins_ctx_compositor_gpu_interop_available(c(), &available);
+        return compositor_result("compositor_gpu_interop_available", status, available);
+    }
+    CsRef m_layer_shared_tex(interpreter&, const cs_args& a) {
+        const std::string name = compositor_name(a, 0);
+        const auto integer = [&](size_t index, uint64_t maximum) -> uint64_t {
+            const auto* value = as_int(pos_or(a, index));
+            if (!value || value->v < 0 || static_cast<uint64_t>(value->v) > maximum)
+                i.raise_exc("ArgumentException", "shared texture expects nonnegative integral handle and uint32 dimensions", {});
+            return static_cast<uint64_t>(value->v);
+        };
+        const uint64_t handle = integer(1, UINT64_MAX);
+        const uint32_t width = static_cast<uint32_t>(integer(2, UINT32_MAX));
+        const uint32_t height = static_cast<uint32_t>(integer(3, UINT32_MAX));
+        return compositor_result("set_compositor_layer_shared_texture_source",
+            sao_plugins_ctx_set_compositor_layer_shared_texture_source(c(), name.c_str(), handle, width, height));
+    }
+    CsRef m_layer_mmf(interpreter&, const cs_args& a) {
+        const std::string name = compositor_name(a, 0);
+        const std::string mmf = compositor_name(a, 1, true);
+        return compositor_result("set_compositor_layer_mmf_source",
+            sao_plugins_ctx_set_compositor_layer_mmf_source(c(), name.c_str(), mmf.c_str()));
+    }
     CsRef m_layer_refresh(interpreter&, const cs_args&) {
         return cs_float(0.0);
     }
-    CsRef m_layer_shared_tex_active(interpreter&, const cs_args&) {
-        return cs_false();
+    CsRef m_layer_shared_tex_active(interpreter&, const cs_args& a) {
+        const std::string name = compositor_name(a, 0);
+        bool active = false;
+        const int32_t status = sao_plugins_ctx_compositor_layer_shared_texture_active(c(), name.c_str(), &active);
+        return compositor_result("compositor_layer_shared_texture_active", status, active);
     }
 
     // ── registrations ────────────────────────────────────────────────
@@ -961,13 +1342,35 @@ struct ctx_builder {
         const std::string name = pos_str(i, a, 0);
         const std::string icon = pos_str(i, a, 1);
         CsRef builder = pos_or(a, 2);
-        cb_box* bb = builder ? keep_cb(i, builder) : nullptr;
-        const float prio = static_cast<float>(pos_num(i, a, 3, 0.0));
-        const int32_t r = sao_plugins_ctx_register_menu_category(
-            c(), name.c_str(), icon.c_str(),
-            bb ? reinterpret_cast<void*>(tr_render_hook) : nullptr, prio,
-            bb);
-        return cs_bool(r == 0);
+        const double priority = pos_num(i, a, 3, 0.0);
+        if (name.empty() || name.find('\0') != std::string::npos || name.size() > 1024 ||
+            icon.find('\0') != std::string::npos || icon.size() > 256 ||
+            !std::isfinite(priority) || !menu_callable(builder))
+            i.raise_exc("ArgumentException", "invalid menu category or builder", {});
+        auto menu = std::make_unique<menu_state>();
+        menu->i = &i;
+        menu->builder = builder;
+        menu->action_handler = menu_action_handler;
+        menu->name = name;
+        menu->icon = icon;
+        menu->priority = priority;
+        const auto hash = [](const std::string& value) {
+            uint64_t result = 14695981039346656037ULL;
+            for (const unsigned char c : value) { result ^= c; result *= 1099511628211ULL; }
+            return std::to_string(result);
+        };
+        menu->id = "menu-" + hash(name);
+        menu->root = "plugin:" + hash(i.cfg.plugin_id + "\n" + name);
+        const loader::entity_root_contribution_descriptor root{sizeof(root), menu->id.c_str(),
+            menu->root.c_str(), menu->name.c_str(), menu->icon.c_str(), priority};
+        const loader::context_entity_provider_descriptor_v3 descriptor{sizeof(descriptor),
+            menu->id.c_str(), menu_snapshot, nullptr, menu.get(), &root, menu_action, menu.get(), 0, 0};
+        menus.reserve(menus.size() + 1);
+        const int32_t status = sao_plugins_ctx_register_entity_provider_v3(c(), &descriptor);
+        if (status != SAO_OK)
+            i.raise_exc("InvalidOperationException", "register_menu_category failed with status " + std::to_string(status), {});
+        menus.push_back(std::move(menu));
+        return cs_true();
     }
     CsRef m_menu_surface(interpreter&, const cs_args& a) {
         const std::string sid = pos_str(i, a, 0);
@@ -982,11 +1385,9 @@ struct ctx_builder {
         if (!cb)
             i.raise_exc("ArgumentException",
                         "register_action_handler() missing handler", {});
-        cb_box* b = keep_cb(i, cb);
-        const int32_t r = sao_plugins_ctx_register_extension(
-            c(), "action_handler", "default", "{}",
-            reinterpret_cast<void*>(tr_action), b);
-        return cs_bool(r == 0);
+        if (!menu_callable(cb)) i.raise_exc("ArgumentException", "action handler is not callable", {});
+        *menu_action_handler = cb;
+        return cs_true();
     }
     CsRef m_register_engine(interpreter&, const cs_args& a) {
         const std::string name = pos_str(i, a, 0);
@@ -1426,23 +1827,36 @@ struct ctx_builder {
         return d;
     }
     CsRef make_mem() {
+        // ctx.mem — the reflective engine surface's `mem.*` group exposed
+        // with the group prefix stripped: catalog "mem.read_u64" binds as
+        // ctx.mem.read_u64(...).  Mirrors the v1 MemAccess facade; a call
+        // surfaces the provider status when no memory provider is wired.
         auto d = cs_dict();
-        auto stub = [](const char* n) {
-            return cs_builtin(
-                n, [n](interpreter& i2, const cs_args&) -> CsRef {
-                    i2.raise_exc("NotSupportedException",
-                                 std::string("ctx.mem.") + n +
-                                     " is not available in csmini",
-                                 {});
-                });
-        };
-        dict_set(d, cs_str("open"), stub("open"));
-        dict_set(d, cs_str("create"), stub("create"));
-        dict_set(d, cs_str("read"), stub("read"));
-        dict_set(d, cs_str("write"), stub("write"));
-        dict_set(d, cs_str("close"), stub("close"));
-        dict_set(d, cs_str("exists"), stub("exists"));
-        return d;
+        const std::size_t catalog_n = sdk_binding::sdk_engine_catalog_size();
+        for (std::size_t k = 0; k < catalog_n; ++k) {
+            const sdk_binding::sdk_engine_function_desc* desc =
+                sdk_binding::sdk_engine_catalog_at(k);
+            if (!desc || !desc->name)
+                continue;
+            const std::string_view full(desc->name);
+            if (full.size() <= 4 || full.substr(0, 4) != "mem.")
+                continue;
+            const std::string attr(full.substr(4));
+            if (attr.empty() || dict_get(d, cs_str(attr)))
+                continue;
+            script::ctx_surface_note(loader::engine_kind::csharp,
+                                     ("mem." + attr).c_str());
+            dict_set(d, cs_str(attr),
+                     cs_builtin("mem." + attr,
+                                [this, cn = std::string(full)](interpreter&,
+                                                               const cs_args& a) {
+                                    return engine_invoke_named(cn, a);
+                                }));
+        }
+        // CsNativeObj: plain dicts reject `obj.member` access in csmini.
+        auto proxy = cs_native("ctx.mem", true);
+        as_native(proxy)->members = d;
+        return proxy;
     }
     CsRef make_engine_obj() {
         auto d = cs_dict();
@@ -1774,6 +2188,7 @@ const char* const k_surface_names[] = {
     "run_on_ui",
     "notify", "dismiss_notify", "toast", "open_file", "open_window",
     "create_compositor_layer", "upload_compositor_frame",
+    "set_compositor_layer_mmf_source", "set_compositor_layer_shared_texture_source",
     "set_compositor_layer_position", "set_compositor_layer_visible",
     "set_compositor_layer_input", "destroy_compositor_layer",
     "compositor_gpu_interop_available",
@@ -1800,8 +2215,7 @@ const char* const k_surface_names[] = {
 CsRef csmini_make_ctx(interpreter& i) {
     // heap-allocated + anchored: method lambdas in build() capture the raw
     // `this`, so the builder must outlive the ctx dict.
-    auto b = std::make_shared<ctx_builder>(
-        ctx_builder{i, nullptr, cs_dict(), cs_dict(), {}});
+    auto b = std::make_shared<ctx_builder>(i);
     {
         std::lock_guard<std::mutex> g(g_cb_mu);
         g_ctx_builders[&i].push_back(b);

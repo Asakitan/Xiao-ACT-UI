@@ -16,6 +16,7 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/script_ctx/ctx_surface.h"
+#include "sao/plugins/script_ctx/menu_navigation.h"
 #include "sao/plugins/script_ctx/runtime_bridge.h"
 #include "sao/plugins/script_ctx/script_ui.h"
 #include "sao/plugins/sdk_binding/binding_common.h"
@@ -77,6 +78,7 @@ struct emma_menu_bridge {
     double priority = 0.0;
     std::uint64_t revision = 0;
     std::shared_ptr<callable> builder;
+    sao::plugins::script_ctx::menu_navigation::State navState;
     std::vector<emma_menu_row> rows;
     std::unordered_map<std::string, std::shared_ptr<callable>> actions;
 };
@@ -113,6 +115,7 @@ struct emma_plugin_runtime {
         render_hook,
         data_source,
         compositor_input,
+        ui_panel,
     };
 
     struct owned_resource {
@@ -158,6 +161,7 @@ struct emma_plugin_runtime {
     std::unique_ptr<emma_action_bridge> action;
     std::unordered_map<std::string, std::shared_ptr<callable>> extension_handlers;
     uint64_t next_resource_id = 1;
+    bool enabling = false;
     emma_error last_error;
     std::mutex invocation_mutex;
 };
@@ -189,6 +193,12 @@ struct emma_data_source_bundle {
     std::string source_id;
     std::shared_ptr<emma_plugin_runtime::callback_record> start;
     std::shared_ptr<emma_plugin_runtime::callback_record> stop;
+};
+
+struct emma_panel_bundle {
+    std::shared_ptr<emma_plugin_runtime::callback_record> render;
+    std::shared_ptr<emma_plugin_runtime::callback_record> action;
+    bool enable_scoped = false;
 };
 
 // compositor input bundle: set_compositor_layer_input 的四只回调共享一个
@@ -655,15 +665,13 @@ std::shared_ptr<callable> require_callable(const std::vector<emma_value>& argume
     throw emma_exception(std::move(error));
 }
 
-std::string require_metadata_only_panel(const std::vector<emma_value>& arguments) {
+std::string require_panel_arguments(const std::vector<emma_value>& arguments) {
     if (arguments.size() < 2 || arguments.size() > 4)
         throw_context_status("ctx.register_ui_panel", SAO_ERR_INVALID_ARGUMENT);
     const std::string panel_id = require_string(arguments, 0, "ctx.register_ui_panel");
-    if ((arguments.size() > 2 && !std::holds_alternative<std::nullptr_t>(arguments[2])) ||
-        (arguments.size() > 3 && !std::holds_alternative<std::nullptr_t>(arguments[3]))) {
-        throw_context_status("ctx.register_ui_panel callbacks",
-                             sao::plugins::loader::SAO_PLUGINS_ERR_UNSUPPORTED);
-    }
+    for (size_t index = 2; index < arguments.size(); ++index)
+        if (!std::holds_alternative<std::nullptr_t>(arguments[index]))
+            (void)require_callable(arguments, index, "ctx.register_ui_panel");
     return panel_id;
 }
 
@@ -732,8 +740,8 @@ std::string serialize_value_or_throw(const emma_value& value) {
 
 constexpr std::size_t kMaximumMenuRows = 4096;
 constexpr std::size_t kMaximumMenuStringBytes = 16U * 1024U;
-constexpr std::size_t kMaximumMenuSnapshotBytes = 8U * 1024U * 1024U;
-constexpr std::size_t kMaximumRememberedActions = 4096;
+constexpr std::size_t kMaximumMenuSnapshotBytes =
+    sao::plugins::script_ctx::menu_navigation::max_text_bytes;
 
 std::uint64_t stable_hash(std::string_view value) noexcept {
     std::uint64_t hash = 1469598103934665603ULL;
@@ -906,7 +914,10 @@ bool add_snapshot_bytes(std::size_t& total, std::size_t amount) noexcept {
     return true;
 }
 
-bool build_menu_snapshot(emma_menu_bridge& bridge) {
+bool build_menu_snapshot(
+    emma_menu_bridge& bridge,
+    const sao::plugins::script_ctx::menu_navigation::State* navigation = nullptr) {
+    namespace nav = sao::plugins::script_ctx::menu_navigation;
     auto& runtime = *bridge.runtime;
     std::string call_message;
     emma_error call_error;
@@ -921,6 +932,38 @@ bool build_menu_snapshot(emma_menu_bridge& bridge) {
         runtime.last_error = std::move(call_error);
         return false;
     }
+    struct source_lifetimes {
+        emma_value& root;
+        std::vector<emma_value> retained;
+        explicit source_lifetimes(emma_value& value) : root(value) {
+            retained.reserve(kMaximumMenuRows * 2 + 2);
+            retained.push_back(value);
+        }
+        ~source_lifetimes() {
+            root = nullptr;
+            while (!retained.empty()) {
+                auto& value = retained.back();
+                if (auto* source = std::get_if<std::shared_ptr<emma_list>>(&value);
+                    source != nullptr && *source && source->use_count() == 1 &&
+                    !(*source)->items.empty()) {
+                    emma_value child = std::move((*source)->items.back());
+                    (*source)->items.pop_back();
+                    retained.push_back(std::move(child));
+                    continue;
+                }
+                if (auto* source = std::get_if<std::shared_ptr<emma_dict>>(&value);
+                    source != nullptr && *source && source->use_count() == 1 &&
+                    !(*source)->items.empty()) {
+                    const auto item = (*source)->items.begin();
+                    emma_value child = std::move(item->second);
+                    (*source)->items.erase(item);
+                    retained.push_back(std::move(child));
+                    continue;
+                }
+                retained.pop_back();
+            }
+        }
+    } sources(result);
     const auto* list = std::get_if<std::shared_ptr<emma_list>>(&result);
     if (list == nullptr || !*list) {
         remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, "menu builder must return a list");
@@ -932,23 +975,82 @@ bool build_menu_snapshot(emma_menu_bridge& bridge) {
         return false;
     }
 
-    std::vector<emma_menu_row> rows;
+    struct level_frame {
+        std::shared_ptr<emma_list> source;
+        std::shared_ptr<emma_dict> owner;
+        std::vector<emma_value> items;
+        std::vector<nav::Node>* output;
+        std::string path_identity;
+        std::size_t index = 0;
+        std::unordered_map<std::string, std::size_t> occurrences;
+    };
+    struct materialized_tree {
+        std::vector<nav::Node> roots;
+        std::vector<nav::Node*> nodes;
+        materialized_tree() { nodes.reserve(kMaximumMenuRows); }
+        ~materialized_tree() {
+            for (auto node = nodes.rbegin(); node != nodes.rend(); ++node)
+                (*node)->children.clear();
+        }
+    } materialized;
+    auto& tree = materialized.roots;
+    std::vector<level_frame> stack;
+    stack.reserve(kMaximumMenuRows + 1);
+    std::unordered_set<const emma_list*> ancestor_lists;
+    std::unordered_set<const emma_dict*> ancestor_dicts;
     std::unordered_map<std::string, std::shared_ptr<callable>> actions;
-    std::unordered_map<std::string, std::size_t> identity_occurrences;
     std::unordered_set<std::string> action_ids;
-    rows.reserve((*list)->items.size());
-    actions.reserve((*list)->items.size());
-    identity_occurrences.reserve((*list)->items.size());
-    action_ids.reserve((*list)->items.size());
+    tree.reserve((*list)->items.size());
     std::size_t total_bytes = 0;
+    std::size_t node_count = 0;
+    std::size_t scheduled_nodes = (*list)->items.size();
+    stack.push_back({*list, {}, (*list)->items, &tree, {}});
+    ancestor_lists.insert(list->get());
 
-    for (const auto& item : (*list)->items) {
+    while (!stack.empty()) {
+        auto& level = stack.back();
+        if (level.index == level.items.size()) {
+            ancestor_lists.erase(level.source.get());
+            if (level.owner)
+                ancestor_dicts.erase(level.owner.get());
+            stack.pop_back();
+            continue;
+        }
+        if (++node_count > kMaximumMenuRows) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                "menu tree exceeds its node budget");
+            return false;
+        }
+        const auto item = level.items[level.index++];
         const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&item);
         if (dictionary == nullptr || !*dictionary) {
             remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
                                 "menu rows must be dictionaries");
             return false;
         }
+        if (ancestor_dicts.contains(dictionary->get())) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, "menu dictionary cycle");
+            return false;
+        }
+        sources.retained.emplace_back(*dictionary);
+        emma_value children = nullptr;
+        bool submenu = false;
+        for (const char* field : {"children", "items", "submenu"}) {
+            const auto child = (*dictionary)->items.find(field);
+            if (child == (*dictionary)->items.end() ||
+                std::holds_alternative<std::nullptr_t>(child->second))
+                continue;
+            if (submenu) {
+                remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                    "menu row has multiple child sources");
+                return false;
+            }
+            submenu = true;
+            children = child->second;
+        }
+        std::shared_ptr<callable> submenu_builder;
+        if (const auto* function = std::get_if<std::shared_ptr<callable>>(&children))
+            submenu_builder = *function;
         emma_menu_row row;
         std::string conversion_error;
         if (!menu_string(**dictionary, "label", true, row.label, conversion_error) ||
@@ -974,13 +1076,13 @@ bool build_menu_snapshot(emma_menu_bridge& bridge) {
             }
             command = *function;
         }
-        bool requested_can_activate = command != nullptr;
+        bool requested_can_activate = submenu || command != nullptr;
         if (!menu_flag(**dictionary, "can_activate", requested_can_activate, requested_can_activate,
                        conversion_error)) {
             remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, std::move(conversion_error));
             return false;
         }
-        row.can_activate = command != nullptr && requested_can_activate;
+        row.can_activate = (submenu || command != nullptr) && requested_can_activate;
 
         std::string explicit_identity;
         const auto explicit_action = (*dictionary)->items.find("action_id");
@@ -1001,49 +1103,108 @@ bool build_menu_snapshot(emma_menu_bridge& bridge) {
 
         std::string identity = explicit_identity;
         if (identity.empty()) {
-            append_identity_field(identity, command == nullptr
+            const auto identity_function = submenu ? submenu_builder : command;
+            append_identity_field(identity, identity_function == nullptr
                                                 ? std::string_view{}
-                                                : callable_identity(runtime, *command));
+                                                : callable_identity(runtime, *identity_function));
             append_identity_field(identity, row.label);
             append_identity_field(identity, row.icon);
             append_identity_field(identity, row.payload_json);
             identity.push_back(row.can_activate ? '1' : '0');
             identity.push_back(row.keep_menu_open ? '1' : '0');
             identity.push_back(row.close_menu_before ? '1' : '0');
-            const std::size_t occurrence = identity_occurrences[identity]++;
+            const std::size_t occurrence = level.occurrences[identity]++;
             identity.push_back('#');
             identity.append(std::to_string(occurrence));
         }
-        row.action_id = "menu-action-" + hash_suffix(bridge.contribution_id + "\n" + identity);
+        const std::string full_identity = level.path_identity.empty()
+            ? bridge.contribution_id + "\n" + identity
+            : level.path_identity + "\n" + identity;
+        const std::string node_key = "menu-node-" + hash_suffix(identity);
+        row.action_id = "menu-action-" + hash_suffix(full_identity);
         if (!action_ids.emplace(row.action_id).second) {
             remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
                                 "menu action identities must be unique");
             return false;
         }
-        if (command != nullptr)
+        if (!submenu && command != nullptr)
             actions.emplace(row.action_id, std::move(command));
 
         const std::size_t row_bytes = row.label.size() + row.icon.size() + row.action_id.size() +
-                                      row.payload_json.size() + bridge.contribution_id.size() +
-                                      bridge.name.size() + bridge.icon.size();
+                                      row.payload_json.size() + node_key.size();
         if (!add_snapshot_bytes(total_bytes, row_bytes)) {
             remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
                                 "menu builder snapshot exceeds its byte budget");
             return false;
         }
-        rows.push_back(std::move(row));
+        nav::Node node;
+        node.key = node_key;
+        node.row = {std::move(row.label), std::move(row.icon), std::move(row.action_id),
+                    std::move(row.payload_json), row.can_activate, row.keep_menu_open,
+                    row.close_menu_before};
+        node.submenu = submenu;
+        level.output->push_back(std::move(node));
+        materialized.nodes.push_back(&level.output->back());
+        if (!submenu)
+            continue;
+        if (submenu_builder) {
+            call_message.clear();
+            call_error = {};
+            children = runtime.interp->call_function(submenu_builder, {}, call_message, &call_error);
+            if (call_error.kind != error_kind::none || !call_message.empty()) {
+                if (call_error.kind == error_kind::none) {
+                    call_error.kind = error_kind::runtime_error;
+                    call_error.status = SAO_ERR_OS_CALL_FAILED;
+                    call_error.message = std::move(call_message);
+                }
+                runtime.last_error = std::move(call_error);
+                return false;
+            }
+        }
+        sources.retained.push_back(children);
+        const auto* child_list = std::get_if<std::shared_ptr<emma_list>>(&children);
+        if (child_list == nullptr || !*child_list) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                "submenu source must be a list or a builder returning a list");
+            return false;
+        }
+        if (ancestor_lists.contains(child_list->get())) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, "menu list cycle");
+            return false;
+        }
+        if ((*child_list)->items.size() > kMaximumMenuRows - scheduled_nodes) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                "menu tree exceeds its node budget");
+            return false;
+        }
+        auto* output = &level.output->back().children;
+        scheduled_nodes += (*child_list)->items.size();
+        output->reserve((*child_list)->items.size());
+        ancestor_lists.insert(child_list->get());
+        ancestor_dicts.insert(dictionary->get());
+        stack.push_back({*child_list, *dictionary, (*child_list)->items, output,
+                         hash_suffix(full_identity)});
     }
 
-    std::size_t new_action_count = 0;
-    for (const auto& [action_id, _] : actions) {
-        if (!bridge.actions.contains(action_id))
-            ++new_action_count;
-    }
-    if (bridge.actions.size() > kMaximumRememberedActions ||
-        new_action_count > kMaximumRememberedActions - bridge.actions.size()) {
-        remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
-                            "menu action history exceeds its budget");
+    auto next_navigation = navigation == nullptr ? bridge.navState : *navigation;
+    std::string navigation_error;
+    if (!next_navigation.replace(tree, navigation_error)) {
+        remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT, std::move(navigation_error));
         return false;
+    }
+    std::vector<emma_menu_row> rows;
+    rows.reserve(next_navigation.rows().size());
+    std::size_t visible_bytes = 0;
+    for (const auto& row : next_navigation.rows()) {
+        if (!add_snapshot_bytes(visible_bytes, row.label.size() + row.icon.size() +
+                row.action_id.size() + row.payload_json.size() + bridge.contribution_id.size() +
+                bridge.name.size() + bridge.icon.size())) {
+            remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
+                                "menu page exceeds its byte budget");
+            return false;
+        }
+        rows.push_back({row.label, row.icon, row.action_id, row.payload_json,
+                        row.can_activate, row.keep_open, row.close_before});
     }
 
     const bool rows_changed = bridge.revision == 0 || bridge.rows != rows;
@@ -1051,11 +1212,9 @@ bool build_menu_snapshot(emma_menu_bridge& bridge) {
         remember_menu_error(runtime, SAO_ERR_OS_CALL_FAILED, "menu snapshot revision exhausted");
         return false;
     }
-    auto next_actions = bridge.actions;
-    for (auto& [action_id, command] : actions)
-        next_actions.insert_or_assign(action_id, std::move(command));
-    bridge.actions = std::move(next_actions);
-    bridge.rows = std::move(rows);
+    bridge.actions.swap(actions);
+    bridge.rows.swap(rows);
+    bridge.navState = std::move(next_navigation);
     if (rows_changed)
         ++bridge.revision;
     runtime.last_error = {};
@@ -1084,7 +1243,7 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
         if (!invocation_lock.owns_lock() || bridge.closing.load(std::memory_order_acquire))
             return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
         if (rows == nullptr && !build_menu_snapshot(bridge))
-            return SAO_ERR_OS_CALL_FAILED;
+            return sao_plugins_emma_error_status(&runtime->last_error);
         *out_count = static_cast<std::uint32_t>(bridge.rows.size());
         *out_revision = bridge.revision;
         *out_content_token =
@@ -1207,8 +1366,39 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
         std::unique_lock invocation_lock(runtime->invocation_mutex, std::try_to_lock);
         if (!invocation_lock.owns_lock() || bridge.closing.load(std::memory_order_acquire))
             return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        namespace nav = sao::plugins::script_ctx::menu_navigation;
+        auto next_navigation = bridge.navState;
+        const auto navigation = next_navigation.activate(action_id_utf8);
+        if (navigation == nav::NavigationResult::handled) {
+            emma_menu_bridge candidate;
+            candidate.runtime = runtime;
+            candidate.contribution_id = bridge.contribution_id;
+            candidate.name = bridge.name;
+            candidate.icon = bridge.icon;
+            candidate.revision = bridge.revision;
+            candidate.builder = bridge.builder;
+            candidate.rows = bridge.rows;
+            if (!build_menu_snapshot(candidate, &next_navigation))
+                return sao_plugins_emma_error_status(&runtime->last_error);
+            const int32_t status = submit_action_result(
+                result_sink, result_sink_user_data, true, "{\"refresh\":true}");
+            if (status != SAO_OK) {
+                remember_action_error(*runtime, status, "navigation result sink rejected result");
+                return status;
+            }
+            bridge.actions.swap(candidate.actions);
+            bridge.rows.swap(candidate.rows);
+            bridge.navState = std::move(candidate.navState);
+            bridge.revision = candidate.revision;
+            return status;
+        }
+        const auto visible = std::find_if(bridge.rows.begin(), bridge.rows.end(),
+            [action_id_utf8](const emma_menu_row& row) {
+                return row.action_id == action_id_utf8 && row.can_activate;
+            });
         const auto found = bridge.actions.find(action_id_utf8);
-        if (found == bridge.actions.end() || found->second == nullptr) {
+        if (navigation == nav::NavigationResult::stale || visible == bridge.rows.end() ||
+            found == bridge.actions.end() || found->second == nullptr) {
             const emma_value declined = nullptr;
             return submit_emma_action_value(*runtime, declined, true, result_sink,
                                             result_sink_user_data);
@@ -1255,6 +1445,13 @@ native_action_handler(const char* action_id_utf8, const char* payload_json_utf8,
             return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
         if (bridge.handler == nullptr)
             return SAO_ERR_HANDLE_INVALID;
+
+        if (std::string_view(action_id_utf8).starts_with(
+                sao::plugins::script_ctx::menu_navigation::navigation_prefix)) {
+            const emma_value declined = nullptr;
+            return submit_emma_action_value(*runtime, declined, true, result_sink,
+                                            result_sink_user_data);
+        }
 
         emma_value payload = nullptr;
         std::string conversion_error;
@@ -2023,6 +2220,49 @@ int32_t invoke_callable_result(emma_plugin_runtime::callback_record* raw_callbac
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
+}
+
+int32_t panel_callback_result(emma_plugin_runtime::callback_record* callback,
+                              const char* action, const char* payload, char** output) noexcept {
+    if (output == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *output = nullptr;
+    try {
+        json parsed;
+        emma_value argument = nullptr;
+        if (!parse_bounded_json_c_string(payload == nullptr ? "{}" : payload,
+                                         kMaximumJsonInputBytes, parsed) ||
+            !json_to_value(parsed, argument))
+            return SAO_ERR_INVALID_ARGUMENT;
+        std::vector<emma_value> arguments;
+        if (action != nullptr)
+            arguments.emplace_back(std::string(action));
+        arguments.push_back(std::move(argument));
+        emma_value result = nullptr;
+        const int32_t status = invoke_callable_result(callback, std::move(arguments), &result, nullptr);
+        if (status != SAO_OK)
+            return status;
+        const std::string text = serialize_value_or_throw(result);
+        auto buffer = std::make_unique<char[]>(text.size() + 1);
+        std::memcpy(buffer.get(), text.c_str(), text.size() + 1);
+        *output = buffer.release();
+        return SAO_OK;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+int32_t panel_render_bridge(const char* payload, char** output, void* user_data) noexcept {
+    auto* bundle = static_cast<emma_panel_bundle*>(user_data);
+    return bundle == nullptr ? SAO_ERR_HANDLE_INVALID :
+        panel_callback_result(bundle->render.get(), nullptr, payload, output);
+}
+
+int32_t panel_action_bridge(const char* action, const char* payload, char** output,
+                            void* user_data) noexcept {
+    auto* bundle = static_cast<emma_panel_bundle*>(user_data);
+    return bundle == nullptr ? SAO_ERR_HANDLE_INVALID :
+        panel_callback_result(bundle->action.get(), action == nullptr ? "" : action, payload, output);
 }
 
 // ── provider 回调桥 (render hook / data source / compositor input) ─────────
@@ -3115,6 +3355,10 @@ void note_emma_ctx_surface() noexcept {
         "set_compositor_layer_position",
         "set_compositor_layer_visible",
         "set_compositor_layer_input",
+        "set_compositor_layer_mmf_source",
+        "set_compositor_layer_shared_texture_source",
+        "compositor_gpu_interop_available",
+        "compositor_layer_shared_texture_active",
         "destroy_compositor_layer",
         "ensure_requirements",
         "load_local",
@@ -3189,7 +3433,13 @@ emma_value unregister_render_hook_impl(emma_plugin_runtime* runtime,
                        resource.numeric_token == token;
             },
             resource)) {
-        throw_context_status(method, SAO_ERR_HANDLE_INVALID);
+        // 台账无此 hook：目标状态已达成 (幂等清除，teardown 时脚本常重复调用)
+        const int32_t status =
+            sao::plugins::loader::sao_plugins_ctx_unregister_render_hook(runtime->context,
+                                                                       token);
+        if (!teardown_status_is_complete(status))
+            throw_context_status(method, status);
+        return emma_value(false);
     }
     int32_t status = quiesce_callback(resource.callback);
     if (status == SAO_OK) {
@@ -3644,6 +3894,16 @@ int32_t teardown_resource(emma_plugin_runtime& runtime,
     if (status != SAO_OK)
         return status;
     switch (resource.kind) {
+    case emma_plugin_runtime::resource_kind::ui_panel: {
+        auto bundle = std::static_pointer_cast<emma_panel_bundle>(resource.attachment);
+        status = sao::plugins::loader::sao_plugins_ctx_unregister_ui_panel(
+            runtime.context, resource.key.c_str());
+        if (!teardown_status_is_complete(status))
+            return status;
+        retire_callback(bundle->render);
+        retire_callback(bundle->action);
+        break;
+    }
     case emma_plugin_runtime::resource_kind::event_subscription:
         status = sao::plugins::loader::sao_plugins_ctx_unsubscribe(runtime.context,
                                                                    resource.numeric_token);
@@ -3746,6 +4006,27 @@ int32_t teardown_owned_resources(emma_plugin_runtime& runtime) {
     }
 }
 
+int32_t remove_enable_panels(emma_plugin_runtime& runtime, uint64_t checkpoint = 0) {
+    std::vector<emma_plugin_runtime::owned_resource> panels;
+    {
+        std::lock_guard lock(runtime.resources_mutex);
+        for (const auto& resource : runtime.resources) {
+            if (resource.kind != emma_plugin_runtime::resource_kind::ui_panel)
+                continue;
+            auto bundle = std::static_pointer_cast<emma_panel_bundle>(resource.attachment);
+            if (checkpoint != 0 ? resource.id >= checkpoint : bundle->enable_scoped)
+                panels.push_back(resource);
+        }
+    }
+    for (auto iterator = panels.rbegin(); iterator != panels.rend(); ++iterator) {
+        const int32_t status = teardown_resource(runtime, *iterator);
+        if (status != SAO_OK)
+            return status;
+        (void)remove_owned_resource(runtime, iterator->id);
+    }
+    return SAO_OK;
+}
+
 emma_value make_native_context(emma_plugin_runtime* runtime) {
     loader_context_t* context = runtime->context;
     auto wrapper = std::make_shared<emma_dict>();
@@ -3773,12 +4054,32 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
         }));
     wrapper->items.emplace(
         "register_ui_panel",
-        make_host_callable("ctx.register_ui_panel", [context](std::vector<emma_value> arguments) {
-            const std::string panel_id = require_metadata_only_panel(arguments);
+        make_host_callable("ctx.register_ui_panel", [runtime, context](std::vector<emma_value> arguments) {
+            const std::string panel_id = require_panel_arguments(arguments);
             const std::string metadata = serialize_value_or_throw(arguments[1]);
+            emma_plugin_runtime::owned_resource existing;
+            if (find_owned_resource(*runtime, [&panel_id](const auto& resource) {
+                    return resource.kind == emma_plugin_runtime::resource_kind::ui_panel &&
+                           resource.key == panel_id;
+                }, existing))
+                throw_context_status("ctx.register_ui_panel", sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS);
+            auto bundle = std::make_shared<emma_panel_bundle>();
+            bundle->enable_scoped = runtime->enabling;
+            if (arguments.size() > 2 && !std::holds_alternative<std::nullptr_t>(arguments[2]))
+                bundle->render = make_callback(runtime, require_callable(arguments, 2, "ctx.register_ui_panel"));
+            if (arguments.size() > 3 && !std::holds_alternative<std::nullptr_t>(arguments[3]))
+                bundle->action = make_callback(runtime, require_callable(arguments, 3, "ctx.register_ui_panel"));
+            const uint64_t resource = add_owned_resource(*runtime,
+                emma_plugin_runtime::resource_kind::ui_panel, 0, panel_id, {}, bundle);
             const int32_t status = sao::plugins::loader::sao_plugins_ctx_register_ui_panel(
-                context, panel_id.c_str(), metadata.c_str(), nullptr, nullptr, nullptr);
+                context, panel_id.c_str(), metadata.c_str(),
+                bundle->render ? panel_render_bridge : nullptr,
+                bundle->action ? panel_action_bridge : nullptr, bundle.get());
             if (status != SAO_OK) {
+                const int32_t cleanup = status == sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS ?
+                    SAO_OK : sao::plugins::loader::sao_plugins_ctx_unregister_ui_panel(context, panel_id.c_str());
+                if (cleanup == SAO_OK || cleanup == SAO_ERR_HANDLE_INVALID)
+                    (void)remove_owned_resource(*runtime, resource);
                 throw_context_status("ctx.register_ui_panel", status);
             }
             return emma_value(true);
@@ -3906,7 +4207,12 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                                resource.numeric_token == token;
                     },
                     resource)) {
-                throw_context_status("ctx.unsubscribe", SAO_ERR_HANDLE_INVALID);
+                // 台账无此订阅：幂等清除
+                const int32_t status = sao::plugins::loader::sao_plugins_ctx_unsubscribe(
+                    runtime->context, token);
+                if (!teardown_status_is_complete(status))
+                    throw_context_status("ctx.unsubscribe", status);
+                return emma_value(false);
             }
             int32_t status = quiesce_callback(resource.callback);
             if (status == SAO_OK) {
@@ -3969,7 +4275,13 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                                resource.key == id;
                     },
                     resource)) {
-                throw_context_status("ctx.unregister_hotkey", SAO_ERR_HANDLE_INVALID);
+                // 台账无此 hotkey：幂等清除
+                const int32_t status =
+                    sao::plugins::loader::sao_plugins_ctx_unregister_hotkey(runtime->context,
+                                                                            id.c_str());
+                if (!teardown_status_is_complete(status))
+                    throw_context_status("ctx.unregister_hotkey", status);
+                return emma_value(false);
             }
             int32_t status = quiesce_callback(resource.callback);
             if (status == SAO_OK) {
@@ -4049,7 +4361,13 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                                resource.key == token;
                     },
                     resource)) {
-                throw_context_status("ctx.clear_timer", SAO_ERR_HANDLE_INVALID);
+                // 台账无此 timer：幂等清除
+                const int32_t status =
+                    sao::plugins::loader::sao_plugins_ctx_clear_timer(runtime->context,
+                                                                      token.c_str());
+                if (!teardown_status_is_complete(status))
+                    throw_context_status("ctx.clear_timer", status);
+                return emma_value(false);
             }
             int32_t status = quiesce_callback(resource.callback);
             if (status == SAO_OK) {
@@ -4158,7 +4476,12 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                                resource.key == surface;
                     },
                     resource)) {
-                throw_context_status("ctx.clear_overlay", SAO_ERR_HANDLE_INVALID);
+                // 台账无此 overlay：幂等清除 (on_disable/on_unload 里无条件 clear 是老脚本惯例)
+                const int32_t status = sao::plugins::loader::sao_plugins_ctx_clear_overlay(
+                    runtime->context, surface.c_str());
+                if (!teardown_status_is_complete(status))
+                    throw_context_status("ctx.clear_overlay", status);
+                return emma_value(false);
             }
             const int32_t status = sao::plugins::loader::sao_plugins_ctx_clear_overlay(
                 runtime->context, surface.c_str());
@@ -4405,6 +4728,81 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                                return ensure_requirements_impl(runtime, std::move(arguments));
                            }));
 
+    wrapper->items.emplace(
+        "set_compositor_layer_mmf_source",
+        make_host_callable("ctx.set_compositor_layer_mmf_source",
+            [context](std::vector<emma_value> arguments) -> emma_value {
+                const char* method = "ctx.set_compositor_layer_mmf_source";
+                if (arguments.size() != 2)
+                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                const auto name = require_string(arguments, 0, method);
+                const auto mmf = std::holds_alternative<std::nullptr_t>(arguments[1])
+                    ? std::string{} : require_string(arguments, 1, method);
+                if (name.find('\0') != std::string::npos || mmf.find('\0') != std::string::npos)
+                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                const int32_t status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_mmf_source(
+                    context, name.c_str(), mmf.empty() ? nullptr : mmf.c_str());
+                if (status != SAO_OK)
+                    throw_context_status(method, status);
+                return true;
+            }));
+    wrapper->items.emplace(
+        "set_compositor_layer_shared_texture_source",
+        make_host_callable("ctx.set_compositor_layer_shared_texture_source",
+            [context](std::vector<emma_value> arguments) -> emma_value {
+                const char* method = "ctx.set_compositor_layer_shared_texture_source";
+                if (arguments.size() < 2 || arguments.size() > 4)
+                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                const auto name = require_string(arguments, 0, method);
+                const auto handle = static_cast<uint64_t>(require_integer(arguments, 1, method));
+                const int64_t width = arguments.size() > 2 ? require_integer(arguments, 2, method) : 0;
+                const int64_t height = arguments.size() > 3 ? require_integer(arguments, 3, method) : 0;
+                if (name.find('\0') != std::string::npos || width < 0 || height < 0 ||
+                    width > std::numeric_limits<uint32_t>::max() ||
+                    height > std::numeric_limits<uint32_t>::max() ||
+                    (handle != 0 && (width == 0 || height == 0)))
+                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                const int32_t status =
+                    sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_shared_texture_source(
+                        context, name.c_str(), handle, handle == 0 ? 0 : static_cast<uint32_t>(width),
+                        handle == 0 ? 0 : static_cast<uint32_t>(height));
+                if (status != SAO_OK)
+                    throw_context_status(method, status);
+                return true;
+            }));
+    wrapper->items.emplace(
+        "compositor_gpu_interop_available",
+        make_host_callable("ctx.compositor_gpu_interop_available",
+            [context](std::vector<emma_value> arguments) -> emma_value {
+                const char* method = "ctx.compositor_gpu_interop_available";
+                if (!arguments.empty())
+                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                bool available = false;
+                const int32_t status =
+                    sao::plugins::loader::sao_plugins_ctx_compositor_gpu_interop_available(context, &available);
+                if (status != SAO_OK)
+                    throw_context_status(method, status);
+                return available;
+            }));
+    wrapper->items.emplace(
+        "compositor_layer_shared_texture_active",
+        make_host_callable("ctx.compositor_layer_shared_texture_active",
+            [context](std::vector<emma_value> arguments) -> emma_value {
+                const char* method = "ctx.compositor_layer_shared_texture_active";
+                if (arguments.size() != 1)
+                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                const auto name = require_string(arguments, 0, method);
+                if (name.find('\0') != std::string::npos)
+                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                bool active = false;
+                const int32_t status =
+                    sao::plugins::loader::sao_plugins_ctx_compositor_layer_shared_texture_active(
+                        context, name.c_str(), &active);
+                if (status != SAO_OK)
+                    throw_context_status(method, status);
+                return active;
+            }));
+
     // compositor layer 族
     wrapper->items.emplace(
         "create_compositor_layer",
@@ -4556,28 +4954,7 @@ int32_t install_context(emma_plugin_runtime* plugin, loader_context_t* context) 
                      ((*function)->body.empty() || (*function)->closure == nullptr))) {
                     return SAO_ERR_INVALID_ARGUMENT;
                 }
-                if (name == "register_ui_panel") {
-                    const auto provider_panel = *function;
-                    native_dictionary->items.insert_or_assign(
-                        name, make_host_callable(
-                                  "ctx.register_ui_panel",
-                                  [plugin, provider_panel](std::vector<emma_value> arguments) {
-                                      (void)require_metadata_only_panel(arguments);
-                                      std::string message;
-                                      emma_error error;
-                                      emma_value result = plugin->interp->call_function(
-                                          provider_panel, std::move(arguments), message, &error);
-                                      if (error.kind != error_kind::none || !message.empty()) {
-                                          if (error.kind == error_kind::none) {
-                                              error.kind = error_kind::runtime_error;
-                                              error.status = SAO_ERR_OS_CALL_FAILED;
-                                              error.message = std::move(message);
-                                          }
-                                          throw emma_exception(std::move(error));
-                                      }
-                                      return result;
-                                  }));
-                } else {
+                if (name != "register_ui_panel") {
                     native_dictionary->items.insert_or_assign(name, value);
                 }
                 continue;
@@ -4936,17 +5313,27 @@ sao_plugins_emma_call_on_enable(emma_plugin_handle_t plugin) {
     if (plugin == nullptr)
         return SAO_ERR_HANDLE_INVALID;
     try {
-        return with_direct_plugin(plugin, [](emma_plugin_runtime& runtime) {
+        return with_direct_plugin(plugin, [](emma_plugin_runtime& runtime) -> int32_t {
             const std::size_t checkpoint = runtime.menus.size();
             const emma_action_checkpoint action_before = action_checkpoint(runtime);
-            const int32_t status = call_named(&runtime, "on_enable", {}, nullptr, true);
-            if (status == SAO_OK) {
-                const int32_t menu_status = commit_enable_menus(runtime, checkpoint);
-                return menu_status == SAO_OK ? commit_enable_action(runtime, action_before)
-                                             : menu_status;
-            }
+            const uint64_t panel_checkpoint = runtime.next_resource_id;
+            runtime.enabling = true;
+            struct EnableScope {
+                emma_plugin_runtime& runtime;
+                ~EnableScope() { runtime.enabling = false; }
+            } scope{runtime};
+            int32_t status = call_named(&runtime, "on_enable", {}, nullptr, true);
+            if (status == SAO_OK)
+                status = commit_enable_menus(runtime, checkpoint);
+            if (status == SAO_OK)
+                status = commit_enable_action(runtime, action_before);
+            if (status == SAO_OK)
+                return SAO_OK;
             const int32_t action_status = rollback_action(runtime, action_before);
             const int32_t menu_status = rollback_menus(runtime, checkpoint);
+            const int32_t panel_status = remove_enable_panels(runtime, panel_checkpoint);
+            if (panel_status != SAO_OK)
+                return panel_status;
             if (action_status != SAO_OK)
                 return action_status;
             return menu_status == SAO_OK ? status : menu_status;
@@ -4967,6 +5354,9 @@ sao_plugins_emma_call_on_disable(emma_plugin_handle_t plugin) {
                 return status;
             const int32_t action_status = remove_enable_action(runtime);
             const int32_t menu_status = remove_enable_menus(runtime);
+            const int32_t panel_status = remove_enable_panels(runtime);
+            if (panel_status != SAO_OK)
+                return panel_status;
             return action_status == SAO_OK ? menu_status : action_status;
         });
     } catch (...) {

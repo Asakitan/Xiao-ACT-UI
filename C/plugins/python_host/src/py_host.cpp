@@ -87,6 +87,10 @@ struct py_host_state {
     std::wstring python_home;
     std::wstring platform_site_dir;
     bool controlled_test_shim = false;
+    std::vector<std::wstring> extra_module_dirs;
+    // sys.path entries prepended for an already-initialized interpreter;
+    // host-lifetime — never removed by per-plugin unload.
+    std::vector<std::wstring> inserted_extra_paths;
     size_t active_host_handles = 0;
     size_t active_plugins = 0;
 };
@@ -104,6 +108,11 @@ struct host_handle_record {
 std::mutex& g_singleton_mu = *new std::mutex();
 std::condition_variable& g_handle_idle = *new std::condition_variable();
 py_host_state* g_singleton = nullptr;
+// Reusable borrowed handle published on g_singleton by
+// detail::ensure_legacy_script_host (py_call.cpp legacy script entry
+// points).  Never shutdown() through this slot; singleton teardown stays
+// owned by the real sao_plugins_pyhost_shutdown callers.
+py_host_s* g_legacy_script_host = nullptr;
 bool g_runtime_transition = false;
 uint64_t g_next_host_generation = 1;
 uint64_t g_next_plugin_generation = 1;
@@ -949,6 +958,18 @@ bool initialize_isolated_python(const py_host_config* cfg) {
     python_layout layout;
     if (!discover_python_layout(cfg->python_home, layout))
         return false;
+    // Host-level shared module roots become part of the isolated
+    // module_search_paths so every plugin loaded later can import them.
+    if (cfg->platform_site_dir != nullptr && *cfg->platform_site_dir != L'\0') {
+        layout.module_search_paths.push_back(cfg->platform_site_dir);
+    }
+    if (cfg->extra_module_dirs != nullptr) {
+        for (uint32_t k = 0; k < cfg->extra_module_dirs_count; ++k) {
+            if (cfg->extra_module_dirs[k] != nullptr && *cfg->extra_module_dirs[k] != L'\0') {
+                layout.module_search_paths.push_back(cfg->extra_module_dirs[k]);
+            }
+        }
+    }
 
     PyConfig config;
     PyConfig_InitIsolatedConfig(&config);
@@ -978,6 +999,51 @@ bool initialize_isolated_python(const py_host_config* cfg) {
 #endif // SAO_HAS_PYTHON_EMBED
 
 } // namespace
+
+#if defined(SAO_HAS_PYTHON_EMBED)
+namespace detail {
+
+// Borrowed view on the process-wide singleton host for the legacy
+// sao_plugins_pyhost_*_script entry points (py_call.cpp).  Publishes at
+// most one reusable handle per singleton lifetime; teardown of the
+// runtime itself stays owned by the real sao_plugins_pyhost_shutdown
+// callers, so this slot never triggers Py_Finalize on its own.
+// Callers must hold the GIL (sao_plugins_pyhost_gil_scope_enter) before
+// driving load/unload through the returned handle.
+int32_t ensure_legacy_script_host(py_host_handle_t* out_host) noexcept {
+    if (out_host == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *out_host = nullptr;
+    try {
+        std::lock_guard lock(g_singleton_mu);
+        if (g_singleton == nullptr || !g_singleton->initialized)
+            return SAO_ERR_NOT_INITIALIZED;
+        if (g_legacy_script_host != nullptr) {
+            const auto found = g_host_handles.find(g_legacy_script_host);
+            if (found != g_host_handles.end() && found->second.live &&
+                !found->second.closing && found->second.state == g_singleton &&
+                g_legacy_script_host->generation == found->second.generation) {
+                *out_host = g_legacy_script_host;
+                return SAO_OK;
+            }
+            // Stale slot from a torn-down singleton — republish fresh.
+            g_legacy_script_host = nullptr;
+        }
+        py_host_handle_t fresh = nullptr;
+        const int32_t status = publish_host_handle_locked(g_singleton, &fresh);
+        if (status != SAO_OK)
+            return status;
+        g_legacy_script_host = static_cast<py_host_s*>(fresh);
+        *out_host = fresh;
+        return SAO_OK;
+    } catch (...) {
+        *out_host = nullptr;
+        return SAO_ERR_OS_CALL_FAILED;
+    }
+}
+
+} // namespace detail
+#endif // SAO_HAS_PYTHON_EMBED
 
 // ── init / shutdown / version / available（保留宿主实现并挂载 sao_sdk）──
 
@@ -1058,6 +1124,20 @@ sao_plugins_pyhost_init(const py_host_config* cfg, py_host_handle_t* out_host) {
         state->python_home = cfg->python_home;
         if (cfg->platform_site_dir != nullptr)
             state->platform_site_dir = cfg->platform_site_dir;
+        if (cfg->extra_module_dirs != nullptr) {
+            for (uint32_t k = 0; k < cfg->extra_module_dirs_count; ++k) {
+                if (cfg->extra_module_dirs[k] != nullptr && *cfg->extra_module_dirs[k] != L'\0')
+                    state->extra_module_dirs.emplace_back(cfg->extra_module_dirs[k]);
+            }
+        }
+        // 解释器已由外部初始化时, init 期间的 module_search_paths 不再生效；
+        // 直接把 site/extra 目录前插 sys.path (host 生命周期内常驻)。
+        if (externally_initialized) {
+            if (!state->platform_site_dir.empty())
+                prepend_sys_path(state->platform_site_dir, state->inserted_extra_paths);
+            for (const auto& dir : state->extra_module_dirs)
+                prepend_sys_path(dir, state->inserted_extra_paths);
+        }
         state->controlled_test_shim = cfg->controlled_test_shim;
 
         const int32_t publish_status = publish_host_handle_locked(state.get(), out_host);
@@ -1601,7 +1681,12 @@ sao_plugins_pyhost_unload_plugin(py_plugin_handle_t plugin) {
         } else
 #endif
         if (Py_IsInitialized() != 0) {
-            const int32_t teardown_status = sao_plugins_pyhost_ctx_try_teardown_native(pl->ctx);
+            // pl->ctx may be nullptr when load failed before the PluginContext
+            // step (manifest read / sdk bind / sao_sdk import) — the published
+            // handle must still close cleanly so active_plugins drains.
+            const int32_t teardown_status =
+                pl->ctx != nullptr ? sao_plugins_pyhost_ctx_try_teardown_native(pl->ctx)
+                                   : SAO_OK;
             if (teardown_status != SAO_OK) {
                 cancel_plugin_close(plugin);
                 return teardown_status;

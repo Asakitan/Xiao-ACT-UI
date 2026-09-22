@@ -23,6 +23,13 @@
 namespace sao::ai_editor::native {
 namespace {
 
+thread_local const char* g_atomic_write_last_stage = "not_started";
+thread_local DWORD g_atomic_write_last_error = ERROR_SUCCESS;
+
+void mark_atomic_write_stage(const char* stage) noexcept {
+    g_atomic_write_last_stage = stage;
+}
+
 bool component_equal(const std::filesystem::path& left, const std::filesystem::path& right) {
     auto a = left.native();
     auto b = right.native();
@@ -429,6 +436,36 @@ class TemporaryFile final {
         return handle_.get();
     }
 
+    const std::filesystem::path& path() const noexcept {
+        return path_;
+    }
+
+    bool close_for_path_commit(FileBinding& binding) noexcept {
+        try {
+            if (!query_file_binding(handle_.get(), binding))
+                return false;
+            committed_binding_ = binding;
+            has_committed_binding_ = true;
+            handle_.reset();
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    bool committed_binding(FileBinding& binding) const noexcept {
+        if (!has_committed_binding_)
+            return false;
+        binding = committed_binding_;
+        return true;
+    }
+
+    void discard_closed_path() noexcept {
+        if (!path_.empty())
+            (void)DeleteFileW(path_.c_str());
+        path_.clear();
+    }
+
     void mark_renamed() noexcept {
         renamed_ = true;
         path_.clear();
@@ -437,6 +474,8 @@ class TemporaryFile final {
   private:
     UniqueHandle handle_;
     std::filesystem::path path_;
+    FileBinding committed_binding_{};
+    bool has_committed_binding_{};
     bool renamed_{};
 };
 
@@ -468,7 +507,8 @@ int32_t create_temporary_file(const std::filesystem::path& parent_path, const Fi
         const std::filesystem::path candidate = parent_path / name;
         const HANDLE handle =
             CreateFileW(candidate.c_str(), GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES,
-                        FILE_SHARE_READ, nullptr, CREATE_NEW,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                        CREATE_NEW,
                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
                             FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_WRITE_THROUGH,
                         nullptr);
@@ -543,6 +583,21 @@ int32_t rename_temporary_file(TemporaryFile& temporary, HANDLE parent,
     if (!SetFileInformationByHandle(temporary.handle(), FileRenameInfo, information,
                                     static_cast<DWORD>(required))) {
         const DWORD error = GetLastError();
+        g_atomic_write_last_error = error;
+        const std::wstring& target_name = target.native();
+        const bool replaced =
+            replace_existing
+                ? ReplaceFileW(target_name.c_str(), temporary.path().c_str(), nullptr,
+                               REPLACEFILE_WRITE_THROUGH, nullptr, nullptr) != FALSE
+                : MoveFileExW(temporary.path().c_str(), target_name.c_str(),
+                              MOVEFILE_WRITE_THROUGH) != FALSE;
+        if (replaced ||
+            (!std::filesystem::exists(temporary.path()) &&
+             std::filesystem::exists(target))) {
+            temporary.mark_renamed();
+            return SAO_AI_EDITOR_OK;
+        }
+        g_atomic_write_last_error = GetLastError() != ERROR_SUCCESS ? GetLastError() : error;
         if (!replace_existing && (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)) {
             return SAO_AI_EDITOR_ERR_BUSY;
         }
@@ -552,19 +607,57 @@ int32_t rename_temporary_file(TemporaryFile& temporary, HANDLE parent,
     return SAO_AI_EDITOR_OK;
 }
 
+int32_t rename_temporary_file_compat(TemporaryFile& temporary,
+                                     const std::filesystem::path& target,
+                                     bool replace_existing) {
+    FileBinding source_binding;
+    if (!temporary.close_for_path_commit(source_binding)) {
+        g_atomic_write_last_error = GetLastError();
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    const std::filesystem::path source_path = temporary.path();
+    const std::wstring& target_name = target.native();
+    const bool replaced =
+        replace_existing
+            ? ReplaceFileW(target_name.c_str(), source_path.c_str(), nullptr,
+                           REPLACEFILE_WRITE_THROUGH, nullptr, nullptr) != FALSE
+            : MoveFileExW(source_path.c_str(), target_name.c_str(),
+                          MOVEFILE_WRITE_THROUGH) != FALSE;
+    if (!replaced) {
+        const DWORD error = GetLastError();
+        g_atomic_write_last_error = error;
+        temporary.discard_closed_path();
+        if (!replace_existing &&
+            (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)) {
+            return SAO_AI_EDITOR_ERR_BUSY;
+        }
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    if (std::filesystem::exists(source_path)) {
+        g_atomic_write_last_error = ERROR_ACCESS_DENIED;
+        temporary.discard_closed_path();
+        return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    }
+    temporary.mark_renamed();
+    return SAO_AI_EDITOR_OK;
+}
+
 int32_t verify_published_file(const TemporaryFile& temporary, const FileBinding& parent,
                               const FileBinding& root, const std::filesystem::path& target) {
-    FileBinding handle_binding;
-    if (!query_file_binding(temporary.handle(), handle_binding)) {
+    FileBinding source_binding;
+    const bool has_handle = temporary.handle() != nullptr &&
+                            temporary.handle() != INVALID_HANDLE_VALUE;
+    if (has_handle) {
+        if (!query_file_binding(temporary.handle(), source_binding))
+            return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
+    } else if (!temporary.committed_binding(source_binding)) {
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
     const std::filesystem::path expected =
         (parent.final_path / target.filename()).lexically_normal();
-    if ((handle_binding.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) !=
+    if ((source_binding.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) !=
             0 ||
-        !path_equal(handle_binding.final_path, expected) ||
-        !path_equal(handle_binding.final_path.parent_path(), parent.final_path) ||
-        !path_within(root.final_path, handle_binding.final_path)) {
+        (has_handle && !path_equal(source_binding.final_path, expected))) {
         return SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION;
     }
     TargetSnapshot published;
@@ -572,7 +665,11 @@ int32_t verify_published_file(const TemporaryFile& temporary, const FileBinding&
     if (status != SAO_AI_EDITOR_OK) {
         return status;
     }
-    if (!published.exists || !same_binding(handle_binding, published.binding)) {
+    if (!published.exists ||
+        !same_identity(source_binding.identity, published.binding.identity) ||
+        !path_equal(published.binding.final_path, expected) ||
+        !path_equal(published.binding.final_path.parent_path(), parent.final_path) ||
+        !path_within(root.final_path, published.binding.final_path)) {
         return SAO_AI_EDITOR_ERR_BUSY;
     }
     return SAO_AI_EDITOR_OK;
@@ -671,6 +768,7 @@ int32_t write_text_atomic_impl(const std::filesystem::path* bounded_root,
                                const std::filesystem::path& path, std::string_view content,
                                bool create_only,
                                const std::string_view* expected_content = nullptr) {
+    mark_atomic_write_stage("validate_content");
     if (!valid_utf8(content) || (expected_content != nullptr && !valid_utf8(*expected_content))) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
@@ -701,6 +799,7 @@ int32_t write_text_atomic_impl(const std::filesystem::path* bounded_root,
         }
 
         const auto filename = target.filename();
+        mark_atomic_write_stage("open_parent");
         const auto parent_path = target.parent_path();
         if (filename.empty() || filename == L"." || filename == L".." ||
             filename.native().find(L':') != std::wstring::npos || parent_path.empty()) {
@@ -745,16 +844,19 @@ int32_t write_text_atomic_impl(const std::filesystem::path* bounded_root,
         }
 
         TemporaryFile temporary;
+        mark_atomic_write_stage("create_temporary");
         int32_t status =
             create_temporary_file(parent_binding.final_path, parent_binding, temporary);
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
         if (!directories_match() || !verify_temporary_file(temporary, parent_binding)) {
+            mark_atomic_write_stage("verify_temporary");
             return SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION;
         }
 
         TargetSnapshot target_before_write;
+        mark_atomic_write_stage("capture_before_write");
         status = capture_target(bound_target, parent_binding, effective_root, target_before_write,
                                 expected_content != nullptr);
         if (status != SAO_AI_EDITOR_OK) {
@@ -779,14 +881,17 @@ int32_t write_text_atomic_impl(const std::filesystem::path* bounded_root,
                 return status;
             }
         }
+        mark_atomic_write_stage("write_temporary");
         if (!write_all(temporary.handle(), content) || !FlushFileBuffers(temporary.handle())) {
             return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
         }
 
         if (!directories_match() || !verify_temporary_file(temporary, parent_binding)) {
+            mark_atomic_write_stage("verify_temporary_after_write");
             return SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION;
         }
         TargetSnapshot target_before_replace;
+        mark_atomic_write_stage("capture_before_replace");
         status = capture_target(bound_target, parent_binding, effective_root,
                                 target_before_replace, expected_content != nullptr);
         if (status != SAO_AI_EDITOR_OK) {
@@ -808,18 +913,29 @@ int32_t write_text_atomic_impl(const std::filesystem::path* bounded_root,
                 return status;
             }
         }
+        mark_atomic_write_stage("rename_temporary");
         status = rename_temporary_file(temporary, parent_directory_handle, bound_target,
                                        !create_only && target_before_replace.exists);
+        if (status != SAO_AI_EDITOR_OK) {
+            target_before_write.handle.reset();
+            target_before_replace.handle.reset();
+            status = rename_temporary_file_compat(
+                temporary, bound_target, !create_only && target_before_replace.exists);
+        }
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
         if (!directories_match()) {
+            mark_atomic_write_stage("verify_directories_after_rename");
             return SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION;
         }
+        mark_atomic_write_stage("verify_published");
         return verify_published_file(temporary, parent_binding, effective_root, bound_target);
     } catch (const std::bad_alloc&) {
+        mark_atomic_write_stage("allocation");
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     } catch (...) {
+        mark_atomic_write_stage("exception");
         return SAO_AI_EDITOR_ERR_OS_CALL_FAILED;
     }
 }
@@ -972,6 +1088,14 @@ int32_t read_text_file_bounded(const std::filesystem::path& root, const std::fil
 
 int32_t write_text_atomic(const std::filesystem::path& path, std::string_view content) {
     return write_text_atomic_impl(nullptr, path, content, false);
+}
+
+const char* atomic_write_last_stage() noexcept {
+    return g_atomic_write_last_stage;
+}
+
+uint32_t atomic_write_last_error() noexcept {
+    return g_atomic_write_last_error;
 }
 
 int32_t write_text_atomic_bounded(const std::filesystem::path& root,

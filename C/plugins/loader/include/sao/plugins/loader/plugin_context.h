@@ -41,7 +41,7 @@ using compositor_scroll_fn = void (*)(float dx, float dy, void* user_data);
 // provider vtable and never includes or links the platform SDK.  A provider
 // owns one isolated session per canonical plugin_context_t.
 #define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MAJOR 1u
-#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MINOR 3u
+#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MINOR 5u
 #define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION                                           \
     ((SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MAJOR << 16u) |                             \
      SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_ABI_VERSION_MINOR)
@@ -108,6 +108,23 @@ struct plugin_context_compositor_layer_spec {
     uint8_t reserved[2];
     uint32_t target_fps;
 };
+
+struct plugin_context_shared_texture_spec {
+    uint32_t struct_size;
+    uint32_t handle_kind;
+    uint64_t shared_handle;
+    uint32_t width;
+    uint32_t height;
+    uint64_t acquire_key;
+    uint64_t release_key;
+    uint32_t timeout_ms;
+    uint32_t reserved;
+};
+
+static_assert(sizeof(plugin_context_shared_texture_spec) == 48u);
+static_assert(offsetof(plugin_context_shared_texture_spec, shared_handle) == 8u);
+static_assert(offsetof(plugin_context_shared_texture_spec, acquire_key) == 24u);
+static_assert(offsetof(plugin_context_shared_texture_spec, reserved) == 44u);
 
 struct plugin_context_compositor_input_spec {
     uint32_t struct_size;
@@ -238,7 +255,39 @@ struct plugin_context_platform_provider {
     int32_t(SAO_PLUGINS_CALL* close_window)(
         void* user_data, plugin_context_platform_session_t session,
         plugin_context_platform_token_t provider_token);
+
+    // ABI 1.4: callback strings are released with sao_plugins_ctx_free_string.
+    int32_t(SAO_PLUGINS_CALL* register_ui_panel)(
+        void* user_data, plugin_context_platform_session_t session, const char* panel_id_utf8,
+        const char* metadata_json_utf8, render_callback_fn render, action_callback_fn on_action,
+        void* callback_user_data, plugin_context_platform_token_t* out_provider_token);
+    int32_t(SAO_PLUGINS_CALL* unregister_ui_panel)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token);
+
+    // ABI 1.5: kind 0 is legacy; kind 1 is an already-local NT handle.
+    int32_t(SAO_PLUGINS_CALL* set_compositor_layer_mmf_source)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token, const char* mmf_name_utf8);
+    int32_t(SAO_PLUGINS_CALL* set_compositor_layer_shared_texture_source)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token,
+        const plugin_context_shared_texture_spec* spec);
+    int32_t(SAO_PLUGINS_CALL* compositor_gpu_interop_available)(
+        void* user_data, plugin_context_platform_session_t session, bool* out_available);
+    int32_t(SAO_PLUGINS_CALL* compositor_layer_shared_texture_active)(
+        void* user_data, plugin_context_platform_session_t session,
+        plugin_context_platform_token_t provider_token, bool* out_active);
 };
+
+#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_V1_3_SIZE \
+    offsetof(sao::plugins::loader::plugin_context_platform_provider, register_ui_panel)
+#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_V1_4_SIZE \
+    (offsetof(sao::plugins::loader::plugin_context_platform_provider, unregister_ui_panel) + \
+     sizeof(((sao::plugins::loader::plugin_context_platform_provider*)0)->unregister_ui_panel))
+#define SAO_PLUGIN_CONTEXT_PLATFORM_PROVIDER_V1_5_SIZE \
+    (offsetof(sao::plugins::loader::plugin_context_platform_provider, compositor_layer_shared_texture_active) + \
+     sizeof(((sao::plugins::loader::plugin_context_platform_provider*)0)->compositor_layer_shared_texture_active))
 
 // Exactly one process-wide provider may be registered.  Unregistering while
 // any canonical context owns a provider session returns BUSY.
@@ -297,6 +346,8 @@ sao_plugins_ctx_set_defaults(plugin_context_t* ctx, const char* defaults_json_ut
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_ui_panel(
     plugin_context_t* ctx, const char* panel_id, const char* meta_json_utf8,
     render_callback_fn render, action_callback_fn on_action, void* user_data);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_unregister_ui_panel(
+    plugin_context_t* ctx, const char* panel_id);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_render_hook(
     plugin_context_t* ctx, const char* surface_utf8, float priority, render_hook_fn hook,
     void* user_data, uint32_t* out_token);
@@ -384,6 +435,23 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_set_composit
     plugin_context_t* ctx, const char* name_utf8, compositor_cursor_pos_fn cursor_pos,
     compositor_mouse_button_fn mouse_btn, compositor_cursor_leave_fn cursor_leave,
     compositor_scroll_fn scroll, void* user_data);
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_set_compositor_layer_mmf_source(plugin_context_t* ctx, const char* name_utf8,
+                                                const char* mmf_name_utf8);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_set_compositor_layer_shared_texture_source(
+    plugin_context_t* ctx, const char* name_utf8, uint64_t handle, uint32_t width, uint32_t height);
+// Null or a full-sized zero-handle descriptor clears regardless of its remaining fields.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_set_compositor_layer_shared_texture_source_ex(
+    plugin_context_t* ctx, const char* name_utf8, const plugin_context_shared_texture_spec* spec);
+// Absent GPU capability returns OK/false; invalid ownership and operational failures remain errors.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_compositor_gpu_interop_available(plugin_context_t* ctx, bool* out_available);
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_ctx_compositor_layer_shared_texture_active(plugin_context_t* ctx,
+                                                       const char* name_utf8, bool* out_active);
 
 // ── 依赖 / 加载 ──
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

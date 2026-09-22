@@ -52,6 +52,11 @@ struct py_host_config {
     bool controlled_test_shim = false;
     // 平台已知随包 site 目录 (随包 CPython 分发的 Lib/site-packages)
     const wchar_t* platform_site_dir;
+    // 额外共享模块目录，对每个 host 级 sys.path 永久生效（legacy 插件
+    // 从这里导入共享包，例如 `gui_modules`）。fresh init 时并入
+    // module_search_paths；外置已初始化解释器时前插 sys.path。
+    const wchar_t* const* extra_module_dirs = nullptr;
+    uint32_t extra_module_dirs_count = 0;
     // stdout / stderr 重定向 utf-8 目标 (nullptr = 不重定向, 走 CRT)
     void (*stdout_callback)(const char* utf8, void* ud);
     void (*stderr_callback)(const char* utf8, void* ud);

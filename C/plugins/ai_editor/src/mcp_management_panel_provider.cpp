@@ -145,10 +145,13 @@ std::string McpManagementPanelProvider::load_bundled_html(
 
 int32_t McpManagementPanelProvider::register_with_runtime(
     WebviewPanelRegistry& registry, const std::string& assets_root) {
-    std::lock_guard<std::mutex> guard(mutex_);
-    if (registered_) {
-        return SAO_AI_EDITOR_OK;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (registered_) {
+            return SAO_AI_EDITOR_OK;
+        }
     }
+
     WebviewPanelOptions options;
     options.enable_scripts = true;
     options.retain_context_when_hidden = true;
@@ -172,8 +175,8 @@ int32_t McpManagementPanelProvider::register_with_runtime(
     } else {
         adopted_by_provider = true;
     }
-    status = registry.set_html(std::string{kMcpManagementPanelId},
-                               load_bundled_html(assets_root), state);
+    const std::string html = load_bundled_html(assets_root);
+    status = registry.set_html(std::string{kMcpManagementPanelId}, html, state);
     if (status != SAO_AI_EDITOR_OK) {
         if (adopted_by_provider) {
             WebviewPanelState rollback;
@@ -181,7 +184,10 @@ int32_t McpManagementPanelProvider::register_with_runtime(
         }
         return status;
     }
-    registered_ = true;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        registered_ = true;
+    }
     return SAO_AI_EDITOR_OK;
 }
 
@@ -301,7 +307,8 @@ int32_t McpManagementPanelProvider::handle_message(const Json& message,
         out_reply["method"] = method;
         out_reply["params"] = std::move(params);
         return SAO_AI_EDITOR_OK;
-    }    out_reply["status"] = "error";
+    }
+    out_reply["status"] = "error";
     out_reply["reason"] = "unknown command";
     return SAO_AI_EDITOR_OK;
 }

@@ -651,6 +651,7 @@ NativeAdapterCompletion failed_completion(const AdapterJob& job, std::string cod
     NativeAdapterCompletion completion;
     completion.document_token = job.document_token;
     completion.request_id = job.request_id;
+    completion.method = job.method;
     completion.error_code = std::move(code);
     completion.error_message = std::move(message);
     completion.error_data = std::move(error_data);
@@ -669,6 +670,7 @@ NativeAdapterCompletion successful_completion(const AdapterJob& job, json result
     NativeAdapterCompletion completion;
     completion.document_token = job.document_token;
     completion.request_id = job.request_id;
+    completion.method = job.method;
     completion.ok = true;
     completion.result = std::move(result);
     completion.memory_pid = job.memory_binding.pid;
@@ -1769,6 +1771,21 @@ NativeAdapterCompletion handle_startup_method(NativeAdapter& adapter, const Adap
         result["ok"] = true;
         result["applied"] = true;
         return successful_completion(job, std::move(result));
+    }
+    if (job.method == "update_frontend_health" || job.method == "mark_frontend_ready") {
+        if (!require_count(0, 2))
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "Frontend health reporting accepts at most two arguments.");
+        if (job.args.size() >= 1 && !job.args[0].is_string())
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "Frontend health phase must be a string.");
+        if (job.args.size() >= 2 && !job.args[1].is_object())
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "Frontend health payload must be an object.");
+        return successful_completion(
+            job, {{"ok", true},
+                  {"accepted", true},
+                  {"phase", job.args.empty() ? json("") : job.args[0]}});
     }
     if (job.method == "get_scopes") {
         if (!require_count(0, 0))

@@ -18,6 +18,7 @@ struct NativeAdapter;
 struct NativeAdapterCompletion {
     std::string document_token;
     std::string request_id;
+    std::string method;
     bool ok{};
     nlohmann::json result;
     nlohmann::json error_data;

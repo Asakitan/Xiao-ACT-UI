@@ -31,6 +31,8 @@ int32_t read_text_file(const std::filesystem::path& path, uint32_t maximum_bytes
 int32_t read_text_file_bounded(const std::filesystem::path& root, const std::filesystem::path& path,
                                uint32_t maximum_bytes, std::string& result);
 int32_t write_text_atomic(const std::filesystem::path& path, std::string_view content);
+const char* atomic_write_last_stage() noexcept;
+uint32_t atomic_write_last_error() noexcept;
 int32_t write_text_atomic_bounded(const std::filesystem::path& root,
                                   const std::filesystem::path& path, std::string_view content);
 int32_t write_text_atomic_bounded_if_unchanged(const std::filesystem::path& root,

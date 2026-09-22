@@ -2,6 +2,7 @@
   font-family: "SAO Product";
   src: url("./fonts/SAOUI.ttf") format("truetype"), url("https://sao-fonts.local/SAOUI.ttf") format("truetype");
   font-display: block;
+  size-adjust: 112%;
   unicode-range: U+0000-024F, U+1E00-1EFF;
 }
 @font-face {

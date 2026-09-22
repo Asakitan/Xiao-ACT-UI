@@ -73,4 +73,30 @@ std::vector<std::string> ctx_surface_report(loader::engine_kind language) {
     return {bound.begin(), bound.end()};
 }
 
+void ctx_surface_advisory_check(loader::engine_kind language,
+                                loader::plugin_context_t* ctx,
+                                const loader::plugin_manifest* manifest) noexcept {
+    try {
+        if (manifest == nullptr)
+            return;
+        std::vector<std::string> wanted = manifest->platform_binds;
+        for (const auto& requirement : manifest->requires_list) {
+            if (requirement.rfind("runtime_feature:", 0) == 0)
+                wanted.push_back(requirement.substr(16));
+        }
+        if (wanted.empty())
+            return;
+        const auto missing = ctx_surface_missing(language, wanted);
+        if (missing.empty())
+            return;
+        std::string message = "ctx surface advisory — unmet binds:";
+        for (const auto& name : missing) {
+            message += ' ';
+            message += name;
+        }
+        loader::sao_plugins_ctx_log(ctx, message.c_str());
+    } catch (...) {
+    }
+}
+
 } // namespace sao::plugins::script_ctx

@@ -376,7 +376,7 @@ int32_t KernelMapPanelProvider::handle_message(const Json& message,
                 !args["confirmed"].get<bool>())
                 out_reply = build_error(cmd, "confirmation required", request_id);
             else
-                out_reply = handle_load_driver(bridge, picker);
+                out_reply = handle_load_driver(bridge, picker, args);
         }
         else out_reply = build_error(cmd, "unknown command", request_id);
 
@@ -494,13 +494,46 @@ Json KernelMapPanelProvider::handle_unmap(
 }
 
 Json KernelMapPanelProvider::handle_load_driver(
-    const std::shared_ptr<IKernelMapBridge>& bridge, const FilePicker& picker) {
+    const std::shared_ptr<IKernelMapBridge>& bridge, const FilePicker& picker,
+    const Json& args) {
     if (bridge == nullptr || !bridge->is_available())
         return build_error("load_driver", "bridge unavailable", Json());
-    if (!picker) return Json{{"status", "not_implemented"},
-                             {"reason", "no file picker in current build"}};
-    const std::string path = picker();
-    if (path.empty()) return build_reply("load_driver", "cancelled", Json::object(), Json());
+    // Explicit path wins so tool/MCP-style callers that cannot raise the
+    // modal dialog drive the same read+map chain as the panel button;
+    // the arg name mirrors kernelMap.map's "driver_path" contract.
+    std::string path;
+    for (const char* key : {"driver_path", "path"}) {
+        const auto found = args.find(key);
+        if (found == args.end())
+            continue;
+        if (!found->is_string() || found->get_ref<const std::string&>().empty())
+            return Json{{"status", "error"},
+                        {"reason", std::string(key) +
+                                       " must be a non-empty UTF-8 path string"},
+                        {"rc", SAO_AI_EDITOR_ERR_INVALID_ARGUMENT}};
+        path = found->get<std::string>();
+        break;
+    }
+    if (path.empty()) {
+        if (!picker) {
+            // Explicit capability answer: this host never installed a
+            // file picker, so the UI-dialog arm cannot run.  Not a
+            // not_implemented stub — callers passing args.driver_path
+            // reach the real kernel-map chain below.
+            return Json{{"status", "error"},
+                        {"reason",
+                         "no file picker installed; pass args.driver_path"},
+                        {"rc", SAO_AI_EDITOR_ERR_INVALID_ARGUMENT}};
+        }
+        try {
+            path = picker();
+        } catch (...) {
+            return Json{{"status", "error"}, {"reason", "file picker failed"},
+                        {"rc", SAO_AI_EDITOR_ERR_OS_CALL_FAILED}};
+        }
+        if (path.empty())
+            return build_reply("load_driver", "cancelled", Json::object(), Json());
+    }
     std::vector<uint8_t> bytes;
     const int32_t status = read_driver_file_bounded(path, bytes);
     if (status != SAO_AI_EDITOR_OK) {

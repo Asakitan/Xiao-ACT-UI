@@ -36,6 +36,11 @@ target_link_libraries(sao_plugins_csharp_host PUBLIC
     sao::sdk
     sao::plugins::script_ctx
 )
+target_link_libraries(sao_plugins_csharp_host PRIVATE sao::core)
+if (TARGET sao::ui)
+    target_link_libraries(sao_plugins_csharp_host PRIVATE sao::ui)
+    target_compile_definitions(sao_plugins_csharp_host PRIVATE SAO_CSHARP_HAS_UI=1)
+endif()
 
 # hostfxr 走随包 vendor (nethost.lib), 不进 vcpkg 图。
 # 见 vendor_note.md。

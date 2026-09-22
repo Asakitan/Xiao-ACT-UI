@@ -12,6 +12,8 @@
 #include "sao/plugins/sdk_binding/binding_angel.h"
 
 #include <atomic>
+#include <cctype>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -19,9 +21,12 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #if defined(SAO_HAS_ANGELSCRIPT)
 #include <angelscript.h>
@@ -32,6 +37,7 @@ namespace sao::plugins::angel_host {
 namespace {
 
 std::mutex g_plugin_registry_mutex;
+std::mutex g_plugin_error_mutex;
 std::unordered_map<as_plugin_handle_t, shared_plugin_state> g_plugin_registry;
 std::atomic_uint64_t g_next_module_generation{1};
 
@@ -54,7 +60,394 @@ std::string format_retained_error(const retained_script_error& error) {
     return stream.str();
 }
 
+size_t skip_space(const std::string& source, size_t position) {
+    while (position < source.size() &&
+           std::isspace(static_cast<unsigned char>(source[position])))
+        ++position;
+    return position;
+}
+
+// `array@` shorthand — infer the element subtype from the initializer (or the
+// first `return {<expr>}` when `array@` fronts a function signature).
+std::string infer_array_subtype(const std::string& source, size_t after_token) {
+    size_t pos = skip_space(source, after_token);
+    size_t ident_start = pos;
+    while (pos < source.size() &&
+           (std::isalnum(static_cast<unsigned char>(source[pos])) || source[pos] == '_'))
+        ++pos;
+    if (pos == ident_start)
+        return "dictionary";
+    pos = skip_space(source, pos);
+    if (pos >= source.size())
+        return "dictionary";
+    if (source[pos] == '=') {
+        pos = skip_space(source, pos + 1);
+        if (pos < source.size() && source[pos] == '{')
+            pos = skip_space(source, pos + 1);
+        if (pos < source.size()) {
+            const char first = source[pos];
+            if (first == '{')
+                return "dictionary";
+            if (first == '\'' || first == '"')
+                return "string";
+            if (std::isdigit(static_cast<unsigned char>(first)) || first == '-' ||
+                first == '+')
+                return "int64";
+        }
+        return "dictionary";
+    }
+    if (source[pos] == '(') {
+        // function return type — scan for the first `return {`-shaped
+        // initializer inside the body.
+        const size_t body = source.find('{', pos);
+        if (body == std::string::npos)
+            return "dictionary";
+        static const std::regex return_pattern(R"(\breturn\s*\{\s*(.))");
+        std::smatch m;
+        if (std::regex_search(source.cbegin() + static_cast<std::ptrdiff_t>(body),
+                              source.cend(), m, return_pattern)) {
+            const char first = m[1].str().empty() ? '\0' : m[1].str().front();
+            if (first == '{')
+                return "dictionary";
+            if (first == '\'' || first == '"')
+                return "string";
+            if (first != '\0' && (std::isdigit(static_cast<unsigned char>(first)) ||
+                                  first == '-' || first == '+'))
+                return "int64";
+        }
+        return "dictionary";
+    }
+    return "dictionary";
+}
+
+std::string rewrite_legacy_arrays(const std::string& source) {
+    static const std::regex pattern(R"(\barray\s*@(?!\s*<))");
+    std::string output;
+    size_t pos = 0;
+    for (std::sregex_iterator it(source.cbegin(), source.cend(), pattern), end; it != end;
+         ++it) {
+        const size_t start = static_cast<size_t>(it->position());
+        const size_t token_end = start + static_cast<size_t>(it->length());
+        output.append(source, pos, start - pos);
+        output += "array<" + infer_array_subtype(source, token_end) + ">@";
+        pos = token_end;
+    }
+    output.append(source, pos, std::string::npos);
+    return output;
+}
+
+// `helper.member(args)` sugar on LocalModule → `helper.call("member", args)`.
+// Locals bound from `ctx.load_local(...)` are dynamic in the old runtime; the
+// native surface exposes `json@ call(const string &in, ?&in)` instead.
+std::string rewrite_local_module_calls(const std::string& source) {
+    static const std::regex capture_pattern(
+        R"(\b(?:auto|LocalModule\s*@)\s+([A-Za-z_]\w*)\s*=\s*ctx\s*\.\s*load_local\s*\()");
+    std::unordered_set<std::string> locals;
+    for (std::sregex_iterator it(source.cbegin(), source.cend(), capture_pattern), end;
+         it != end; ++it)
+        locals.emplace((*it)[1].str());
+    if (locals.empty())
+        return source;
+    static const std::unordered_set<std::string> passthrough = {"call", "get", "module_id",
+                                                               "member_names"};
+    std::string result = source;
+    for (const std::string& name : locals) {
+        const std::regex call_pattern("\\b" + name + "\\s*\\.\\s*([A-Za-z_]\\w*)\\s*\\(");
+        std::string rewritten;
+        size_t pos = 0;
+        for (std::sregex_iterator it(result.cbegin(), result.cend(), call_pattern), end;
+             it != end; ++it) {
+            const std::string member = (*it)[1].str();
+            const size_t start = static_cast<size_t>(it->position());
+            const size_t token_end = start + static_cast<size_t>(it->length());
+            rewritten.append(result, pos, start - pos);
+            if (passthrough.count(member) != 0) {
+                rewritten.append(result, start, token_end - start);
+                pos = token_end;
+                continue;
+            }
+            size_t args = skip_space(result, token_end);
+            rewritten += name + ".call(\"" + member + "\"";
+            if (args < result.size() && result[args] != ')')
+                rewritten += ", ";
+            pos = args;
+        }
+        rewritten.append(result, pos, std::string::npos);
+        result = std::move(rewritten);
+    }
+    return result;
+}
+
+// `"key": value` inside initializer braces — the legacy runtime accepted
+// JSON-style colons; the scriptdictionary addon needs `{{key, value}, ...}`
+// pair lists. Inside an initializer `{` (a brace whose previous significant
+// token is `=`, `(`, `,`, `[`, `{`, `return`, or another pair `:`) every
+// `"key": expr` becomes `{"key", expr}`.
+bool is_init_brace(const std::string& source, size_t brace) {
+    size_t j = brace;
+    while (j > 0) {
+        --j;
+        if (!std::isspace(static_cast<unsigned char>(source[j])))
+            break;
+    }
+    if (j >= source.size())
+        return false;
+    const char c = source[j];
+    if (c == '=' || c == '(' || c == ',' || c == '[' || c == '{' || c == ':')
+        return true;
+    // `return {`, `else {`-style case labels are rare in dict init; check the
+    // preceding identifier word.
+    if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+        size_t k = j + 1;
+        while (k > 0 && (std::isalnum(static_cast<unsigned char>(source[k - 1])) ||
+                         source[k - 1] == '_'))
+            --k;
+        const std::string word = source.substr(k, j + 1 - k);
+        return word == "return";
+    }
+    return false;
+}
+
+size_t dict_value_end(const std::string& source, size_t colon) {
+    // Scan from after `:` until a `,` or `}` at nesting depth 0.
+    size_t i = skip_space(source, colon + 1);
+    int parens = 0, brackets = 0, braces = 0;
+    bool in_string = false, in_line_comment = false, in_block_comment = false;
+    for (; i < source.size(); ++i) {
+        const char c = source[i];
+        const char next = i + 1 < source.size() ? source[i + 1] : '\0';
+        if (in_line_comment) {
+            if (c == '\n')
+                in_line_comment = false;
+            continue;
+        }
+        if (in_block_comment) {
+            if (c == '*' && next == '/') {
+                in_block_comment = false;
+                ++i;
+            }
+            continue;
+        }
+        if (in_string) {
+            if (c == '\\') {
+                ++i;
+                continue;
+            }
+            if (c == '"')
+                in_string = false;
+            continue;
+        }
+        if (c == '/' && next == '/') {
+            in_line_comment = true;
+            ++i;
+            continue;
+        }
+        if (c == '/' && next == '*') {
+            in_block_comment = true;
+            ++i;
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+            continue;
+        }
+        if (c == '(')
+            ++parens;
+        else if (c == ')')
+            --parens;
+        else if (c == '[')
+            ++brackets;
+        else if (c == ']')
+            --brackets;
+        else if (c == '{')
+            ++braces;
+        else if (c == '}') {
+            if (braces == 0)
+                break;
+            --braces;
+        } else if (c == ',' && parens == 0 && brackets == 0 && braces == 0) {
+            break;
+        }
+        if (parens < 0 || brackets < 0)
+            break;
+    }
+    return i;
+}
+
+std::string rewrite_dict_colons(const std::string& source) {
+    struct pair_span {
+        size_t open;
+        size_t colon;
+        size_t vend;
+    };
+    std::vector<pair_span> pairs;
+    std::vector<bool> init_stack;
+    bool in_string = false, in_heredoc = false, in_line_comment = false,
+         in_block_comment = false;
+    size_t string_open = std::string::npos;
+    for (size_t i = 0; i < source.size();) {
+        const char c = source[i];
+        const char next = i + 1 < source.size() ? source[i + 1] : '\0';
+        if (in_line_comment) {
+            if (c == '\n')
+                in_line_comment = false;
+            ++i;
+            continue;
+        }
+        if (in_block_comment) {
+            if (c == '*' && next == '/') {
+                in_block_comment = false;
+                i += 2;
+            } else {
+                ++i;
+            }
+            continue;
+        }
+        if (in_heredoc) {
+            if (c == '"' && next == '"' && i + 2 < source.size() &&
+                source[i + 2] == '"') {
+                in_heredoc = false;
+                i += 3;
+            } else {
+                ++i;
+            }
+            continue;
+        }
+        if (in_string) {
+            if (c == '\\') {
+                i += 2;
+                continue;
+            }
+            if (c == '"') {
+                in_string = false;
+                size_t j = i + 1;
+                while (j < source.size() &&
+                       (source[j] == ' ' || source[j] == '\t'))
+                    ++j;
+                if (j < source.size() && source[j] == ':' &&
+                    (j + 1 >= source.size() || source[j + 1] != ':') &&
+                    !init_stack.empty() && init_stack.back()) {
+                    pairs.push_back({string_open, j,
+                                     dict_value_end(source, j)});
+                }
+            }
+            ++i;
+            continue;
+        }
+        if (c == '/' && next == '/') {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+        if (c == '/' && next == '*') {
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+        if (c == '"' && next == '"' && i + 2 < source.size() &&
+            source[i + 2] == '"') {
+            in_heredoc = true;
+            i += 3;
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+            string_open = i;
+            ++i;
+            continue;
+        }
+        if (c == '{')
+            init_stack.push_back(is_init_brace(source, i));
+        else if (c == '}' && !init_stack.empty())
+            init_stack.pop_back();
+        ++i;
+    }
+    if (pairs.empty())
+        return source;
+    // Splice: `{` before the key string, `,` for the `:`, `}` at value end.
+    std::vector<std::pair<size_t, char>> inserts;
+    for (const auto& pair : pairs) {
+        inserts.emplace_back(pair.open, '{');
+        inserts.emplace_back(pair.vend, '}');
+    }
+    std::sort(inserts.begin(), inserts.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::unordered_set<size_t> colons;
+    for (const auto& pair : pairs)
+        colons.insert(pair.colon);
+    std::string output;
+    output.reserve(source.size() + pairs.size() * 2);
+    size_t insert_index = 0;
+    for (size_t i = 0; i < source.size(); ++i) {
+        while (insert_index < inserts.size() && inserts[insert_index].first == i) {
+            output += inserts[insert_index].second;
+            ++insert_index;
+        }
+        output += colons.count(i) != 0 ? ',' : source[i];
+    }
+    while (insert_index < inserts.size()) {
+        output += inserts[insert_index].second;
+        ++insert_index;
+    }
+    return output;
+}
+
+// `auto name = { ... }` cannot deduce an anonymous init list; promote it to a
+// `dictionary@` (first element is a `"key":` pair) or `array<dictionary>@`
+// (elements are dictionary@-producing ui.* builders / handles).
+std::string rewrite_auto_inits(const std::string& source) {
+    static const std::regex pattern(R"(\bauto\s+[A-Za-z_]\w*\s*=\s*\{)");
+    std::string output;
+    size_t pos = 0;
+    for (std::sregex_iterator it(source.cbegin(), source.cend(), pattern), end; it != end;
+         ++it) {
+        const size_t start = static_cast<size_t>(it->position());
+        const size_t token_end = start + static_cast<size_t>(it->length());
+        const size_t brace = source.rfind('{', token_end - 1);
+        bool is_dictionary = false;
+        if (brace != std::string::npos) {
+            for (size_t j = brace + 1; j < source.size(); ++j) {
+                const char c = source[j];
+                if (std::isspace(static_cast<unsigned char>(c)) || c == '\n')
+                    continue;
+                if (c == '"') {
+                    size_t k = j + 1;
+                    while (k < source.size() && source[k] != '"' && source[k] != '\n') {
+                        if (source[k] == '\\')
+                            ++k;
+                        ++k;
+                    }
+                    size_t l = k + 1;
+                    while (l < source.size() &&
+                           (source[l] == ' ' || source[l] == '\t'))
+                        ++l;
+                    is_dictionary = l < source.size() && source[l] == ':';
+                }
+                break;
+            }
+        }
+        output.append(source, pos, start - pos);
+        output += is_dictionary ? "dictionary@" : "array<dictionary>@" ;
+        pos = start + 4; // consume just the `auto` keyword
+    }
+    output.append(source, pos, std::string::npos);
+    return output;
+}
+
 } // namespace
+
+bool as_script_declares_ctx_global(const std::string& source) {
+    static const std::regex pattern(
+        R"((?:^|\n)[ \t]*PluginContext\s*@\s*ctx\b)");
+    return std::regex_search(source, pattern);
+}
+
+std::string as_rewrite_legacy_source(const std::string& source) {
+    std::string rewritten = rewrite_local_module_calls(source);
+    rewritten = rewrite_auto_inits(rewritten);
+    rewritten = rewrite_dict_colons(rewritten);
+    return rewrite_legacy_arrays(rewritten);
+}
 
 int32_t register_plugin_state(const shared_plugin_state& plugin) {
     if (!plugin)
@@ -130,10 +523,12 @@ void retain_plugin_error(as_plugin_s& plugin, const char* phase, int32_t status,
 #else
     (void)context;
 #endif
+    std::lock_guard lock(g_plugin_error_mutex);
     plugin.retained_errors[error.phase] = std::move(error);
 }
 
 void clear_plugin_error(as_plugin_s& plugin, const char* phase) {
+    std::lock_guard lock(g_plugin_error_mutex);
     if (phase != nullptr)
         plugin.retained_errors.erase(phase);
 }
@@ -142,7 +537,7 @@ std::string plugin_error_text(as_plugin_handle_t plugin, const char* phase, cons
     const shared_plugin_state state = acquire_plugin_state(plugin);
     if (!state)
         return fallback == nullptr ? std::string{} : std::string(fallback);
-    std::lock_guard lock(state->call_mutex);
+    std::lock_guard lock(g_plugin_error_mutex);
     const auto found = state->retained_errors.find(phase == nullptr ? "" : phase);
     return found == state->retained_errors.end()
                ? (fallback == nullptr ? std::string{} : std::string(fallback))
@@ -255,7 +650,8 @@ int32_t execute_lifecycle(as_plugin_s& plugin, asIScriptFunction* function, cons
                             "AngelScript lifecycle context binding failed");
         return SAO_ERR_INVALID_ARGUMENT;
     }
-    if (plugin.context->Execute() != asEXECUTION_FINISHED) {
+    const int exec_rc = plugin.context->Execute();
+    if (exec_rc != asEXECUTION_FINISHED) {
         return capture_execution_error(plugin, plugin.context, phase,
                                        "AngelScript lifecycle did not finish");
     }
@@ -280,7 +676,12 @@ int32_t teardown_plugin_locked(as_plugin_s& plugin) {
     // release ctx-surface callbacks (funcdef refs, provider registrations)
     // while the module + engine are still alive.
     if (plugin.bound_context != nullptr) {
-        ctx_surface_teardown(plugin.bound_context);
+        const int32_t status = ctx_surface_teardown(plugin.bound_context);
+        if (status != SAO_OK) {
+            plugin.lifecycle = plugin_runtime_state::cleanup_pending;
+            retain_plugin_error(plugin, "teardown", status, "AngelScript panel rundown failed");
+            return status;
+        }
     }
     // Clearing the bound `ctx` global is best-effort: modules loaded via the
     // direct ashost path (no module-bridge ctx) legitimately have no ctx
@@ -388,12 +789,20 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ashost_load_scri
             return rollback_failed_load(plugin, SAO_ERR_OS_CALL_FAILED, out_plugin);
         constexpr char bridge_section[] = "PluginContext@ ctx;";
         const std::string engine_preamble = sao_as_engine_preamble(engine);
-        if (plugin->module->AddScriptSection("sao_module_bridge", bridge_section,
-                                             sizeof(bridge_section) - 1) < 0 or
+        const std::string rewritten_source = as_rewrite_legacy_source(source);
+        // Skip the injected `ctx` global when the script already declares it;
+        // the older plugin convention declares `PluginContext@ ctx` itself.
+        const bool inject_ctx = !as_script_declares_ctx_global(rewritten_source);
+        const bool built =
+            !(inject_ctx && plugin->module->AddScriptSection(
+                                "sao_module_bridge", bridge_section,
+                                sizeof(bridge_section) - 1) < 0) &&
             plugin->module->AddScriptSection("sao_engine_preamble", engine_preamble.c_str(),
-                                             engine_preamble.size()) < 0 or
-            plugin->module->AddScriptSection(entry_relative, source.c_str(), source.size()) < 0 or
-            plugin->module->Build() < 0) {
+                                             engine_preamble.size()) >= 0 &&
+            plugin->module->AddScriptSection(entry_relative, rewritten_source.c_str(),
+                                             rewritten_source.size()) >= 0 &&
+            plugin->module->Build() >= 0;
+        if (!built) {
             return rollback_failed_load(plugin, SAO_ERR_INVALID_ARGUMENT, out_plugin);
         }
         status = sao_plugins_ashost_bind_ctx(engine, ctx_ptr, plugin->module_name.c_str());

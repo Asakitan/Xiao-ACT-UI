@@ -69,6 +69,13 @@ using shared_plugin_state = std::shared_ptr<as_plugin_s>;
 // section compiles with or without the sao_module_bridge `ctx` global.
 std::string sao_as_engine_preamble(asIScriptEngine* engine);
 
+// Legacy-source compatibility preprocessing (as_call.cpp): reports whether the
+// script already declares the module-level `PluginContext@ ctx` global, and
+// rewrites old-platform shorthand (`array@` unsubscripted, `helper.member(...)`
+// dispatch on LocalModule) into forms the vendored AS 2.36 engine compiles.
+bool as_script_declares_ctx_global(const std::string& source);
+std::string as_rewrite_legacy_source(const std::string& source);
+
 int32_t register_plugin_state(const shared_plugin_state& plugin);
 shared_plugin_state acquire_plugin_state(as_plugin_handle_t plugin);
 shared_plugin_state acquire_plugin_state_by_bound_context(void* bound_context);

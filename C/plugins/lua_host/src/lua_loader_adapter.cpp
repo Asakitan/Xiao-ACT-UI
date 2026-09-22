@@ -5,6 +5,7 @@
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #include "sao/plugins/lua_host/lua_call.h"
 #include "sao/plugins/lua_host/lua_error.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
 #include "sao/plugins/lua_host/lua_sandbox.h"
 #include "sao/plugins/lua_host/lua_stdlib.h"
 
@@ -201,6 +202,23 @@ int32_t create_plugin_runtime(lua_loader_adapter_owner_s* owner,
         return SAO_ERR_NOT_INITIALIZED;
     }
 
+    const auto declares = [&manifest](const char* value) {
+        for (const auto& item : manifest.requires_list) {
+            if (item == value)
+                return true;
+        }
+        return false;
+    };
+    const auto declares_bind = [&manifest](const char* value) {
+        for (const auto& item : manifest.platform_binds) {
+            if (item == value)
+                return true;
+        }
+        return false;
+    };
+    const bool declared_hotkeys =
+        !manifest.hotkeys.empty() || declares("hotkeys") || declares("hotkey") ||
+        declares_bind("ctx.register_hotkey") || declares_bind("ctx.unregister_hotkey");
     const bool unsafe = has_permission(manifest, "unsafe");
     const bool allow_fs = unsafe || has_permission(manifest, "fs");
     const bool allow_process = unsafe || has_permission(manifest, "process");
@@ -213,7 +231,8 @@ int32_t create_plugin_runtime(lua_loader_adapter_owner_s* owner,
     add_permission(allow_fs, detail::permission_fs);
     add_permission(unsafe || has_permission(manifest, "net"), detail::permission_net);
     add_permission(allow_process, detail::permission_process);
-    add_permission(unsafe || has_permission(manifest, "hotkey"), detail::permission_hotkey);
+    add_permission(unsafe || has_permission(manifest, "hotkey") || declared_hotkeys,
+                   detail::permission_hotkey);
     add_permission(unsafe || has_permission(manifest, "memory_access"),
                    detail::permission_memory_access);
     add_permission(unsafe || has_permission(manifest, "input_control"),
@@ -229,7 +248,7 @@ int32_t create_plugin_runtime(lua_loader_adapter_owner_s* owner,
 
     lua_stdlib_config stdlib{};
     stdlib.io = allow_fs;
-    stdlib.os = allow_fs || allow_process;
+    stdlib.os = true; // sandbox exposes a restricted os subset (time/clock/date) to all plugins
     stdlib.package_ = allow_require;
     stdlib.debug_ = unsafe;
     status = sao_plugins_luahost_install_stdlib(state, &stdlib);
@@ -382,6 +401,9 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
 
         sao::plugins::loader::plugin_context_t* context = nullptr;
         int32_t status = sao::plugins::loader::sao_plugins_lifecycle_get_context(plugin, &context);
+        if (status == SAO_OK && context != nullptr)
+            sao::plugins::script_ctx::ctx_surface_advisory_check(
+                sao::plugins::loader::engine_kind::lua, context, manifest);
         std::string error;
         if (status == SAO_OK) {
             status = create_plugin_runtime(owner, *manifest, context, host, lua_plugin, error);
@@ -625,6 +647,12 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* use
     }
 }
 
+int32_t SAO_PLUGINS_CALL adapter_last_error(void* user_data, loader_plugin_handle_t plugin,
+                                            char** out_utf8) {
+    return sao_plugins_luahost_loader_adapter_get_last_error(
+        static_cast<lua_loader_adapter_owner_t>(user_data), plugin, out_utf8);
+}
+
 sao::plugins::loader::host_adapter_vtable adapter_vtable(lua_loader_adapter_owner_s* owner) {
     sao::plugins::loader::host_adapter_vtable table{};
     table.load_plugin = adapter_load;
@@ -634,6 +662,8 @@ sao::plugins::loader::host_adapter_vtable adapter_vtable(lua_loader_adapter_owne
     table.call_on_unload = adapter_on_unload;
     table.unload_plugin = adapter_unload;
     table.host_user_data = owner;
+    table.get_last_error = adapter_last_error;
+    table.free_error_string = sao_plugins_luahost_free_string;
     return table;
 }
 

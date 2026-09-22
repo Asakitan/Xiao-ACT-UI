@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -59,6 +60,30 @@ void publish(plugin_handle_t plugin, lifecycle_event event, const char* message)
         } catch (...) {
         }
     }
+}
+
+std::string adapter_error_text(const host_adapter_vtable& adapter,
+                               plugin_handle_t plugin) noexcept {
+    if (adapter.get_last_error == nullptr)
+        return {};
+    char* utf8 = nullptr;
+    try {
+        if (adapter.get_last_error(adapter.host_user_data, plugin, &utf8) != SAO_OK ||
+            utf8 == nullptr) {
+            return {};
+        }
+    } catch (...) {
+        return {};
+    }
+    std::string text(utf8);
+    try {
+        if (adapter.free_error_string != nullptr)
+            adapter.free_error_string(utf8);
+        else
+            std::free(utf8);
+    } catch (...) {
+    }
+    return text;
 }
 
 std::string dependency_id(std::string requirement) {
@@ -703,12 +728,15 @@ int32_t load_single(plugin_handle_t plugin, std::unordered_set<plugin_handle_t>&
             if (dependency_status != SAO_OK)
                 status = dependency_status;
         }
+        const std::string detail = adapter_error_text(adapter.value(), plugin);
+        const std::string failure_text =
+            detail.empty() ? std::string("plugin load failed") : detail;
         {
             std::lock_guard lock(plugin->mutex);
             plugin->state = lifecycle_state::failed;
-            plugin->last_error = "plugin load failed";
+            plugin->last_error = failure_text;
         }
-        publish(plugin, lifecycle_event::load_failed, "plugin load failed");
+        publish(plugin, lifecycle_event::load_failed, failure_text.c_str());
         return status;
     }
     {
@@ -957,6 +985,7 @@ sao_plugins_lifecycle_unload(plugin_handle_t plugin) {
                 plugin->stop_requested.store(false);
                 plugin_context_clear_stop(context);
             }
+            std::string failure_text;
             {
                 std::lock_guard lock(plugin->mutex);
                 plugin->state = blocked && previous_state != lifecycle_state::failed
@@ -964,11 +993,21 @@ sao_plugins_lifecycle_unload(plugin_handle_t plugin) {
                                     : lifecycle_state::failed;
                 if (disable_completed)
                     plugin->manifest.enabled = false;
-                plugin->last_error = blocked ? "unload blocked" : "unload failed";
+                failure_text = blocked ? std::string("unload blocked")
+                                       : std::string("unload failed");
+                plugin->last_error = failure_text;
+            }
+            if (!blocked) {
+                const std::string detail = adapter_error_text(adapter.value(), plugin);
+                if (!detail.empty()) {
+                    failure_text = detail;
+                    std::lock_guard lock(plugin->mutex);
+                    plugin->last_error = failure_text;
+                }
             }
             publish(plugin,
                     blocked ? lifecycle_event::unload_blocked : lifecycle_event::unload_failed,
-                    blocked ? "unload blocked" : "unload failed");
+                    failure_text.c_str());
             return blocked ? SAO_PLUGINS_ERR_BUSY : status;
         }
 

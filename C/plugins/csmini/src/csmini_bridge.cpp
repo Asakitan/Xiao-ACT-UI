@@ -227,7 +227,7 @@ struct csmini_script_module : script::script_module {
         } catch (const std::exception& e) {
             if (err)
                 *err = e.what();
-            return -5;
+            return SAO_ERR_UNKNOWN;
         }
     }
 };
@@ -288,7 +288,7 @@ int32_t ops_load_module(plugin_context_t* ctx, const wchar_t* abs_path,
         } catch (...) {
             if (out_error)
                 *out_error = "csmini interpreter init failed";
-            return -5;
+            return SAO_ERR_UNKNOWN;
         }
         s = ns.get();
         g_helpers.emplace(pid, std::move(ns));

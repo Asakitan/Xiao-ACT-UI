@@ -5,6 +5,7 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -213,6 +214,8 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
             erase_failed_load(owner, plugin);
             return status == SAO_OK ? SAO_ERR_NOT_INITIALIZED : status;
         }
+        sao::plugins::script_ctx::ctx_surface_advisory_check(
+            sao::plugins::loader::engine_kind::emma, context, manifest);
 
         const wchar_t* plugin_dir = sao::plugins::loader::sao_plugins_ctx_path(context);
         const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(context);
@@ -379,6 +382,12 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* hos
     }
 }
 
+int32_t SAO_PLUGINS_CALL adapter_last_error(void* user_data, loader_plugin_handle_t plugin,
+                                            char** out_utf8) noexcept {
+    return sao_plugins_emma_loader_adapter_get_last_error(
+        static_cast<emma_loader_adapter_owner_t>(user_data), plugin, out_utf8);
+}
+
 sao::plugins::loader::host_adapter_vtable
 adapter_vtable(emma_loader_adapter_owner_s* owner) noexcept {
     sao::plugins::loader::host_adapter_vtable table{};
@@ -389,6 +398,8 @@ adapter_vtable(emma_loader_adapter_owner_s* owner) noexcept {
     table.call_on_unload = adapter_on_unload;
     table.unload_plugin = adapter_unload;
     table.host_user_data = owner;
+    table.get_last_error = adapter_last_error;
+    table.free_error_string = sao_plugins_emma_free_string;
     return table;
 }
 

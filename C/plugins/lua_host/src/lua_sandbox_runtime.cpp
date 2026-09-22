@@ -314,8 +314,13 @@ int arm_body(lua_State* state) {
     }
     static const char* const denied_os[] = {"execute", "exit",      "remove",
                                             "rename",  "setlocale", "tmpname"};
+    static const char* const denied_os_restricted[] = {"execute",   "exit",    "remove",
+                                                       "rename",    "setlocale",
+                                                       "tmpname",   "getenv"};
     if (config->allow_process || config->allow_fs) {
         copy_module(state, "os", environment, denied_os, 6);
+    } else {
+        copy_module(state, "os", environment, denied_os_restricted, 7);
     }
     static const char* const denied_io[] = {"popen"};
     if (config->allow_fs) {

@@ -51,6 +51,56 @@ constexpr std::string_view kHandshakeResponse = "SAO_AI_EDITOR_READY 1";
 constexpr std::string_view kShutdownRequest = "shutdown";
 constexpr std::string_view kShutdownResponse = "shutdown-ok";
 
+void append_trace_line(const wchar_t* message) {
+    wchar_t enabled[2]{};
+    if (message == nullptr ||
+        GetEnvironmentVariableW(L"SAO_AI_EDITOR_TRACE", enabled,
+                                static_cast<DWORD>(std::size(enabled))) == 0u ||
+        enabled[0] != L'1') {
+        return;
+    }
+    wchar_t directory[MAX_PATH]{};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", directory,
+                                static_cast<DWORD>(std::size(directory))) == 0u) {
+        return;
+    }
+    const std::filesystem::path trace_directory =
+        std::filesystem::path(directory) / L"SAOAuto";
+    std::error_code create_error;
+    std::filesystem::create_directories(trace_directory, create_error);
+    if (create_error) {
+        return;
+    }
+    const auto trace_path = trace_directory / L"ai-editor-trace.log";
+    const HANDLE file = CreateFileW(trace_path.c_str(), FILE_APPEND_DATA,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == nullptr || file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    wchar_t line[1024]{};
+    const int length = _snwprintf_s(line, std::size(line), _TRUNCATE,
+                                    L"[pid=%lu tid=%lu] %ls\r\n",
+                                    static_cast<unsigned long>(GetCurrentProcessId()),
+                                    static_cast<unsigned long>(GetCurrentThreadId()),
+                                    message);
+    if (length <= 0) {
+        return;
+    }
+    OutputDebugStringW(line);
+    const DWORD bytes = static_cast<DWORD>(length * sizeof(wchar_t));
+    DWORD written = 0;
+    (void)WriteFile(file, line, bytes, &written, nullptr);
+    CloseHandle(file);
+}
+
+void trace_stage(const wchar_t* stage, int32_t status = 0) {
+    wchar_t message[768]{};
+    (void)_snwprintf_s(message, std::size(message), _TRUNCATE, L"%ls status=%d",
+                       stage != nullptr ? stage : L"", static_cast<int>(status));
+    append_trace_line(message);
+}
+
 // Dark palette lifted verbatim from the SAO theme's dark table
 // (platform/ui/include/sao/ui/theme.h: APP_BG/APP_CARD/APP_TEXT tokens),
 // duplicated here in plain Win32 GDI form. This window only exists when
@@ -1354,8 +1404,10 @@ create_runtime_session(const std::filesystem::path& workspace) {
     runtime_config.struct_size = sizeof(runtime_config);
     runtime_config.workspace_root_utf8 = workspace_utf8->c_str();
     sao_ai_editor_runtime_t raw_runtime = nullptr;
+    trace_stage(L"runtime_create.begin");
     const int32_t create_status =
         sao_ai_editor_runtime_create(&runtime_config, &raw_runtime);
+    trace_stage(L"runtime_create.end", create_status);
     if (create_status != SAO_AI_EDITOR_OK || raw_runtime == nullptr) {
         return nullptr;
     }
@@ -1415,36 +1467,50 @@ int run_ui_smoke(HINSTANCE instance, int show_command,
 }
 
 int run_child(const Arguments& arguments) {
+    trace_stage(L"child.begin");
     if (!is_local_pipe_name(arguments.pipe_name)) {
+        trace_stage(L"child.pipe_name.invalid", 3);
         return 3;
     }
     const auto workspace = resolve_workspace(arguments.workspace);
     if (!workspace.has_value()) {
+        trace_stage(L"child.workspace.invalid", 4);
         return 4;
     }
 
+    trace_stage(L"child.pipe_connect.begin");
     auto pipe = connect_pipe(arguments.pipe_name);
     if (!pipe) {
+        trace_stage(L"child.pipe_connect.failed", 5);
         return 5;
     }
+    trace_stage(L"child.pipe_connect.done");
 
     ScopedHandle handshake_stop(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (!handshake_stop) {
+        trace_stage(L"child.stop_event.failed", 5);
         return 5;
     }
+    trace_stage(L"child.hello_read.begin");
     std::string message;
     if (!receive_frame(pipe.get(), handshake_stop.get(), message) ||
         message != kHandshakeRequest) {
+        trace_stage(L"child.hello_read.failed", 6);
         return 6;
     }
+    trace_stage(L"child.hello_read.done");
 
     const auto session = create_runtime_session(*workspace);
     if (!session) {
+        trace_stage(L"child.runtime_session.failed", 7);
         return 7;
     }
+    trace_stage(L"child.ready_write.begin");
     if (!send_frame(pipe.get(), session->stop_event(), kHandshakeResponse)) {
+        trace_stage(L"child.ready_write.failed", 8);
         return 8;
     }
+    trace_stage(L"child.ready_write.done");
 
     session->attach_pipe(pipe.get());
     const int result = run_pipe_requests(session, pipe.get(), nullptr);
@@ -1551,9 +1617,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
                 const char newline = '\n';
                 WriteFile(stdout_handle, &newline, 1, &written, nullptr);
             }
-            std::string_view response_view(response.data(), required);
+            const std::string_view response_view(response.data(), required);
+            const nlohmann::json response_json =
+                nlohmann::json::parse(response_view, nullptr, false);
             const bool has_error =
-                response_view.find("\"error\":{") != std::string_view::npos;
+                !response_json.is_object() ||
+                (response_json.contains("error") &&
+                 !response_json["error"].is_null());
             sao_ai_editor_runtime_destroy(runtime);
             return has_error ? 14 : 0;
         }

@@ -4,7 +4,10 @@
 #include "sao/plugins/sdk_binding/binding_common.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -207,6 +210,87 @@ void json_get_bool(asIScriptGeneric* generic) {
     });
 }
 
+// Legacy implicit scalar conversions — old scripts assign json@ straight into
+// bool/int/double/string locals, so the json type exposes opImplConv overloads.
+void json_op_conv_bool(asIScriptGeneric* generic) {
+    json_callback_barrier("json bool conversion failed", [generic] {
+        const auto* object = static_cast<const json_value*>(generic->GetObject());
+        bool out = false;
+        if (object != nullptr) {
+            const ordered_json& value = object->value;
+            if (value.is_boolean())
+                out = value.get<bool>();
+            else if (value.is_number())
+                out = value.get<double>() != 0.0;
+            else if (value.is_string()) {
+                const std::string& text = value.get_ref<const std::string&>();
+                out = !(text.empty() || text == "0" || text == "false" || text == "null");
+            } else if (!value.is_null()) {
+                out = true;
+            }
+        }
+        generic->SetReturnByte(static_cast<asBYTE>(out ? 1 : 0));
+    });
+}
+
+void json_op_conv_int(asIScriptGeneric* generic) {
+    json_callback_barrier("json integer conversion failed", [generic] {
+        const auto* object = static_cast<const json_value*>(generic->GetObject());
+        int64_t out = 0;
+        if (object != nullptr) {
+            const ordered_json& value = object->value;
+            if (value.is_number_integer() || value.is_number_unsigned())
+                out = value.get<int64_t>();
+            else if (value.is_number_float())
+                out = static_cast<int64_t>(value.get<double>());
+            else if (value.is_boolean())
+                out = value.get<bool>() ? 1 : 0;
+            else if (value.is_string())
+                out = static_cast<int64_t>(std::strtoll(
+                    value.get_ref<const std::string&>().c_str(), nullptr, 10));
+        }
+        generic->SetReturnQWord(static_cast<asQWORD>(out));
+    });
+}
+
+void json_op_conv_number(asIScriptGeneric* generic) {
+    json_callback_barrier("json number conversion failed", [generic] {
+        const auto* object = static_cast<const json_value*>(generic->GetObject());
+        double out = 0.0;
+        if (object != nullptr) {
+            const ordered_json& value = object->value;
+            if (value.is_number())
+                out = value.get<double>();
+            else if (value.is_boolean())
+                out = value.get<bool>() ? 1.0 : 0.0;
+            else if (value.is_string())
+                out = std::strtod(value.get_ref<const std::string&>().c_str(), nullptr);
+        }
+        generic->SetReturnDouble(out);
+    });
+}
+
+void json_op_conv_string(asIScriptGeneric* generic) {
+    json_callback_barrier("json string conversion failed", [generic] {
+        const auto* object = static_cast<const json_value*>(generic->GetObject());
+        std::string out;
+        if (object != nullptr) {
+            const ordered_json& value = object->value;
+            if (value.is_string())
+                out = value.get<std::string>();
+            else if (value.is_number_float()) {
+                const double number = value.get<double>();
+                out = number == std::trunc(number)
+                          ? std::to_string(static_cast<int64_t>(number))
+                          : value.dump();
+            } else if (!value.is_null()) {
+                out = value.dump();
+            }
+        }
+        new (generic->GetAddressOfReturnLocation()) std::string(std::move(out));
+    });
+}
+
 void json_set_string(asIScriptGeneric* generic) {
     json_callback_barrier("json string update failed", [generic] {
         auto* object = static_cast<json_value*>(generic->GetObject());
@@ -329,6 +413,22 @@ int32_t register_json(asIScriptEngine* engine) {
                                           asFUNCTION(json_get_bool), asCALL_GENERIC);
     if (!registration_ok(result))
         return SAO_ERR_OS_CALL_FAILED;
+    result = engine->RegisterObjectMethod("json", "bool opImplConv() const",
+                                          asFUNCTION(json_op_conv_bool), asCALL_GENERIC);
+    if (!registration_ok(result))
+        return SAO_ERR_OS_CALL_FAILED;
+    result = engine->RegisterObjectMethod("json", "int64 opImplConv() const",
+                                          asFUNCTION(json_op_conv_int), asCALL_GENERIC);
+    if (!registration_ok(result))
+        return SAO_ERR_OS_CALL_FAILED;
+    result = engine->RegisterObjectMethod("json", "double opImplConv() const",
+                                          asFUNCTION(json_op_conv_number), asCALL_GENERIC);
+    if (!registration_ok(result))
+        return SAO_ERR_OS_CALL_FAILED;
+    result = engine->RegisterObjectMethod("json", "string opImplConv() const",
+                                          asFUNCTION(json_op_conv_string), asCALL_GENERIC);
+    if (!registration_ok(result))
+        return SAO_ERR_OS_CALL_FAILED;
     result = engine->RegisterObjectMethod("json", "void set(const string &in, const string &in)",
                                           asFUNCTION(json_set_string), asCALL_GENERIC);
     if (!registration_ok(result))
@@ -355,6 +455,118 @@ int32_t register_json(asIScriptEngine* engine) {
     return registration_ok(result) ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
 }
 
+// Legacy comparison support for `dict["key"]` results: old scripts compare a
+// dictionaryValue directly against `null`, `false` and other scalars. The addon
+// only ships opConv/opAssign, so we add a `?` opEquals that coerces both sides.
+int64_t dictvalue_other_i64(int type_id, const void* address) noexcept {
+    if (address == nullptr)
+        return 0;
+    switch (type_id) {
+    case asTYPEID_BOOL:
+    case asTYPEID_INT8:
+        return static_cast<int64_t>(*static_cast<const int8_t*>(address));
+    case asTYPEID_UINT8:
+        return static_cast<int64_t>(*static_cast<const uint8_t*>(address));
+    case asTYPEID_INT16:
+        return static_cast<int64_t>(*static_cast<const int16_t*>(address));
+    case asTYPEID_UINT16:
+        return static_cast<int64_t>(*static_cast<const uint16_t*>(address));
+    case asTYPEID_INT32:
+        return static_cast<int64_t>(*static_cast<const int32_t*>(address));
+    case asTYPEID_UINT32:
+        return static_cast<int64_t>(*static_cast<const uint32_t*>(address));
+    case asTYPEID_UINT64:
+        return static_cast<int64_t>(*static_cast<const uint64_t*>(address));
+    default:
+        return static_cast<int64_t>(*static_cast<const int64_t*>(address));
+    }
+}
+
+void dictvalue_op_equals(asIScriptGeneric* generic) {
+    json_callback_barrier("dictionaryValue compare failed", [generic] {
+        const auto* self = static_cast<const CScriptDictValue*>(generic->GetObject());
+        asIScriptEngine* engine = generic->GetEngine();
+        const int other_id = generic->GetArgTypeId(0);
+        // `?&in other` arg slots hold a pointer to the caller's storage —
+        // dereference once to reach the actual data.
+        void* other_slot = generic->GetAddressOfArg(0);
+        void* other_addr =
+            other_slot != nullptr ? *static_cast<void**>(other_slot) : nullptr;
+        bool equal = false;
+        if (self != nullptr) {
+            const int self_id = self->GetTypeId();
+            if (other_id == asTYPEID_VOID || other_addr == nullptr) {
+                equal = self_id == asTYPEID_VOID;
+            } else if ((other_id & asTYPEID_MASK_OBJECT) == 0) {
+                if (other_id == asTYPEID_DOUBLE || other_id == asTYPEID_FLOAT) {
+                    double value = 0.0;
+                    const double other =
+                        other_id == asTYPEID_DOUBLE
+                            ? *static_cast<const double*>(other_addr)
+                            : static_cast<double>(*static_cast<const float*>(other_addr));
+                    equal = self->Get(engine, value) && value == other;
+                } else {
+                    asINT64 value = 0;
+                    equal = self->Get(engine, value) &&
+                            value == static_cast<asINT64>(
+                                         dictvalue_other_i64(other_id, other_addr));
+                }
+            } else {
+                const asITypeInfo* info = engine->GetTypeInfoById(other_id);
+                const char* type_name = info != nullptr ? info->GetName() : "";
+                if (std::strcmp(type_name, "string") == 0) {
+                    std::string value;
+                    equal = self->Get(engine, &value, other_id) &&
+                            value == *static_cast<const std::string*>(other_addr);
+                } else if (std::strcmp(type_name, "dictionaryValue") == 0) {
+                    const auto* other =
+                        static_cast<const CScriptDictValue*>(other_addr);
+                    if (other != nullptr && self_id == other->GetTypeId()) {
+                        if (self_id == asTYPEID_VOID) {
+                            equal = true;
+                        } else if ((self_id & asTYPEID_OBJHANDLE) != 0) {
+                            equal = *static_cast<void* const*>(
+                                        self->GetAddressOfValue()) ==
+                                    *static_cast<void* const*>(
+                                        other->GetAddressOfValue());
+                        } else if ((self_id & asTYPEID_MASK_OBJECT) != 0) {
+                            // non-handle objects: only string gets a content
+                            // compare — other value types have no portable
+                            // storage in dictValue to fetch generically.
+                            const int base_self =
+                                self_id &
+                                ~(asTYPEID_OBJHANDLE | asTYPEID_HANDLETOCONST);
+                            const asITypeInfo* self_info =
+                                engine->GetTypeInfoById(base_self);
+                            if (self_info != nullptr &&
+                                std::strcmp(self_info->GetName(), "string") == 0) {
+                                std::string a;
+                                std::string b;
+                                equal = self->Get(engine, &a, base_self) &&
+                                        other->Get(engine, &b, base_self) && a == b;
+                            }
+                        } else {
+                            asINT64 ai = 0, bi = 0;
+                            double ad = 0.0, bd = 0.0;
+                            if (self->Get(engine, ai) && other->Get(engine, bi))
+                                equal = ai == bi;
+                            else if (self->Get(engine, ad) && other->Get(engine, bd))
+                                equal = ad == bd;
+                        }
+                    }
+                } else if ((other_id & asTYPEID_OBJHANDLE) != 0) {
+                    // other_addr points at the caller's handle variable.
+                    const void* other_obj = *static_cast<void* const*>(other_addr);
+                    equal = (self_id & asTYPEID_OBJHANDLE) != 0 &&
+                            *static_cast<void* const*>(self->GetAddressOfValue()) ==
+                                other_obj;
+                }
+            }
+        }
+        generic->SetReturnByte(static_cast<asBYTE>(equal ? 1 : 0));
+    });
+}
+
 int32_t perform_stdlib_install(asIScriptEngine* engine) {
 #if !defined(SAO_HAS_ANGELSCRIPT_ADDONS)
     (void)engine;
@@ -373,6 +585,14 @@ int32_t perform_stdlib_install(asIScriptEngine* engine) {
         RegisterScriptArray(engine, true);
     if (engine->GetTypeInfoByName("dictionary") == nullptr)
         RegisterScriptDictionary(engine);
+    // Legacy `dict["key"] == scalar|null` comparisons.
+    if (engine->GetTypeInfoByName("dictionaryValue") != nullptr) {
+        const int dict_eq = engine->RegisterObjectMethod(
+            "dictionaryValue", "bool opEquals(?&in other) const",
+            asFUNCTION(dictvalue_op_equals), asCALL_GENERIC);
+        if (dict_eq != asALREADY_REGISTERED && !registration_ok(dict_eq))
+            return SAO_ERR_OS_CALL_FAILED;
+    }
     if (engine->GetGlobalFunctionByDecl("float cos(float)") == nullptr)
         RegisterScriptMath(engine);
     if (engine->GetTypeInfoByName("datetime") == nullptr)

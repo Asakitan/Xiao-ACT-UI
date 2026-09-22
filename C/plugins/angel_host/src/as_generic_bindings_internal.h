@@ -32,7 +32,7 @@ int32_t register_ctx_surface_bindings(asIScriptEngine* engine) noexcept;
 // Releases every ctx-surface record owned by `bound_context` (callbacks, menu
 // providers, engine refs, the owner dictionary). Called from
 // teardown_plugin_locked while the engine and module are still alive.
-void ctx_surface_teardown(void* bound_context) noexcept;
+int32_t ctx_surface_teardown(void* bound_context) noexcept;
 
 // json@ bridging — implemented in as_stdlib.cpp where json_value is visible.
 void* json_ref_from_ordered(asIScriptEngine* engine,

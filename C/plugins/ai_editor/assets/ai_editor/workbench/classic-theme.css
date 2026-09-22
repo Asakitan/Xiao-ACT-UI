@@ -3,6 +3,7 @@
   font-family: "SAO Product";
   src: url("./fonts/SAOUI.ttf") format("truetype"), url("https://sao-fonts.local/SAOUI.ttf") format("truetype");
   font-display: block;
+  size-adjust: 112%;
   unicode-range: U+0000-024F, U+1E00-1EFF;
 }
 @font-face {
@@ -168,7 +169,7 @@ button, input, select, textarea { font-family: var(--sans); }
 .chat-messages-inner { max-width: 848px; padding: 24px; }
 .chat-welcome { width: 100%; max-width: 560px; margin: 0 auto; padding: 36px 0; min-height: 0; flex: 1; }
 .chat-welcome-mark { width: 40px; height: 40px; font-size: 28px; border: 0; background: transparent; color: var(--fg-accent); margin-bottom: 14px; }
-.chat-welcome-title { font: 600 24px/1.3 var(--sans); letter-spacing: -.025em; color: var(--fg-bright); margin-bottom: 12px; }
+.chat-welcome-title { font: 600 24px/1.3 var(--sans); letter-spacing: .025em; color: var(--fg-bright); margin-bottom: 12px; }
 .chat-welcome-meta { gap: 6px 12px; margin: 0 0 16px; }
 .chat-welcome-pill { border: 0; border-radius: 0; background: transparent; padding: 0; color: var(--fg-dim); font-size: 11px; }
 .chat-welcome-pill.strong { color: var(--fg); }

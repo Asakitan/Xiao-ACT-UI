@@ -119,10 +119,11 @@ public:
     using PostToPage =
         std::function<bool(const std::string& panel_id, const Json& message)>;
 
-    // File picker delegate — production wires this to whatever native
-    // dialog the AI editor has once one lands.  A null delegate causes
-    // the load_driver command to reply {"status": "not_implemented"}
-    // rather than crash or open a phantom prompt.
+    // File picker delegate — production wires this to the native
+    // GetOpenFileNameW dialog (ai_editor_native_runtime.cpp).  When no
+    // picker is installed, the load_driver command still runs its real
+    // chain for callers that pass args.driver_path explicitly; only the
+    // UI-dialog arm reports an explicit error reply.
     using FilePicker = std::function<std::string()>;
 
     KernelMapPanelProvider();
@@ -178,7 +179,7 @@ private:
     Json handle_unmap(const std::shared_ptr<IKernelMapBridge>& bridge,
                       const Json& args);
     Json handle_load_driver(const std::shared_ptr<IKernelMapBridge>& bridge,
-                            const FilePicker& picker);
+                            const FilePicker& picker, const Json& args);
     // Re-enumerate the bridge and merge status + enumerate into a single
     // snapshot payload so the panel repaints from one refresh reply.
     Json handle_refresh(const std::shared_ptr<IKernelMapBridge>& bridge);

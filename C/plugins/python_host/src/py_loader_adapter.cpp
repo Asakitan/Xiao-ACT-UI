@@ -9,6 +9,9 @@
 
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
+#if defined(SAO_PYHOST_HAS_CTX_SURFACE)
+#include "sao/plugins/script_ctx/ctx_surface.h"
+#endif
 
 #include <windows.h>
 
@@ -463,6 +466,11 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
             return status == SAO_OK ? SAO_ERR_NOT_INITIALIZED : status;
         }
 
+#if defined(SAO_PYHOST_HAS_CTX_SURFACE)
+        sao::plugins::script_ctx::ctx_surface_advisory_check(
+            sao::plugins::loader::engine_kind::python, loader_context, manifest);
+#endif
+
         std::wstring plugin_dir;
         if (!utf8_to_wide(manifest->source_path, plugin_dir)) {
             finish_failed_load(owner, plugin, "plugin source_path is not valid UTF-8");
@@ -676,6 +684,12 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* hos
     }
 }
 
+int32_t SAO_PLUGINS_CALL adapter_last_error(void* user_data, loader_plugin_handle_t plugin,
+                                            char** out_utf8) {
+    return sao_plugins_pyhost_loader_adapter_get_last_error(
+        static_cast<py_loader_adapter_owner_t>(user_data), plugin, out_utf8);
+}
+
 sao::plugins::loader::host_adapter_vtable adapter_vtable(py_loader_adapter_owner_s* owner) {
     sao::plugins::loader::host_adapter_vtable table{};
     table.load_plugin = adapter_load;
@@ -685,6 +699,8 @@ sao::plugins::loader::host_adapter_vtable adapter_vtable(py_loader_adapter_owner
     table.call_on_unload = adapter_on_unload;
     table.unload_plugin = adapter_unload;
     table.host_user_data = owner;
+    table.get_last_error = adapter_last_error;
+    table.free_error_string = sao_plugins_pyhost_free_string;
     return table;
 }
 

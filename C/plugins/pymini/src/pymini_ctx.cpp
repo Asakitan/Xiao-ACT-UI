@@ -12,10 +12,13 @@
 #include "pymini_interp.h"
 
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/entity_provider.h"
+#include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_manifest.h"
 #include "sao/plugins/script_ctx/ctx_surface.h"
 #include "sao/plugins/script_ctx/runtime_bridge.h"
 #include "sao/plugins/script_ctx/script_ui.h"
+#include "sao/plugins/script_ctx/menu_navigation.h"
 
 #include "sao/plugins/sdk_binding/binding_common.h"
 #include "sao/plugins/sdk_binding/binding_engine.h"
@@ -29,26 +32,26 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstring>
+#include <limits>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace sao::plugins::pymini {
 
 using sao::plugins::loader::plugin_context_t;
 namespace script = sao::plugins::script_ctx;
+namespace menu_nav = script::menu_navigation;
 
 namespace {
 
 // ═══ PyRef ↔ nlohmann::json ═══
-// 非 noreturn 包装：让调用点 raise 之后的 return 保持可达（消 C4702）。
-void raise_stub(interpreter& i, const char* name) {
-    i.raise_exc("RuntimeError",
-                std::string("ctx.mem.") + name +
-                    " is not available in pymini",
-                {});
-}
 PyRef py_from_json(interpreter& i, const nlohmann::json& j) {
     switch (j.type()) {
     case nlohmann::json::value_t::null:
@@ -215,10 +218,24 @@ std::string pos_str(interpreter& i, const py_args& a, std::size_t n,
 // Each wrapped callback stores a strong PyRef + the interpreter pointer.
 // `cb_keep` is cleared when the interpreter dies; loader teardown removes
 // registrations first, so no callback can fire after the list is gone.
+struct mini_menu {
+    menu_nav::State navigation;
+    std::unordered_map<std::string, std::string> navigation_keys;
+    std::unordered_map<std::string, PyRef> actions;
+    std::string provider_id;
+    std::string root_id;
+    std::string name;
+    std::string icon;
+    double priority = 0;
+    uint64_t revision = 0;
+    bool building = false;
+};
+
 struct cb_box {
     interpreter* i = nullptr;
     PyRef fn;
     std::string aux;                            // e.g. panel id
+    std::shared_ptr<mini_menu> menu;
 };
 using cb_ptr = std::unique_ptr<cb_box>;
 // registry + teardown: file-scope statics so the host can drop all
@@ -275,6 +292,340 @@ void pymini_drop_callbacks(interpreter& i) {
 
 namespace {
 
+std::string mini_menu_hash(std::string_view text) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char byte : text) { hash ^= byte; hash *= 1099511628211ULL; }
+    char buffer[17]{};
+    const auto result = std::to_chars(buffer, buffer + 16, hash, 16);
+    return std::string(buffer, result.ptr);
+}
+
+bool mini_menu_callable(interpreter& i, const PyRef& value) {
+    if (!value || py_is_none(value)) return false;
+    switch (value->kind) {
+    case py_kind::func:
+    case py_kind::builtin:
+    case py_kind::bound_method:
+    case py_kind::class_: return true;
+    case py_kind::instance: return i.hasattr(value, "__call__");
+    default: return false;
+    }
+}
+
+std::string mini_menu_text(interpreter& i, const PyRef& value, bool required = false) {
+    if ((!value || py_is_none(value)) && !required) return {};
+    const auto* text = as_str(value);
+    if (!text || (required && text->v.empty()) || text->v.size() > 16384 ||
+        text->v.find('\0') != std::string::npos)
+        i.raise_exc("ValueError", "menu text must be a bounded string without NUL", {});
+    return text->v;
+}
+
+std::string mini_menu_json(interpreter& i, const PyRef& value) {
+    nlohmann::json result;
+    struct Frame {
+        PyRef value;
+        nlohmann::json* output;
+        bool exit = false;
+        size_t depth = 0;
+    };
+    std::vector<Frame> stack{{value, &result}};
+    std::unordered_set<PyObj*> ancestors;
+    size_t nodes = 0, bytes = 0;
+    while (!stack.empty()) {
+        auto frame = std::move(stack.back());
+        stack.pop_back();
+        if (frame.exit) { ancestors.erase(frame.value.get()); continue; }
+        if (++nodes > 16384 || frame.depth > 64) i.raise_exc("ValueError", "menu payload JSON complexity budget exceeded", {});
+        const auto& v = frame.value;
+        auto& out = *frame.output;
+        if (!v || py_is_none(v)) out = nullptr;
+        else if (auto* b = as_bool(v)) out = b->v;
+        else if (auto* n = as_int(v)) out = n->v;
+        else if (auto* n = as_float(v)) {
+            if (!std::isfinite(n->v)) i.raise_exc("ValueError", "non-finite menu JSON", {});
+            out = n->v;
+        } else if (auto* s = as_str(v)) {
+            if (s->v.size() > menu_nav::max_text_bytes - bytes) i.raise_exc("ValueError", "menu JSON byte budget exceeded", {});
+            bytes += s->v.size();
+            out = s->v;
+        }
+        else if (as_list(v) || as_tuple(v) || as_dict(v)) {
+            if (!ancestors.insert(v.get()).second) i.raise_exc("ValueError", "cyclic menu JSON", {});
+            stack.push_back({v, frame.output, true});
+            if (auto* dict = as_dict(v)) {
+                if (dict->items.size() > 16384 - nodes) i.raise_exc("ValueError", "menu JSON node budget exceeded", {});
+                out = nlohmann::json::object();
+                for (const auto& [key, child] : dict->items) {
+                    const auto text = mini_menu_text(i, key);
+                    if (text.size() > menu_nav::max_text_bytes - bytes) i.raise_exc("ValueError", "menu JSON byte budget exceeded", {});
+                    bytes += text.size();
+                    stack.push_back({child, &out[text], false, frame.depth + 1});
+                }
+            } else {
+                const auto& items = as_list(v) ? as_list(v)->v : as_tuple(v)->v;
+                if (items.size() > 16384 - nodes) i.raise_exc("ValueError", "menu JSON node budget exceeded", {});
+                out = nlohmann::json::array();
+                auto& array = out.get_ref<nlohmann::json::array_t&>();
+                array.resize(items.size());
+                for (size_t index = 0; index < items.size(); ++index)
+                    stack.push_back({items[index], &array[index], false, frame.depth + 1});
+            }
+        } else i.raise_exc("TypeError", "menu JSON value is not serializable", {});
+        if (bytes > menu_nav::max_text_bytes) i.raise_exc("ValueError", "menu JSON byte budget exceeded", {});
+    }
+    const auto encoded = result.dump();
+    if (encoded.size() > menu_nav::max_text_bytes ||
+        !sdk_binding::sao_plugins_binding_validate_json_text(
+            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()))
+        i.raise_exc("ValueError", "menu JSON exceeds its complexity budget", {});
+    return encoded;
+}
+
+void build_mini_menu(cb_box& box, const menu_nav::State* selected = nullptr,
+                     const std::vector<std::string>* selection = nullptr) {
+    auto& i = *box.i;
+    auto& menu = *box.menu;
+    if (menu.building) i.raise_exc("RuntimeError", "menu builder is already active", {});
+    menu.building = true;
+    struct Guard { bool& active; ~Guard() { active = false; } } guard{menu.building};
+    auto navigation = selected ? *selected : menu.navigation;
+    const auto desired_path = selection ? *selection : navigation.path();
+    auto actions = menu.actions;
+    struct InputGuard {
+        std::vector<PyRef> values;
+        ~InputGuard() { for (auto& value : values) value.reset(); }
+    } inputs;
+    inputs.values.reserve(3 * (menu_nav::max_nodes + 1));
+    std::vector<menu_nav::Node> tree;
+    std::vector<menu_nav::Node*> tree_nodes;
+    tree_nodes.reserve(menu_nav::max_nodes);
+    struct TreeGuard {
+        std::vector<menu_nav::Node*>& nodes;
+        ~TreeGuard() {
+            for (auto node = nodes.rbegin(); node != nodes.rend(); ++node) (*node)->children.clear();
+        }
+    } tree_guard{tree_nodes};
+    struct Frame {
+        PyRef source, owner, builder;
+        std::vector<PyRef> items;
+        std::vector<menu_nav::Node>* nodes;
+        std::string scope;
+        bool selected;
+        size_t index = 0;
+        std::unordered_map<std::string, size_t> occurrences;
+        std::unordered_set<std::string> keys;
+    };
+    std::vector<Frame> stack;
+    std::unordered_set<PyObj*> ancestors;
+    size_t count = 0, bytes = 0;
+    const auto push = [&](PyRef source, PyRef owner, PyRef builder,
+                          std::vector<menu_nav::Node>* nodes, std::string scope, bool on_path) {
+        if (!as_list(source) && !as_tuple(source))
+            i.raise_exc("TypeError", "menu children must be a list or tuple", {});
+        if (ancestors.contains(source.get()) || (owner && ancestors.contains(owner.get())) ||
+            (builder && ancestors.contains(builder.get())))
+            i.raise_exc("ValueError", "cyclic menu sequence, mapping or builder", {});
+        const auto& items = as_list(source) ? as_list(source)->v : as_tuple(source)->v;
+        if (items.size() > menu_nav::max_nodes - count) i.raise_exc("ValueError", "menu node budget exceeded", {});
+        count += items.size();
+        inputs.values.push_back(owner);
+        inputs.values.push_back(source);
+        inputs.values.push_back(builder);
+        nodes->reserve(items.size());
+        ancestors.insert(source.get());
+        if (owner) ancestors.insert(owner.get());
+        if (builder) ancestors.insert(builder.get());
+        auto snapshot = items;
+        stack.push_back({std::move(source), std::move(owner), std::move(builder), std::move(snapshot),
+                         nodes, std::move(scope), on_path});
+    };
+    push(i.call0(box.fn, {}), {}, box.fn, &tree, menu.provider_id, true);
+    while (!stack.empty()) {
+        auto& frame = stack.back();
+        if (frame.index == frame.items.size()) {
+            ancestors.erase(frame.source.get());
+            if (frame.owner) ancestors.erase(frame.owner.get());
+            if (frame.builder) ancestors.erase(frame.builder.get());
+            stack.pop_back();
+            continue;
+        }
+        const auto item = frame.items[frame.index++];
+        if (!as_dict(item)) i.raise_exc("TypeError", "menu rows must be dictionaries", {});
+        if (ancestors.contains(item.get())) i.raise_exc("ValueError", "cyclic menu dictionary", {});
+        const auto get = [&](const char* key) { return dict_get(as_dict(item), py_str(key)); };
+        const auto flag = [&](const char* key, bool fallback) {
+            const auto value = get(key);
+            return value ? i.truthy(value) : fallback;
+        };
+        menu_nav::Node node;
+        auto& row = node.row;
+        row.label = mini_menu_text(i, get("label"), true);
+        row.icon = mini_menu_text(i, get("icon"));
+        if (auto encoded = get("payload_json")) {
+            row.payload_json = mini_menu_text(i, encoded, true);
+            if (!sdk_binding::sao_plugins_binding_validate_json_text(
+                    reinterpret_cast<const uint8_t*>(row.payload_json.data()), row.payload_json.size()))
+                i.raise_exc("ValueError", "invalid menu payload_json", {});
+        } else if (auto payload = get("payload")) row.payload_json = mini_menu_json(i, payload);
+        row.keep_open = flag("keep_menu_open", false);
+        row.close_before = flag("close_menu_before", false);
+        PyRef children;
+        for (const char* alias : {"children", "items", "submenu"}) {
+            const auto value = get(alias);
+            if (!value || py_is_none(value)) continue;
+            if (children && children != value) i.raise_exc("ValueError", "ambiguous submenu aliases", {});
+            children = value;
+        }
+        node.submenu = bool(children);
+        auto command = get("command");
+        const bool callable = command && !py_is_none(command);
+        if (callable && !mini_menu_callable(i, command)) i.raise_exc("TypeError", "menu command must be callable or None", {});
+        if (callable && node.submenu) i.raise_exc("ValueError", "submenu also has a leaf command", {});
+        row.can_activate = flag("can_activate", true) && (callable || node.submenu);
+        auto explicit_id = get("action_id");
+        if (!explicit_id) explicit_id = get("id");
+        std::string identity = explicit_id ? mini_menu_text(i, explicit_id, true) : std::string{};
+        if (identity.starts_with(menu_nav::navigation_prefix)) i.raise_exc("ValueError", "reserved menu action identity", {});
+        if (identity.empty()) {
+            const auto append = [&](const std::string& text) { identity += std::to_string(text.size()) + ":" + text; };
+            PyRef target = command;
+            if (target && target->kind == py_kind::bound_method)
+                target = static_cast<PyBoundMethodObj*>(target.get())->fn;
+            append(as_func(target) ? as_func(target)->name : as_builtin(target) ? as_builtin(target)->name : "");
+            append(row.label);
+            append(row.icon);
+            append(row.payload_json);
+            identity += row.can_activate ? '1' : '0';
+            identity += row.keep_open ? '1' : '0';
+            identity += row.close_before ? '1' : '0';
+            const auto occurrence = frame.occurrences[identity]++;
+            identity += "#" + std::to_string(occurrence);
+        }
+        node.key = mini_menu_hash(identity);
+        if (!frame.keys.insert(node.key).second) i.raise_exc("ValueError", "duplicate sibling menu identity", {});
+        const auto scope = mini_menu_hash(frame.scope + "\n" + identity);
+        row.action_id = "menu-action-" + scope;
+        if (callable) {
+            actions[row.action_id] = std::move(command);
+            if (actions.size() > menu_nav::max_nodes) i.raise_exc("ValueError", "menu action history budget exceeded", {});
+        }
+        bytes += node.key.size() + row.label.size() + row.icon.size() + row.action_id.size() +
+                 row.payload_json.size() + menu.provider_id.size() + menu.name.size() + menu.icon.size();
+        if (bytes > menu_nav::max_text_bytes) i.raise_exc("ValueError", "menu byte budget exceeded", {});
+        const auto depth = stack.size() - 1;
+        const bool on_path = frame.selected && row.can_activate && depth < desired_path.size() && desired_path[depth] == node.key;
+        frame.nodes->push_back(std::move(node));
+        tree_nodes.push_back(&frame.nodes->back());
+        auto* nested = &frame.nodes->back().children;
+        if (children) {
+            PyRef builder;
+            if (mini_menu_callable(i, children)) {
+                if (!on_path) continue;
+                if (ancestors.contains(children.get())) i.raise_exc("ValueError", "cyclic submenu builder", {});
+                builder = std::move(children);
+                children = i.call0(builder, {});
+            }
+            push(std::move(children), item, std::move(builder), nested, scope, on_path);
+        }
+    }
+    std::string error;
+    if (!navigation.replace(tree, error)) i.raise_exc("ValueError", error, {});
+    const auto* page = &tree;
+    for (const auto& key : navigation.path()) {
+        const auto found = std::find_if(page->begin(), page->end(), [&](const auto& node) { return node.key == key; });
+        if (found == page->end()) i.raise_exc("RuntimeError", "menu navigation path is inconsistent", {});
+        page = &found->children;
+    }
+    std::unordered_map<std::string, std::string> navigation_keys;
+    const size_t offset = navigation.path().empty() ? 0 : 1;
+    if (offset) navigation_keys.emplace(navigation.rows().front().action_id, std::string{});
+    for (size_t index = 0; index < page->size(); ++index)
+        if ((*page)[index].submenu)
+            navigation_keys.emplace(navigation.rows()[index + offset].action_id, (*page)[index].key);
+    auto revision = menu.revision;
+    if (revision == 0 || navigation.rows() != menu.navigation.rows()) {
+        if (revision == (std::numeric_limits<uint64_t>::max)()) i.raise_exc("OverflowError", "menu revision exhausted", {});
+        ++revision;
+    }
+    menu.actions.swap(actions);
+    menu.navigation = std::move(navigation);
+    menu.navigation_keys.swap(navigation_keys);
+    menu.revision = revision;
+}
+
+int32_t SAO_PLUGINS_CALL tr_menu_snapshot(void* rows, uint32_t capacity, uint32_t stride,
+    uint32_t* count, uint64_t* revision, loader::entity_snapshot_content_token_t* token,
+    uint32_t* output_stride, void* ud) {
+    auto* box = static_cast<cb_box*>(ud);
+    if (!box || !box->i || !box->menu || !count || !revision || !token || !output_stride ||
+        (!rows && (capacity || stride))) return SAO_ERR_INVALID_ARGUMENT;
+    gil_guard guard(*box->i);
+    try {
+        if (!rows) build_mini_menu(*box);
+        const auto& menu = *box->menu;
+        const auto& page = menu.navigation.rows();
+        *count = static_cast<uint32_t>(page.size());
+        *revision = menu.revision;
+        *token = menu.revision ? menu.revision : 1;
+        *output_stride = page.empty() ? 0 : sizeof(loader::entity_menu_row_v2);
+        if (capacity < page.size()) return SAO_ERR_BUFFER_TOO_SMALL;
+        if (!page.empty() && (stride < sizeof(loader::entity_menu_row_v2) ||
+            stride % alignof(loader::entity_menu_row_v2))) return SAO_ERR_INVALID_ARGUMENT;
+        for (size_t index = 0; index < page.size(); ++index) {
+            const auto& row = page[index];
+            const loader::entity_menu_row_v2 native{sizeof(loader::entity_menu_row_v2),
+                menu.provider_id.c_str(), menu.name.c_str(), menu.icon.c_str(), menu.priority,
+                row.label.c_str(), row.icon.c_str(), row.action_id.c_str(), row.payload_json.c_str(),
+                static_cast<uint8_t>(row.can_activate), static_cast<uint8_t>(row.keep_open),
+                static_cast<uint8_t>(row.close_before), {}};
+            std::memcpy(static_cast<std::byte*>(rows) + index * stride, &native, sizeof(native));
+        }
+        return SAO_OK;
+    } catch (...) { return SAO_ERR_OS_CALL_FAILED; }
+}
+
+int32_t SAO_PLUGINS_CALL tr_menu_action(const char* action, const char* payload,
+    loader::entity_action_result_sink_v2_fn sink, void* sink_data, void* ud) {
+    auto* box = static_cast<cb_box*>(ud);
+    if (!box || !box->i || !box->menu || !action || !payload || !sink) return SAO_ERR_INVALID_ARGUMENT;
+    gil_guard guard(*box->i);
+    try {
+        auto& menu = *box->menu;
+        if (menu.building) return loader::SAO_PLUGINS_ERR_BUSY;
+        auto navigation = menu.navigation;
+        const auto result = navigation.activate(action);
+        bool handled = false;
+        std::string encoded;
+        if (result == menu_nav::NavigationResult::handled) {
+            const auto route = menu.navigation_keys.find(action);
+            if (route == menu.navigation_keys.end()) return SAO_ERR_OS_CALL_FAILED;
+            auto selection = menu.navigation.path();
+            if (route->second.empty()) {
+                if (selection.empty()) return SAO_ERR_OS_CALL_FAILED;
+                selection.pop_back();
+            } else selection.push_back(route->second);
+            build_mini_menu(*box, &navigation, &selection);
+            handled = true;
+        } else if (result == menu_nav::NavigationResult::not_navigation &&
+                   std::any_of(menu.navigation.rows().begin(), menu.navigation.rows().end(),
+                       [action](const menu_nav::Row& row) {
+                           return row.can_activate && row.action_id == action;
+                       })) {
+            if (const auto found = menu.actions.find(action); found != menu.actions.end()) {
+                const auto callback = found->second;
+                const auto value = box->i->call0(callback, {});
+                handled = true;
+                if (value && !py_is_none(value)) encoded = mini_menu_json(*box->i, value);
+            }
+        }
+        const loader::entity_action_result_v2 native{sizeof(loader::entity_action_result_v2),
+            loader::kEntityActionAbiVersion2, static_cast<uint8_t>(handled), {},
+            encoded.empty() ? nullptr : encoded.c_str()};
+        return sink(&native, sink_data);
+    } catch (...) { return SAO_ERR_OS_CALL_FAILED; }
+}
+
 // Trampoline entry points — each grabs gil, marshals, calls, swallows.
 void tr_event(const char* topic, const char* event_json, void* ud) {
     auto* b = static_cast<cb_box*>(ud);
@@ -323,6 +674,11 @@ int32_t tr_render_hook(const char* surface, const char* payload_json,
 }
 int32_t tr_action(const char* action_id, const char* payload_json,
                   char** out_result_json, void* ud) {
+    if (action_id && std::string_view(action_id).starts_with(menu_nav::navigation_prefix)) {
+        if (!out_result_json) return SAO_ERR_INVALID_ARGUMENT;
+        *out_result_json = nullptr;
+        return SAO_OK;
+    }
     return tr_render_hook(action_id, payload_json, out_result_json, ud);
 }
 int32_t tr_data_source(void* ud) {
@@ -381,6 +737,45 @@ bool parse_token(const std::string& tok, uint32_t* out) {
         return false;
     }
     return true;
+}
+
+std::vector<PyRef> mini_named_args(interpreter& i, const py_args& args,
+                                 std::initializer_list<const char*> names, size_t required) {
+    if (args.pos.size() > names.size()) i.raise_exc("TypeError", "too many arguments", {});
+    std::vector<PyRef> values(names.size());
+    std::copy(args.pos.begin(), args.pos.end(), values.begin());
+    for (const auto& [name, value] : args.kw) {
+        auto found = std::find_if(names.begin(), names.end(), [&](const char* key) { return name == key; });
+        if (found == names.end()) i.raise_exc("TypeError", "unexpected argument: " + name, {});
+        auto& slot = values[static_cast<size_t>(found - names.begin())];
+        if (slot) i.raise_exc("TypeError", "duplicate argument: " + name, {});
+        slot = value;
+    }
+    for (size_t index = 0; index < required; ++index)
+        if (!values[index]) i.raise_exc("TypeError", "missing required argument", {});
+    return values;
+}
+
+uint64_t mini_texture_uint(interpreter& i, const PyRef& value, uint64_t maximum, bool handle = false) {
+    if (!value) return 0;
+    uint64_t number = 0;
+    if (const auto* integer = as_int(value)) {
+        if (integer->v < 0) i.raise_exc("OverflowError", "texture integer must be unsigned", {});
+        number = static_cast<uint64_t>(integer->v);
+    } else if (handle && as_str(value)) {
+        const auto& text = as_str(value)->v;
+        const auto offset = text.starts_with("0x") || text.starts_with("0X") ? 2U : 0U;
+        const auto parsed = std::from_chars(text.data() + offset, text.data() + text.size(), number, offset ? 16 : 10);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+            i.raise_exc("ValueError", "texture handle must be an exact uint64 decimal or hex string", {});
+    } else i.raise_exc("TypeError", "texture handle and dimensions must be integers", {});
+    if (number > maximum) i.raise_exc("OverflowError", "texture integer is out of range", {});
+    return number;
+}
+
+void mini_compositor_status(interpreter& i, int32_t status) {
+    if (status != SAO_OK)
+        i.raise_exc("RuntimeError", "compositor operation failed: " + std::to_string(status), {});
 }
 
 // ═══ ctx builder ═══
@@ -854,14 +1249,41 @@ struct ctx_builder {
             c(), name.c_str(), cp, mb, cl, sc, carrier);
         return py_bool(r == 0);
     }
-    PyRef m_gpu_interop(interpreter&, const py_args&) { return py_false(); }
-    PyRef m_layer_shared_tex(interpreter&, const py_args&) { return py_false(); }
-    PyRef m_layer_mmf(interpreter&, const py_args&) { return py_false(); }
+    PyRef m_gpu_interop(interpreter&, const py_args& a) {
+        mini_named_args(i, a, {}, 0);
+        bool available = false;
+        mini_compositor_status(i, sao_plugins_ctx_compositor_gpu_interop_available(c(), &available));
+        return py_bool(available);
+    }
+    PyRef m_layer_shared_tex(interpreter&, const py_args& a) {
+        const auto args = mini_named_args(i, a, {"name", "handle", "width", "height"}, 2);
+        const auto name = mini_menu_text(i, args[0], true);
+        const auto handle = mini_texture_uint(i, args[1], (std::numeric_limits<uint64_t>::max)(), true);
+        const auto width = mini_texture_uint(i, args[2], (std::numeric_limits<uint32_t>::max)());
+        const auto height = mini_texture_uint(i, args[3], (std::numeric_limits<uint32_t>::max)());
+        if ((handle && (!width || !height)) || (!handle && (width || height)))
+            i.raise_exc("ValueError", "texture source needs positive dimensions; clear uses handle=width=height=0", {});
+        mini_compositor_status(i, sao_plugins_ctx_set_compositor_layer_shared_texture_source(
+            c(), name.c_str(), handle, static_cast<uint32_t>(width), static_cast<uint32_t>(height)));
+        return py_true();
+    }
+    PyRef m_layer_mmf(interpreter&, const py_args& a) {
+        const auto args = mini_named_args(i, a, {"name", "mmf"}, 2);
+        const auto name = mini_menu_text(i, args[0], true);
+        if (!as_str(args[1])) i.raise_exc("TypeError", "MMF name must be a string", {});
+        const auto mmf = mini_menu_text(i, args[1]);
+        mini_compositor_status(i, sao_plugins_ctx_set_compositor_layer_mmf_source(c(), name.c_str(), mmf.c_str()));
+        return py_true();
+    }
     PyRef m_layer_refresh(interpreter&, const py_args&) {
         return py_float(0.0);
     }
-    PyRef m_layer_shared_tex_active(interpreter&, const py_args&) {
-        return py_false();
+    PyRef m_layer_shared_tex_active(interpreter&, const py_args& a) {
+        const auto args = mini_named_args(i, a, {"name"}, 1);
+        const auto name = mini_menu_text(i, args[0], true);
+        bool active = false;
+        mini_compositor_status(i, sao_plugins_ctx_compositor_layer_shared_texture_active(c(), name.c_str(), &active));
+        return py_bool(active);
     }
 
     // ── registrations ────────────────────────────────────────────────
@@ -1028,21 +1450,42 @@ struct ctx_builder {
         return py_bool(r == 0);
     }
     PyRef m_menu_category(interpreter&, const py_args& a) {
-        const std::string name = pos_str(i, a, 0);
-        const std::string icon = pos_str(i, a, 1);
-        PyRef builder = pos_or(a, 2);
-        cb_box* bb = builder ? keep_cb(i, builder) : nullptr;
-        const float prio =
-            a.pos.size() > 3 ? [&] {
-                bool ok = false;
-                return static_cast<float>(py_to_float(a.pos[3], &ok));
-            }()
-                             : 0.0f;
-        const int32_t r = sao_plugins_ctx_register_menu_category(
-            c(), name.c_str(), icon.c_str(),
-            bb ? reinterpret_cast<void*>(tr_render_hook) : nullptr, prio,
-            bb);
-        return py_bool(r == 0);
+        const auto args = mini_named_args(i, a, {"name", "icon", "builder", "priority"}, 3);
+        auto menu = std::make_shared<mini_menu>();
+        menu->name = mini_menu_text(i, args[0], true);
+        menu->icon = mini_menu_text(i, args[1]);
+        if (!mini_menu_callable(i, args[2])) i.raise_exc("TypeError", "menu builder must be callable", {});
+        if (args[3]) {
+            bool ok = false;
+            menu->priority = py_to_float(args[3], &ok);
+            if (!ok || !std::isfinite(menu->priority)) i.raise_exc("ValueError", "menu priority must be finite", {});
+        }
+        auto* context = c();
+        menu->provider_id = "menu-" + mini_menu_hash(menu->name);
+        menu->root_id = "plugin:" + mini_menu_hash(i.cfg.plugin_id + "\n" + menu->name);
+        cb_box* box = keep_cb(i, args[2]);
+        box->menu = menu;
+        loader::entity_root_contribution_descriptor root{sizeof(root), menu->provider_id.c_str(),
+            menu->root_id.c_str(), menu->name.c_str(), menu->icon.c_str(), menu->priority};
+        loader::context_entity_provider_descriptor_v3 provider{};
+        provider.struct_size = sizeof(provider);
+        provider.provider_id_utf8 = menu->provider_id.c_str();
+        provider.snapshot = tr_menu_snapshot;
+        provider.user_data = box;
+        provider.root_contribution = &root;
+        provider.action_handler_v2 = tr_menu_action;
+        provider.action_user_data = box;
+        const int32_t status = sao_plugins_ctx_register_entity_provider_v3(context, &provider);
+        if (status != SAO_OK) {
+            {
+                std::lock_guard lock(g_cb_mu);
+                auto& boxes = g_cb_keep[&i];
+                const auto found = std::find_if(boxes.begin(), boxes.end(), [&](const cb_ptr& value) { return value.get() == box; });
+                if (found != boxes.end()) boxes.erase(found);
+            }
+            i.raise_exc("RuntimeError", "menu registration failed: " + std::to_string(status), {});
+        }
+        return py_true();
     }
     PyRef m_menu_surface(interpreter&, const py_args& a) {
         const std::string sid = pos_str(i, a, 0);
@@ -1292,23 +1735,38 @@ struct ctx_builder {
         return d;
     }
     PyRef make_mem() {
-        // v1 ctx.mem — MMF accessor.  pymini subset: graceful stub —
-        // open/read/write raise RuntimeError (better than missing attr).
+        // ctx.mem — the reflective engine surface's `mem.*` group exposed
+        // with the group prefix stripped: catalog "mem.read_u64" binds as
+        // ctx.mem.read_u64(...).  This mirrors the v1 MemAccess facade: the
+        // accessor object exists unconditionally; an actual call surfaces
+        // the provider status (missing mem provider → RuntimeError via the
+        // engine-call envelope).
         auto d = py_dict();
-        auto stub = [](const char* n) {
-            return py_builtin(
-                n, [n](interpreter& i2, const py_args&) -> PyRef {
-                    raise_stub(i2, n);   // void helper — keeps return reachable
-                    return py_none();
-                });
-        };
-        dict_set(as_dict(d), py_str("open"), stub("open"));
-        dict_set(as_dict(d), py_str("create"), stub("create"));
-        dict_set(as_dict(d), py_str("read"), stub("read"));
-        dict_set(as_dict(d), py_str("write"), stub("write"));
-        dict_set(as_dict(d), py_str("close"), stub("close"));
-        dict_set(as_dict(d), py_str("exists"), stub("exists"));
-        return d;
+        const std::size_t catalog_n = sdk_binding::sdk_engine_catalog_size();
+        for (std::size_t k = 0; k < catalog_n; ++k) {
+            const sdk_binding::sdk_engine_function_desc* desc =
+                sdk_binding::sdk_engine_catalog_at(k);
+            if (desc == nullptr || desc->name == nullptr)
+                continue;
+            const std::string_view full(desc->name);
+            if (full.size() <= 4 || full.substr(0, 4) != "mem.")
+                continue;
+            const std::string attr(full.substr(4));
+            if (attr.empty() || dict_get(as_dict(d), py_str(attr)))
+                continue;
+            dict_set(as_dict(d), py_str(attr),
+                     py_builtin("mem." + attr,
+                                [this, desc](interpreter&,
+                                             const py_args& a2) {
+                                    return engine_named_call(desc, a2);
+                                }));
+        }
+        // module proxy so `ctx.mem.read_u64` attribute access works — plain
+        // dicts are not attribute-mapped in pymini.
+        auto proxy = std::make_shared<PyModuleProxyObj>();
+        proxy->name = "ctx.mem";
+        proxy->dict = d;
+        return proxy;
     }
     // ── reflective engine surface (binding_engine.h) ───────────────
     // Lazily bind a per-plugin SaoSdkContext and route every engine call
@@ -1872,6 +2330,7 @@ const char* const k_surface_names[] = {
     "create_compositor_layer", "upload_compositor_frame",
     "set_compositor_layer_position", "set_compositor_layer_visible",
     "set_compositor_layer_input", "destroy_compositor_layer",
+    "set_compositor_layer_mmf_source", "set_compositor_layer_shared_texture_source",
     "compositor_gpu_interop_available",
     "compositor_layer_shared_texture_active",
     "compositor_display_refresh_hz",

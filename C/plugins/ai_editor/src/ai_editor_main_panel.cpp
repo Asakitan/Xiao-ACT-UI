@@ -14,6 +14,14 @@
 #include "memory_viewer_provider.h"
 #include <cstdio>
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -27,6 +35,7 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <filesystem>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -81,6 +90,54 @@ constexpr int32_t kWorkbenchHorizontalThreshold = 1024;
 constexpr int32_t kMainMinimumWidth = 620;
 constexpr int32_t kWorkbenchWidth = 340;
 constexpr int32_t kWorkbenchMinimumWidth = 300;
+
+void append_trace_line(const wchar_t* message) noexcept {
+    wchar_t enabled[2]{};
+    if (message == nullptr ||
+        GetEnvironmentVariableW(L"SAO_AI_EDITOR_TRACE", enabled,
+                                static_cast<DWORD>(std::size(enabled))) == 0u ||
+        enabled[0] != L'1') {
+        return;
+    }
+    wchar_t directory[MAX_PATH]{};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", directory,
+                                static_cast<DWORD>(std::size(directory))) == 0u) {
+        return;
+    }
+    const auto directory_path = std::filesystem::path(directory) / L"SAOAuto";
+    std::error_code error;
+    std::filesystem::create_directories(directory_path, error);
+    if (error) {
+        return;
+    }
+    const auto path = directory_path / L"ai-editor-trace.log";
+    const HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == nullptr || file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    wchar_t line[1024]{};
+    const int length = _snwprintf_s(line, std::size(line), _TRUNCATE,
+                                    L"[pid=%lu tid=%lu] panel.%ls\r\n",
+                                    static_cast<unsigned long>(GetCurrentProcessId()),
+                                    static_cast<unsigned long>(GetCurrentThreadId()),
+                                    message);
+    if (length > 0) {
+        DWORD written = 0;
+        (void)WriteFile(file, line, static_cast<DWORD>(length * sizeof(wchar_t)), &written,
+                        nullptr);
+        OutputDebugStringW(line);
+    }
+    CloseHandle(file);
+}
+
+void trace_status(const wchar_t* stage, int32_t status = 0) noexcept {
+    wchar_t message[768]{};
+    (void)_snwprintf_s(message, std::size(message), _TRUNCATE, L"%ls status=%d",
+                       stage != nullptr ? stage : L"", static_cast<int>(status));
+    append_trace_line(message);
+}
 
 enum class RpcTaskKind {
     Bootstrap,
@@ -6194,6 +6251,7 @@ extern "C" SAO_AI_EDITOR_API int32_t SAO_AI_EDITOR_CALL sao_ai_editor_main_panel
         sao::ai_editor::workbench::CompositionHost* workbench_host = nullptr;
         const sao_status_t workbench_status = sao::ai_editor::workbench::create(
             borrowed_compositor, borrowed_launcher, &workbench_host);
+        trace_status(L"workbench.create", workbench_status);
         if (workbench_status == SAO_STATUS_OK && workbench_host != nullptr) {
             std::lock_guard lock(raw_state->mutex);
             raw_state->workbench_host = workbench_host;
@@ -6237,6 +6295,7 @@ sao_ai_editor_main_panel_show(sao_ai_editor_main_panel_t panel) {
     sao_status_t status = SAO_STATUS_OK;
     if (use_workbench) {
         status = sao::ai_editor::workbench::show(state.workbench_host);
+        trace_status(L"workbench.show", status);
         if (status != SAO_STATUS_OK && sao::ai_editor::workbench::failed(state.workbench_host)) {
             state.html_status = status;
             state.workbench_active = false;
@@ -6391,9 +6450,13 @@ sao_ai_editor_main_panel_tick(sao_ai_editor_main_panel_t panel) {
         sao_status_t workbench_status = SAO_STATUS_OK;
         if (state.workbench_active) {
             workbench_status = sao::ai_editor::workbench::tick(state.workbench_host);
+            if (workbench_status != SAO_STATUS_OK)
+                trace_status(L"workbench.tick", workbench_status);
             if (sao::ai_editor::workbench::consume_close_request(state.workbench_host)) {
                 std::lock_guard lock(state.mutex);
                 state.visible = false;
+                state.workbench_active = false;
+                trace_status(L"workbench.close_request");
             }
             if (workbench_status != SAO_STATUS_OK &&
                 sao::ai_editor::workbench::failed(state.workbench_host)) {

@@ -259,8 +259,13 @@ SDK 暴露函数数量 ≥ 20 (Python 65+, Lua 55+, AS 45+, C# 60+, Emma 通过 
 所有 Python 平台字段 (含老 ``engine`` / ``runtime`` / ``deps`` / ``i18n`` /
 ``translations`` 别名) 的规范化实装。见文件顶端注释与 ``populate_manifest_from_json``。
 
-**其他 stub 状态**: 各 ``*_host/`` 的 ``sao_plugins_*_load_script`` / ``call_hook`` /
-``unload_script`` 仍返回 ``SAO_STATUS_NOT_IMPLEMENTED``, 按 handoff 分批实装。
+**旧入口现状**: lua/angel/emma/csharp host 的 ``sao_plugins_*_load_script`` /
+``call_hook`` / ``unload_script`` 均已实装, 只在对应 runtime gate 未满足时
+返回显式 ``SAO_ERR_NOT_IMPLEMENTED``/capability 信号。python_host 旧入口
+``sao_plugins_pyhost_load_script`` / ``unload_script`` 现委托进程内 CPython
+singleton 的正规 ``load_plugin`` / ``unload_plugin`` 链 (借用复用 host
+handle + GIL scope), singleton 未建立时报 ``SAO_ERR_NOT_INITIALIZED``,
+非 embed 构建报 ``SAO_ERR_NOT_IMPLEMENTED``。
 
 **顶层 CMakeLists** 已把 ``loader/`` ``sdk_binding/`` ``python_host/`` ``emma_host/``
 ``angel_host/`` ``lua_host/`` ``csharp_host/`` ``compat/`` 加进 build。

@@ -25,6 +25,7 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/script_ctx/ctx_surface.h"
+#include "sao/plugins/script_ctx/menu_navigation.h"
 #include "sao/plugins/script_ctx/runtime_bridge.h"
 #include "sao/plugins/script_ctx/script_ui.h"
 #include "sao/sdk/sao_sdk_context.h"
@@ -32,6 +33,7 @@
 #include "sao_plugins/sao_status.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -47,7 +49,9 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -87,6 +91,7 @@ using ordered_json = nlohmann::ordered_json;
 using as_string = as_string_value;
 namespace loader_ns = sao::plugins::loader;
 namespace sc = sao::plugins::script_ctx;
+namespace menu_nav = sc::menu_navigation;
 
 // ──────────────────────────────────────────────────────────────────────────
 // shared helpers
@@ -207,6 +212,7 @@ bool type_is_array(asIScriptEngine* engine, int type_id) {
 ordered_json dictionary_to_json(asIScriptEngine* engine, const CScriptDictionary* dict) noexcept;
 ordered_json array_to_json(asIScriptEngine* engine, const CScriptArray* array) noexcept;
 ordered_json object_to_json(asIScriptEngine* engine, void* object, int type_id) noexcept;
+ordered_json value_to_json(asIScriptEngine* engine, const void* address, int type_id) noexcept;
 
 ordered_json primitive_to_json(int type_id, const void* address) {
     switch (type_id & ~(asTYPEID_OBJHANDLE | asTYPEID_HANDLETOCONST)) {
@@ -313,6 +319,10 @@ ordered_json object_to_json(asIScriptEngine* engine, void* object, int type_id) 
         }
         if (std::strcmp(name, "dictionary") == 0)
             return dictionary_to_json(engine, static_cast<const CScriptDictionary*>(object));
+        if (std::strcmp(name, "dictionaryValue") == 0) {
+            const auto* value = static_cast<const CScriptDictValue*>(object);
+            return value_to_json(engine, value->GetAddressOfValue(), value->GetTypeId());
+        }
         if ((type->GetFlags() & asOBJ_TEMPLATE) != 0 && std::strcmp(name, "array") == 0)
             return array_to_json(engine, static_cast<const CScriptArray*>(object));
         return ordered_json(nullptr);
@@ -334,12 +344,52 @@ ordered_json value_to_json(asIScriptEngine* engine, const void* address, int typ
     return primitive_to_json(type_id, address);
 }
 
+// The generic-arg stack slot for a `?`-declared parameter holds a *pointer
+// to the caller variable*, not the raw value — dereference the slot once to
+// reach the argument data regardless of the argument class: for handle (`T@`)
+// arguments that data pointer is the address of the handle variable, so the
+// object then sits one dereference deeper. For parameters with an explicit
+// type (e.g. `dictionary@`) the slot IS the value/handle and needs no
+// pre-dereference.
+bool declared_param_is_vartype(asIScriptGeneric* generic, asUINT index) noexcept {
+    if (generic == nullptr)
+        return false;
+    asIScriptFunction* function = generic->GetFunction();
+    if (function == nullptr)
+        return false;
+    int declared = 0;
+    return function->GetParam(index, &declared) >= 0 && declared == -1;
+}
+
+// Address of the argument data (storage). For `?` params this is the caller
+// variable itself (deref of the slot); for explicit params it is the slot.
+void* generic_arg_data(asIScriptGeneric* generic, asUINT index) noexcept {
+    void* address = generic->GetAddressOfArg(index);
+    if (address == nullptr)
+        return nullptr;
+    return declared_param_is_vartype(generic, index) ? *static_cast<void**>(address)
+                                                     : address;
+}
+
+void* generic_arg_object(asIScriptGeneric* generic, asUINT index,
+                         int type_id) noexcept {
+    void* data = generic_arg_data(generic, index);
+    if (data == nullptr)
+        return nullptr;
+    if ((type_id & asTYPEID_OBJHANDLE) == 0)
+        return data;
+    return *static_cast<void**>(data);
+}
+
 ordered_json generic_arg_to_json(asIScriptEngine* engine, asIScriptGeneric* generic,
                                  asUINT index) noexcept {
     if (generic == nullptr || static_cast<int>(index) >= generic->GetArgCount())
         return ordered_json(nullptr);
-    return value_to_json(engine, generic->GetAddressOfArg(index),
-                         generic->GetArgTypeId(index));
+    const int type_id = generic->GetArgTypeId(index);
+    if (type_id & asTYPEID_OBJHANDLE)
+        return object_to_json(engine, generic_arg_object(generic, index, type_id),
+                              type_id);
+    return value_to_json(engine, generic_arg_data(generic, index), type_id);
 }
 
 asIScriptFunction* arg_funcdef(asIScriptEngine* engine, asIScriptGeneric* generic,
@@ -349,9 +399,8 @@ asIScriptFunction* arg_funcdef(asIScriptEngine* engine, asIScriptGeneric* generi
     const int type_id = generic->GetArgTypeId(index);
     if ((type_id & asTYPEID_OBJHANDLE) == 0 || !type_is_funcdef(engine, type_id))
         return nullptr;
-    void* address = generic->GetAddressOfArg(index);
-    return address == nullptr ? nullptr
-                              : static_cast<asIScriptFunction*>(*static_cast<void**>(address));
+    return static_cast<asIScriptFunction*>(
+        generic_arg_object(generic, index, type_id));
 }
 
 std::string arg_string(asIScriptGeneric* generic, asUINT index) {
@@ -520,7 +569,15 @@ CScriptArray* array_from_json(asIScriptEngine* engine, const ordered_json& value
                     *slot = nullptr;
                 }
             } else if (element_type & asTYPEID_MASK_OBJECT) {
-                if (string_type != nullptr && item.is_string()) {
+                if (kind == array_kind::dictionary && item.is_object() && dict_type != nullptr) {
+                    CScriptDictionary* child = dictionary_from_json(engine, item);
+                    if (child == nullptr) {
+                        array->Release();
+                        return nullptr;
+                    }
+                    *static_cast<CScriptDictionary*>(element) = *child;
+                    child->Release();
+                } else if (string_type != nullptr && item.is_string()) {
                     as_string text = item.get<as_string>();
                     engine->AssignScriptObject(element, &text, string_type);
                 }
@@ -573,6 +630,29 @@ struct cb_result {
     int32_t status = SAO_OK;
 };
 
+void log_callback_failure(as_ctx_callback* callback, const char* phase,
+                           const char* message, asIScriptContext* context = nullptr) noexcept {
+    if (callback == nullptr)
+        return;
+    try {
+        std::string key = phase;
+        if (callback->function != nullptr) {
+            key += ": ";
+            key += callback->function->GetDeclaration(true, true, true);
+        }
+        std::string diagnostic = key + ": " + message;
+        if (callback->plugin != nullptr) {
+            retain_plugin_error(*callback->plugin, key.c_str(), SAO_ERR_OS_CALL_FAILED,
+                                message, context);
+            diagnostic = plugin_error_text(callback->plugin.get(), key.c_str(),
+                                           diagnostic.c_str());
+        }
+        if (callback->ctx != nullptr)
+            loader_ns::sao_plugins_ctx_log(callback->ctx, diagnostic.c_str());
+    } catch (...) {
+    }
+}
+
 void release_return_object(asIScriptEngine* engine, cb_result& result) noexcept {
     if (result.return_object == nullptr || engine == nullptr)
         return;
@@ -589,10 +669,18 @@ int32_t set_callback_arguments(asIScriptContext* context, asIScriptFunction* fun
                                std::vector<as_string>& string_args,
                                std::vector<std::pair<void*, const asITypeInfo*>>& release_after) {
     const asUINT param_count = function->GetParamCount();
+    string_args.reserve(param_count);
+    release_after.reserve(param_count);
     for (asUINT index = 0; index < param_count; ++index) {
         int type_id = 0;
-        if (function->GetParam(index, &type_id) < 0)
+        asDWORD flags = 0;
+        if (function->GetParam(index, &type_id, &flags) < 0)
             return SAO_ERR_OS_CALL_FAILED;
+        if ((flags & asTM_INOUTREF) != 0 &&
+            ((type_id & asTYPEID_OBJHANDLE) != 0 ||
+             (type_id & asTYPEID_MASK_OBJECT) == 0 ||
+             (flags & asTM_INOUTREF) != asTM_INREF))
+            return SAO_ERR_INVALID_ARGUMENT;
         const ordered_json& value =
             args.is_array() && index < args.size() ? args[index] : ordered_json(nullptr);
         int result = asINVALID_ARG;
@@ -602,10 +690,16 @@ int32_t set_callback_arguments(asIScriptContext* context, asIScriptFunction* fun
             result = context->SetArgByte(index, value.is_boolean() && value.get<bool>());
             break;
         case asTYPEID_INT8:
-        case asTYPEID_INT16:
-        case asTYPEID_INT32:
         case asTYPEID_UINT8:
+            result = context->SetArgByte(index, value.is_number()
+                ? static_cast<asBYTE>(value.get<int64_t>()) : 0);
+            break;
+        case asTYPEID_INT16:
         case asTYPEID_UINT16:
+            result = context->SetArgWord(index, value.is_number()
+                ? static_cast<asWORD>(value.get<int64_t>()) : 0);
+            break;
+        case asTYPEID_INT32:
         case asTYPEID_UINT32:
             result = context->SetArgDWord(index,
                                           value.is_number() ? value.get<int64_t>() & 0xFFFFFFFF
@@ -653,6 +747,11 @@ int32_t set_callback_arguments(asIScriptContext* context, asIScriptFunction* fun
                     release_after.emplace_back(argument, type);
             } else if (type_is_array(engine, type_id)) {
                 argument = value.is_array() ? array_from_json(engine, value) : nullptr;
+                if (argument != nullptr &&
+                    static_cast<CScriptArray*>(argument)->GetArrayObjectType() != type) {
+                    static_cast<CScriptArray*>(argument)->Release();
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
                 result = context->SetArgObject(index, argument);
                 if (argument != nullptr)
                     release_after.emplace_back(argument, type);
@@ -663,8 +762,25 @@ int32_t set_callback_arguments(asIScriptContext* context, asIScriptFunction* fun
             if (type_is_named(engine, type_id, "string")) {
                 string_args.push_back(value.is_string() ? value.get<as_string>() : as_string{});
                 result = context->SetArgObject(index, &string_args.back());
+            } else if (type_is_named(engine, type_id, "dictionary")) {
+                auto* argument = value.is_object() ? dictionary_from_json(engine, value) : nullptr;
+                if (argument == nullptr)
+                    return SAO_ERR_INVALID_ARGUMENT;
+                release_after.emplace_back(argument, type_info_for(engine, type_id));
+                result = context->SetArgObject(index, argument);
+            } else if (type_is_array(engine, type_id)) {
+                auto* argument = value.is_array() ? array_from_json(engine, value) : nullptr;
+                if (argument == nullptr)
+                    return SAO_ERR_INVALID_ARGUMENT;
+                const auto* type = type_info_for(engine, type_id);
+                if (argument->GetArrayObjectType() != type) {
+                    argument->Release();
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
+                release_after.emplace_back(argument, type);
+                result = context->SetArgObject(index, argument);
             } else {
-                result = context->SetArgObject(index, nullptr);
+                return SAO_ERR_INVALID_ARGUMENT;
             }
         } else {
             result = context->SetArgObject(index, nullptr);
@@ -737,7 +853,7 @@ ordered_json return_value_to_json(asIScriptContext* context, asIScriptFunction* 
 }
 
 int32_t invoke_ctx_callback(as_ctx_callback* callback, const ordered_json& args,
-                            cb_result* out_result) noexcept {
+                            cb_result* out_result, bool retain_return = false) noexcept {
     if (callback == nullptr || callback->engine == nullptr)
         return SAO_ERR_HANDLE_INVALID;
     {
@@ -754,33 +870,65 @@ int32_t invoke_ctx_callback(as_ctx_callback* callback, const ordered_json& args,
                 raw, [](asIScriptContext* value) { value->Release(); });
             if (context->Prepare(callback->function) < 0) {
                 status = SAO_ERR_OS_CALL_FAILED;
+                log_callback_failure(callback, "callback.prepare", "Prepare failed",
+                                     context.get());
             } else {
                 context->SetUserData(callback->plugin.get(),
                                      kPluginContextUserDataSlot);
                 std::vector<as_string> string_args;
                 std::vector<std::pair<void*, const asITypeInfo*>> release_after;
+                struct ArgumentScope {
+                    asIScriptEngine* engine;
+                    std::vector<std::pair<void*, const asITypeInfo*>>& objects;
+                    ~ArgumentScope() {
+                        for (const auto& [object, type] : objects) {
+                            if (type != nullptr && object != nullptr)
+                                engine->ReleaseScriptObject(object, type);
+                        }
+                    }
+                } argument_scope{callback->engine, release_after};
                 status = set_callback_arguments(context.get(), callback->function,
                                                 callback->engine, args, string_args,
                                                 release_after);
                 if (status == SAO_OK) {
-                    if (context->Execute() != asEXECUTION_FINISHED) {
+                    const int execution = context->Execute();
+                    if (execution != asEXECUTION_FINISHED) {
                         status = SAO_ERR_OS_CALL_FAILED;
+                        const std::string message = "Execute returned " + std::to_string(execution);
+                        log_callback_failure(callback, "callback.execute", message.c_str(),
+                                             context.get());
+                    } else if (out_result != nullptr && retain_return) {
+                        out_result->return_type_id = callback->function->GetReturnTypeId();
+                        void* object = context->GetReturnObject();
+                        if (type_is_array(callback->engine, out_result->return_type_id) &&
+                            object != nullptr) {
+                            auto* array = static_cast<CScriptArray*>(object);
+                            array->AddRef();
+                            out_result->return_object = array;
+                        }
                     } else if (out_result != nullptr) {
                         out_result->value =
                             return_value_to_json(context.get(), callback->function,
-                                                 callback->engine, out_result);
+                                                 callback->engine,
+                                                 retain_return ? out_result : nullptr);
                     }
+                } else {
+                    log_callback_failure(callback, "callback.arguments",
+                                         "argument marshalling failed", context.get());
                 }
-                for (const auto& [object, type] : release_after) {
-                    if (type != nullptr && object != nullptr)
-                        callback->engine->ReleaseScriptObject(object, type);
-                }
-                release_after.clear();
             }
+        } else {
+            log_callback_failure(callback, "callback.context", "CreateContext failed");
         }
+    } catch (const std::exception& error) {
+        status = SAO_ERR_OS_CALL_FAILED;
+        log_callback_failure(callback, "callback.native", error.what());
     } catch (...) {
         status = SAO_ERR_OS_CALL_FAILED;
+        log_callback_failure(callback, "callback.native", "unknown native exception");
     }
+    if (status != SAO_OK && out_result != nullptr)
+        release_return_object(callback->engine, *out_result);
     {
         std::lock_guard lock(callback->mutex);
         callback->invoked = true;
@@ -812,18 +960,48 @@ void quiesce_ctx_callback(as_ctx_callback* callback) noexcept {
 // per-plugin ctx surface state
 // ──────────────────────────────────────────────────────────────────────────
 
-struct menu_row {
-    std::string label;
-    std::string icon;
-    std::string action_id;
-    std::string payload;
-    bool can_activate = false;
-    bool keep_menu_open = false;
-    bool close_menu_before = false;
+struct menu_native_leases {
+    asIScriptEngine* engine = nullptr;
+    std::vector<std::pair<void*, const asITypeInfo*>> objects;
+    std::size_t nodes = 0;
+    std::size_t bytes = 0;
+
+    void retain(void* object, const asITypeInfo* type) {
+        objects.emplace_back(object, type);
+        engine->AddRefScriptObject(object, type);
+    }
+
+    ~menu_native_leases() {
+        engine_execution_guard engine_lock;
+        for (const auto& [object, type] : objects)
+            engine->ReleaseScriptObject(object, type);
+    }
+};
+
+struct menu_tree {
+    std::vector<menu_nav::Node> roots;
+    std::shared_ptr<menu_native_leases> leases;
+
+    ~menu_tree() {
+        std::array<std::vector<menu_nav::Node>*, menu_nav::max_nodes + 1> levels{};
+        std::size_t depth = 1;
+        levels[0] = &roots;
+        while (depth != 0) {
+            auto* level = levels[depth - 1];
+            if (level->empty()) {
+                --depth;
+            } else if (level->back().children.empty()) {
+                level->pop_back();
+            } else {
+                levels[depth++] = &level->back().children;
+            }
+        }
+    }
 };
 
 struct action_record {
-    as_ctx_callback* callback = nullptr;
+    std::shared_ptr<as_ctx_callback> callback;
+    std::shared_ptr<menu_native_leases> leases;
     std::string payload_json;
 };
 
@@ -835,13 +1013,14 @@ struct menu_provider {
     std::string icon;
     double priority = 0.0;
     std::mutex mutex;
-    bool closing = false;
+    std::atomic_bool closing{false};
     as_ctx_callback* builder = nullptr;
     as_ctx_callback* panel_handler = nullptr;  // ACTION_ONLY: (action_id, payload) -> dict
     std::unordered_set<std::string> claimed_ids;  // empty => handles every action
-    std::vector<menu_row> rows;
+    menu_nav::State navigation;
+    std::unique_ptr<menu_tree> tree;
+    std::vector<menu_nav::Row> rows;
     std::unordered_map<std::string, action_record> actions;
-    std::unordered_map<std::string, std::size_t> identity_occurrences;
     std::uint64_t revision = 0;
     shared_plugin_state plugin;
     loader_ns::plugin_context_t* ctx = nullptr;
@@ -861,6 +1040,7 @@ struct data_source_record {
 
 // one user_data shared across a panel's render + action callbacks.
 struct panel_record {
+    std::string id;
     as_ctx_callback* render = nullptr;
     as_ctx_callback* action = nullptr;
 };
@@ -963,11 +1143,11 @@ as_ctx_callback* make_callback(const std::shared_ptr<ctx_surface_state>& state,
                          ? engine
                          : (state->plugin != nullptr ? state->plugin->engine : nullptr);
     record->function = function;
-    function->AddRef();
     record->ctx = state->context;
     record->plugin = state->plugin;
     as_ctx_callback* raw = record.get();
     state->callbacks.push_back(std::move(record));
+    function->AddRef();
     return raw;
 }
 
@@ -1299,7 +1479,9 @@ int32_t SAO_PLUGINS_CALL panel_render_dispatch(const char* payload_json_utf8,
     ordered_json payload = nullptr;
     if (payload_json_utf8 != nullptr) {
         ordered_json parsed = ordered_json::parse(payload_json_utf8, nullptr, false);
-        payload = parsed.is_discarded() || parsed.is_null() ? ordered_json::object() : std::move(parsed);
+        if (parsed.is_discarded())
+            return SAO_ERR_INVALID_ARGUMENT;
+        payload = std::move(parsed);
     }
     args.push_back(std::move(payload));
     cb_result result;
@@ -1309,7 +1491,7 @@ int32_t SAO_PLUGINS_CALL panel_render_dispatch(const char* payload_json_utf8,
     const std::string text = parse_result_json(result);
     if (text.empty())
         return SAO_OK;
-    auto* buffer = static_cast<char*>(std::malloc(text.size() + 1));
+    auto* buffer = new (std::nothrow) char[text.size() + 1];
     if (buffer == nullptr)
         return SAO_ERR_OS_CALL_FAILED;
     std::memcpy(buffer, text.data(), text.size() + 1);
@@ -1337,8 +1519,9 @@ int32_t SAO_PLUGINS_CALL panel_action_dispatch(const char* action_id_utf8,
     ordered_json payload = nullptr;
     if (payload_json_utf8 != nullptr) {
         ordered_json parsed = ordered_json::parse(payload_json_utf8, nullptr, false);
-        payload = parsed.is_discarded() || parsed.is_null() ? ordered_json::object()
-                                                            : std::move(parsed);
+        if (parsed.is_discarded())
+            return SAO_ERR_INVALID_ARGUMENT;
+        payload = std::move(parsed);
     }
     args.push_back(std::move(payload));
     cb_result result;
@@ -1348,7 +1531,7 @@ int32_t SAO_PLUGINS_CALL panel_action_dispatch(const char* action_id_utf8,
     const std::string text = parse_result_json(result);
     if (text.empty())
         return SAO_OK;
-    auto* buffer = static_cast<char*>(std::malloc(text.size() + 1));
+    auto* buffer = new (std::nothrow) char[text.size() + 1];
     if (buffer == nullptr)
         return SAO_ERR_OS_CALL_FAILED;
     std::memcpy(buffer, text.data(), text.size() + 1);
@@ -1412,34 +1595,32 @@ std::string hash_menu_identity(const std::string& value) {
     return buffer;
 }
 
-std::string dict_get_string(const CScriptDictionary* dict, const char* key) {
-    if (dict == nullptr || key == nullptr)
+const CScriptDictValue* dict_value(const CScriptDictionary* dict, const char* key) {
+    return dict != nullptr && key != nullptr && dict->Exists(key) ? (*dict)[key] : nullptr;
+}
+
+std::string dict_get_string(const CScriptDictionary* dict, const char* key,
+                            asIScriptEngine* engine) {
+    const CScriptDictValue* value = dict_value(dict, key);
+    if (value == nullptr || !type_is_named(engine, value->GetTypeId(), "string"))
         return {};
-    const int type_id = dict->GetTypeId(key);
-    if (type_id <= 0)
-        return {};
-    void* stored = nullptr;
-    if ((type_id & asTYPEID_OBJHANDLE) != 0) {
-        if (!dict->Get(key, &stored, type_id) || stored == nullptr)
-            return {};
-        return {};
-    }
-    if (!dict->Get(key, &stored, type_id) || stored == nullptr)
-        return {};
-    return *static_cast<const std::string*>(stored);
+    const void* stored = value->GetAddressOfValue();
+    if ((value->GetTypeId() & asTYPEID_OBJHANDLE) != 0)
+        stored = *static_cast<void* const*>(stored);
+    return stored != nullptr ? *static_cast<const as_string*>(stored) : std::string{};
 }
 
 asIScriptFunction* dict_get_funcdef(CScriptDictionary* dict, const char* key,
                                     asIScriptEngine* engine) {
-    if (dict == nullptr || key == nullptr || engine == nullptr)
+    const CScriptDictValue* value = dict_value(dict, key);
+    if (value == nullptr || engine == nullptr)
         return nullptr;
-    const int type_id = dict->GetTypeId(key);
+    const int type_id = value->GetTypeId();
     if ((type_id & asTYPEID_OBJHANDLE) == 0 || !type_is_funcdef(engine, type_id))
         return nullptr;
-    void* stored = nullptr;
-    if (!dict->Get(key, &stored, type_id))
-        return nullptr;
-    return static_cast<asIScriptFunction*>(stored);
+    // Borrowed dictionary storage; callers retain the function before executing script.
+    return static_cast<asIScriptFunction*>(
+        *static_cast<void* const*>(value->GetAddressOfValue()));
 }
 
 bool dict_get_bool(const CScriptDictionary* dict, const char* key, bool fallback,
@@ -1454,6 +1635,10 @@ bool dict_get_bool(const CScriptDictionary* dict, const char* key, bool fallback
     }
     if (present != nullptr)
         *present = true;
+    if (type_id == asTYPEID_BOOL) {
+        const auto* value = dict_value(dict, key);
+        return *static_cast<const asBYTE*>(value->GetAddressOfValue()) != 0;
+    }
     asINT64 integer = 0;
     if (dict->Get(key, integer))
         return integer != 0;
@@ -1465,141 +1650,362 @@ bool dict_get_bool(const CScriptDictionary* dict, const char* key, bool fallback
 
 std::string dict_get_payload(const CScriptDictionary* dict, const char* key,
                              asIScriptEngine* engine) {
-    if (dict == nullptr || key == nullptr)
-        return {};
-    const int type_id = dict->GetTypeId(key);
-    if (type_id <= 0)
-        return {};
-    void* stored = nullptr;
-    if ((type_id & asTYPEID_OBJHANDLE) != 0 || (type_id & asTYPEID_MASK_OBJECT) != 0) {
-        if (!dict->Get(key, &stored, type_id) || stored == nullptr)
-            return {};
-        const ordered_json value = object_to_json(engine, stored, type_id);
-        return value.is_string() ? value.get<std::string>()
-                                 : (value.is_null() ? std::string{} : value.dump());
+    const CScriptDictValue* stored = dict_value(dict, key);
+    if (stored == nullptr)
+        return "{}";
+    struct pending_value {
+        const void* address = nullptr;
+        int type = 0;
+        std::string text;
+        const void* leave = nullptr;
+    };
+    std::vector<pending_value> pending{{stored->GetAddressOfValue(), stored->GetTypeId(), {}, nullptr}};
+    std::unordered_set<const void*> ancestors;
+    std::string output;
+    std::size_t scheduled_values = 1;
+    std::size_t key_bytes = 0;
+    const auto append = [&](const std::string& text) {
+        if (text.size() > menu_nav::max_text_bytes - output.size())
+            throw std::runtime_error("menu payload string budget exceeded");
+        output += text;
+    };
+    while (!pending.empty()) {
+        auto item = std::move(pending.back());
+        pending.pop_back();
+        if (item.leave != nullptr) {
+            ancestors.erase(item.leave);
+            continue;
+        }
+        if (!item.text.empty()) {
+            append(item.text);
+            continue;
+        }
+        const void* object = item.address;
+        if (object != nullptr && (item.type & asTYPEID_OBJHANDLE) != 0)
+            object = *static_cast<void* const*>(object);
+        if (object == nullptr || item.type == 0) {
+            append("null");
+        } else if ((item.type & asTYPEID_MASK_OBJECT) == 0) {
+            append(primitive_to_json(item.type, object).dump());
+        } else if (type_is_named(engine, item.type, "string")) {
+            const auto& text = *static_cast<const as_string*>(object);
+            if (text.size() > menu_nav::max_text_bytes)
+                throw std::runtime_error("menu payload string budget exceeded");
+            append(ordered_json(text).dump());
+        } else if (type_is_named(engine, item.type, "dictionaryValue")) {
+            if (!ancestors.insert(object).second)
+                throw std::runtime_error("cyclic menu payload");
+            if (scheduled_values == menu_nav::max_nodes)
+                throw std::runtime_error("menu payload value budget exceeded");
+            ++scheduled_values;
+            const auto* value = static_cast<const CScriptDictValue*>(object);
+            pending.push_back({nullptr, 0, {}, object});
+            pending.push_back({value->GetAddressOfValue(), value->GetTypeId(), {}, nullptr});
+        } else if (type_is_named(engine, item.type, "dictionary") ||
+                   type_is_array(engine, item.type)) {
+            if (!ancestors.insert(object).second)
+                throw std::runtime_error("cyclic menu payload");
+            pending.push_back({nullptr, 0, {}, object});
+            std::vector<pending_value> entries;
+            if (type_is_array(engine, item.type)) {
+                const auto* array = static_cast<const CScriptArray*>(object);
+                if (array->GetSize() > menu_nav::max_nodes - scheduled_values)
+                    throw std::runtime_error("menu payload value budget exceeded");
+                scheduled_values += array->GetSize();
+                append("[");
+                pending.push_back({nullptr, 0, "]", nullptr});
+                for (asUINT index = 0; index < array->GetSize(); ++index) {
+                    if (index != 0)
+                        entries.push_back({nullptr, 0, ",", nullptr});
+                    entries.push_back({array->At(index), array->GetElementTypeId(), {}, nullptr});
+                }
+            } else {
+                const auto* dict_object = static_cast<const CScriptDictionary*>(object);
+                if (dict_object->GetSize() > menu_nav::max_nodes - scheduled_values)
+                    throw std::runtime_error("menu payload value budget exceeded");
+                scheduled_values += dict_object->GetSize();
+                append("{");
+                pending.push_back({nullptr, 0, "}", nullptr});
+                for (auto it = dict_object->begin(); it != dict_object->end(); ++it) {
+                    if (it.GetKey().size() > menu_nav::max_text_bytes - key_bytes)
+                        throw std::runtime_error("menu payload key budget exceeded");
+                    key_bytes += it.GetKey().size();
+                    if (!entries.empty())
+                        entries.push_back({nullptr, 0, ",", nullptr});
+                    entries.push_back({nullptr, 0, ordered_json(it.GetKey()).dump() + ":", nullptr});
+                    entries.push_back({it.GetAddressOfValue(), it.GetTypeId(), {}, nullptr});
+                }
+            }
+            for (auto it = entries.rbegin(); it != entries.rend(); ++it)
+                pending.push_back(std::move(*it));
+        } else if (type_is_named(engine, item.type, "json")) {
+            const auto* value = json_ref_value(object);
+            append(value != nullptr ? value->dump() : "null");
+        } else {
+            append("null");
+        }
     }
-    asINT64 integer = 0;
-    if (dict->Get(key, integer))
-        return std::to_string(integer);
-    double number = 0.0;
-    if (dict->Get(key, number))
-        return std::to_string(number);
-    return {};
+    if (output.size() > 16384)
+        throw std::runtime_error("menu payload exceeds loader string budget");
+    std::size_t nodes = 0;
+    const auto parsed = ordered_json::parse(output,
+        [&](int depth, ordered_json::parse_event_t event, ordered_json& value) {
+            const bool container = event == ordered_json::parse_event_t::object_start ||
+                                   event == ordered_json::parse_event_t::array_start;
+            if ((container && depth >= 64) ||
+                ((container || event == ordered_json::parse_event_t::value) && ++nodes > 16384) ||
+                (value.is_string() && value.get_ref<const std::string&>().find('\0') !=
+                                          std::string::npos) ||
+                (value.is_number_unsigned() && value.get<uint64_t>() >
+                     static_cast<uint64_t>((std::numeric_limits<int64_t>::max)())))
+                throw std::runtime_error("menu payload violates loader JSON contract");
+            return true;
+        }, false);
+    if (parsed.is_discarded())
+        throw std::runtime_error("menu payload violates loader JSON contract");
+    return output == "null" ? "{}" : output;
+}
+
+std::shared_ptr<as_ctx_callback> lease_menu_callback(menu_provider* provider,
+                                                  asIScriptEngine* engine,
+                                                  asIScriptFunction* function) {
+    auto callback = std::shared_ptr<as_ctx_callback>(new as_ctx_callback,
+        [](as_ctx_callback* value) {
+            quiesce_ctx_callback(value);
+            engine_execution_guard engine_lock;
+            if (value->function != nullptr)
+                value->function->Release();
+            delete value;
+        });
+    callback->engine = engine;
+    callback->ctx = provider->ctx;
+    callback->plugin = provider->plugin;
+    function->AddRef();
+    callback->function = function;
+    return callback;
 }
 
 bool build_menu_snapshot(menu_provider* provider, asIScriptEngine* engine,
-                         const std::shared_ptr<ctx_surface_state>& state) noexcept {
-    if (provider == nullptr || provider->builder == nullptr || engine == nullptr)
+                         const std::shared_ptr<ctx_surface_state>& state,
+                         const menu_nav::State* requested_navigation = nullptr) noexcept {
+    if (provider == nullptr || provider->builder == nullptr || engine == nullptr || !state)
         return false;
+    engine_execution_guard engine_lock;
     std::lock_guard lock(provider->mutex);
     if (provider->closing)
         return false;
-    cb_result result;
-    const int32_t status =
-        invoke_ctx_callback(provider->builder, ordered_json::array(), &result);
-    if (status != SAO_OK)
-        return false;
-
-    std::vector<menu_row> rows;
-    std::unordered_map<std::string, action_record> actions;
     try {
-        const int base_tid =
-            result.return_type_id & ~(asTYPEID_OBJHANDLE | asTYPEID_HANDLETOCONST);
-        CScriptArray* raw_rows = nullptr;
-        if ((result.return_type_id & asTYPEID_OBJHANDLE) != 0 &&
-            type_is_array(engine, base_tid) && result.return_object != nullptr) {
-            raw_rows = static_cast<CScriptArray*>(result.return_object);
-        }
-        if (raw_rows != nullptr) {
-            const int element_type = raw_rows->GetElementTypeId();
-            for (asUINT index = 0; index < raw_rows->GetSize(); ++index) {
-                CScriptDictionary* row_dict = nullptr;
-                if (element_type & asTYPEID_OBJHANDLE) {
-                    row_dict =
-                        static_cast<CScriptDictionary*>(*static_cast<void**>(raw_rows->At(index)));
-                } else if (element_type & asTYPEID_MASK_OBJECT) {
-                    row_dict = static_cast<CScriptDictionary*>(raw_rows->At(index));
+        auto tree = std::make_unique<menu_tree>();
+        tree->leases = std::make_shared<menu_native_leases>();
+        auto& leases = *tree->leases;
+        leases.engine = engine;
+        std::unordered_map<std::string, action_record> actions;
+        const auto charge = [&](const std::string& text) {
+            if (text.find('\0') != std::string::npos ||
+                text.size() > menu_nav::max_text_bytes - leases.bytes)
+                throw std::runtime_error("menu string budget or embedded NUL");
+            (void)ordered_json(text).dump();
+            leases.bytes += text.size();
+        };
+        const auto build_array = [&](as_ctx_callback* builder) {
+            cb_result result;
+            struct return_scope {
+                asIScriptEngine* engine;
+                cb_result& result;
+                ~return_scope() { release_return_object(engine, result); }
+            } scope{engine, result};
+            const auto* return_type = builder->function != nullptr
+                ? type_info_for(engine, builder->function->GetReturnTypeId()) : nullptr;
+            if (builder->function == nullptr || builder->function->GetParamCount() != 0 ||
+                !type_is_array(engine, builder->function->GetReturnTypeId()) ||
+                return_type == nullptr ||
+                !type_is_named(engine, return_type->GetSubTypeId(), "dictionary"))
+                throw std::runtime_error("menu builder must take no arguments and return a dictionary array");
+            if (invoke_ctx_callback(builder, ordered_json::array(), &result, true) != SAO_OK ||
+                result.return_object == nullptr)
+                throw std::runtime_error("menu builder did not return a non-null dictionary array");
+            auto* array = static_cast<CScriptArray*>(result.return_object);
+            leases.retain(array, array->GetArrayObjectType());
+            return array;
+        };
+        struct frame {
+            CScriptArray* array;
+            CScriptDictionary* parent;
+            std::vector<CScriptDictionary*> dictionaries;
+            std::vector<menu_nav::Node>* output;
+            std::size_t index = 0;
+            std::unordered_map<std::string, std::size_t> occurrences;
+        };
+        std::vector<frame> stack;
+        std::vector<std::string> path;
+        std::unordered_set<const void*> ancestors;
+        const auto enter = [&](CScriptArray* array, CScriptDictionary* parent,
+                               std::vector<menu_nav::Node>* output) {
+            if (!ancestors.insert(array).second)
+                throw std::runtime_error("cyclic menu array");
+            const int type = array->GetElementTypeId();
+            if (!type_is_named(engine, type, "dictionary"))
+                throw std::runtime_error("menu array element type is not dictionary");
+            if (array->GetSize() > menu_nav::max_nodes - leases.nodes)
+                throw std::runtime_error("menu node budget exceeded");
+            leases.nodes += array->GetSize();
+            frame next{array, parent, {}, output, 0, {}};
+            next.dictionaries.reserve(array->GetSize());
+            output->reserve(array->GetSize());
+            for (asUINT index = 0; index < array->GetSize(); ++index) {
+                void* object = array->At(index);
+                if (object != nullptr && (type & asTYPEID_OBJHANDLE) != 0)
+                    object = *static_cast<void**>(object);
+                auto* dict = static_cast<CScriptDictionary*>(object);
+                if (dict != nullptr)
+                    leases.retain(dict, type_info_for(engine, type));
+                next.dictionaries.push_back(dict);
+            }
+            stack.push_back(std::move(next));
+        };
+        enter(build_array(provider->builder), nullptr, &tree->roots);
+        while (!stack.empty()) {
+            auto& level = stack.back();
+            if (level.index == level.dictionaries.size()) {
+                ancestors.erase(level.array);
+                if (level.parent != nullptr) {
+                    ancestors.erase(level.parent);
+                    path.pop_back();
                 }
-                if (row_dict == nullptr)
-                    continue;
-                menu_row row;
-                row.label = dict_get_string(row_dict, "label");
-                if (row.label.empty())
-                    continue;
-                row.icon = dict_get_string(row_dict, "icon");
-                row.payload = dict_get_payload(row_dict, "payload", engine);
-                row.keep_menu_open = dict_get_bool(row_dict, "keep_menu_open", false);
-                row.close_menu_before = dict_get_bool(row_dict, "close_menu_before", false);
-                bool requested = true;
-                const bool explicit_flag =
-                    dict_get_bool(row_dict, "can_activate", true, &requested);
-                asIScriptFunction* command =
-                    dict_get_funcdef(row_dict, "command", engine);
-                row.can_activate = command != nullptr && (!explicit_flag || requested);
-
-                std::string identity = dict_get_string(row_dict, "action_id");
-                if (identity.empty())
-                    identity = dict_get_string(row_dict, "id");
-                if (identity.empty()) {
-                    identity.append(row.label);
-                    identity.push_back('\n');
-                    identity.append(row.icon);
-                    identity.push_back('\n');
-                    identity.append(row.payload);
-                    identity.push_back(row.can_activate ? '1' : '0');
-                    identity.push_back(row.keep_menu_open ? '1' : '0');
-                    identity.push_back(row.close_menu_before ? '1' : '0');
-                    const std::size_t occurrence =
-                        provider->identity_occurrences[identity]++;
-                    identity.push_back('#');
-                    identity.append(std::to_string(occurrence));
+                stack.pop_back();
+                continue;
+            }
+            auto* dict = level.dictionaries[level.index++];
+            if (dict == nullptr)
+                continue;
+            if (!ancestors.insert(dict).second)
+                throw std::runtime_error("cyclic menu dictionary");
+            menu_nav::Node node;
+            auto& row = node.row;
+            row.label = dict_get_string(dict, "label", engine);
+            if (row.label.empty()) {
+                if (dict_value(dict, "children") != nullptr ||
+                    dict_value(dict, "items") != nullptr || dict_value(dict, "submenu") != nullptr)
+                    throw std::runtime_error("submenu label must be non-empty");
+                ancestors.erase(dict);
+                continue;
+            }
+            row.icon = dict_get_string(dict, "icon", engine);
+            row.payload_json = dict_get_payload(dict, "payload", engine);
+            row.keep_open = dict_get_bool(dict, "keep_menu_open", dict_get_bool(dict, "keep_open", false));
+            row.close_before = dict_get_bool(
+                dict, "close_menu_before", dict_get_bool(dict, "close_before", false));
+            const bool requested = dict_get_bool(dict, "can_activate", true);
+            const CScriptDictValue* children = nullptr;
+            for (const char* key : {"children", "items", "submenu"}) {
+                if (const auto* value = dict_value(dict, key)) {
+                    if (children != nullptr)
+                        throw std::runtime_error("menu row has multiple child sources");
+                    children = value;
                 }
-                row.action_id = "menu-action-" +
-                                hash_menu_identity(provider->contribution_id + "\n" + identity);
-                if (command != nullptr) {
-                    as_ctx_callback* cb = make_callback(state, command, engine);
-                    if (cb != nullptr)
-                        actions.emplace(row.action_id, action_record{cb, row.payload});
+            }
+            node.submenu = children != nullptr;
+            asIScriptFunction* command = dict_get_funcdef(dict, "command", engine);
+            row.can_activate = requested && (node.submenu || command != nullptr);
+            std::string identity = dict_get_string(dict, "action_id", engine);
+            if (identity.empty())
+                identity = dict_get_string(dict, "id", engine);
+            if (!identity.empty())
+                charge(identity);
+            if (identity.empty()) {
+                identity = row.label + "\n" + row.icon + "\n" + row.payload_json;
+                identity.push_back(row.can_activate ? '1' : '0');
+                identity.push_back(row.keep_open ? '1' : '0');
+                identity.push_back(row.close_before ? '1' : '0');
+                const auto occurrence = level.occurrences[identity]++;
+                identity += "#" + std::to_string(occurrence);
+            }
+            node.key = "node-" + hash_menu_identity(identity);
+            std::string full_identity;
+            for (const auto& part : path)
+                full_identity += std::to_string(part.size()) + ":" + part;
+            if (!path.empty())
+                full_identity = "nested:" + full_identity + std::to_string(identity.size()) + ":";
+            full_identity += identity;
+            row.action_id = "menu-action-" + hash_menu_identity(provider->contribution_id + "\n" + full_identity);
+            for (const auto* text : {&node.key, &row.label, &row.icon, &row.payload_json, &row.action_id})
+                charge(*text);
+            if (!node.submenu && row.can_activate) {
+                auto callback = lease_menu_callback(provider, engine, command);
+                if (!actions.emplace(row.action_id, action_record{std::move(callback), tree->leases,
+                                                                 row.payload_json}).second)
+                    throw std::runtime_error("duplicate menu action identity");
+            }
+            CScriptArray* child_array = nullptr;
+            if (children != nullptr) {
+                const int type = children->GetTypeId();
+                const void* object = children->GetAddressOfValue();
+                if (object != nullptr && (type & asTYPEID_OBJHANDLE) != 0)
+                    object = *static_cast<void* const*>(object);
+                if (object == nullptr)
+                    throw std::runtime_error("menu child source is null");
+                if (type_is_array(engine, type)) {
+                    child_array = static_cast<CScriptArray*>(const_cast<void*>(object));
+                    leases.retain(child_array, child_array->GetArrayObjectType());
+                } else if (type_is_funcdef(engine, type) && (type & asTYPEID_OBJHANDLE) != 0) {
+                    leases.retain(const_cast<void*>(object), type_info_for(engine, type));
+                    auto builder = lease_menu_callback(provider, engine,
+                        static_cast<asIScriptFunction*>(const_cast<void*>(object)));
+                    child_array = build_array(builder.get());
+                } else {
+                    throw std::runtime_error("menu child source must be a dictionary array or builder handle");
                 }
-                rows.push_back(std::move(row));
+            }
+            level.output->push_back(std::move(node));
+            if (child_array != nullptr) {
+                auto& committed = level.output->back();
+                path.push_back(committed.key);
+                enter(child_array, dict, &committed.children);
+            } else {
+                ancestors.erase(dict);
             }
         }
+        auto navigation = requested_navigation != nullptr ? *requested_navigation
+                                                         : provider->navigation;
+        std::string error;
+        if (!navigation.replace(tree->roots, error))
+            throw std::runtime_error(error);
+        auto rows = navigation.rows();
+        const bool changed = provider->revision == 0 || provider->rows != rows ||
+                             provider->navigation.path() != navigation.path();
+        if (changed && provider->revision == std::numeric_limits<std::uint64_t>::max())
+            throw std::runtime_error("menu revision exhausted");
+        auto history = provider->actions;
+        for (const auto& [id, record] : actions)
+            history.insert_or_assign(id, record);
+        if (history.size() > menu_nav::max_nodes)
+            throw std::runtime_error("menu action history budget exceeded");
+        std::unordered_set<const menu_native_leases*> generations{tree->leases.get()};
+        std::size_t nodes = leases.nodes, bytes = leases.bytes;
+        for (const auto& [id, record] : history) {
+            (void)id;
+            if (!generations.insert(record.leases.get()).second)
+                continue;
+            if (record.leases->nodes > menu_nav::max_nodes - nodes ||
+                record.leases->bytes > menu_nav::max_text_bytes - bytes)
+                throw std::runtime_error("menu retained action storage budget exceeded");
+            nodes += record.leases->nodes;
+            bytes += record.leases->bytes;
+        }
+        provider->actions.swap(history);
+        provider->tree.swap(tree);
+        std::swap(provider->navigation, navigation);
+        provider->rows.swap(rows);
+        if (changed)
+            ++provider->revision;
+        return true;
+    } catch (const std::exception& error) {
+        log_callback_failure(provider->builder, "menu.snapshot", error.what());
+        return false;
     } catch (...) {
-        release_return_object(engine, result);
+        log_callback_failure(provider->builder, "menu.snapshot", "unknown row conversion exception");
         return false;
     }
-
-    const bool changed = provider->revision == 0 || provider->rows.size() != rows.size() ||
-                         [&] {
-                             for (std::size_t i = 0; i < rows.size(); ++i) {
-                                 if (!(rows[i].label == provider->rows[i].label &&
-                                       rows[i].icon == provider->rows[i].icon &&
-                                       rows[i].action_id == provider->rows[i].action_id &&
-                                       rows[i].payload == provider->rows[i].payload &&
-                                       rows[i].can_activate ==
-                                           provider->rows[i].can_activate &&
-                                       rows[i].keep_menu_open ==
-                                           provider->rows[i].keep_menu_open &&
-                                       rows[i].close_menu_before ==
-                                           provider->rows[i].close_menu_before))
-                                     return true;
-                             }
-                             return false;
-                         }();
-    // retire callbacks of stale actions, install the fresh action table.
-    std::vector<as_ctx_callback*> stale;
-    for (const auto& [action_id, record] : provider->actions) {
-        if (actions.find(action_id) == actions.end())
-            stale.push_back(record.callback);
-    }
-    provider->actions = std::move(actions);
-    provider->rows = std::move(rows);
-    if (changed)
-        ++provider->revision;
-    release_return_object(engine, result);
-    for (as_ctx_callback* stale_cb : stale)
-        retire_callback(state, stale_cb);
-    return true;
 }
 
 int32_t SAO_PLUGINS_CALL menu_snapshot_v2_dispatch(
@@ -1652,10 +2058,10 @@ int32_t SAO_PLUGINS_CALL menu_snapshot_v2_dispatch(
             source.label.c_str(),
             source.icon.c_str(),
             source.action_id.c_str(),
-            source.payload.c_str(),
+            source.payload_json.c_str(),
             static_cast<std::uint8_t>(source.can_activate),
-            static_cast<std::uint8_t>(source.keep_menu_open),
-            static_cast<std::uint8_t>(source.close_menu_before),
+            static_cast<std::uint8_t>(source.keep_open),
+            static_cast<std::uint8_t>(source.close_before),
             {},
         };
         std::memcpy(static_cast<std::byte*>(rows) + index * row_stride_bytes, &row,
@@ -1665,7 +2071,7 @@ int32_t SAO_PLUGINS_CALL menu_snapshot_v2_dispatch(
 }
 
 int32_t submit_action_result(loader_ns::entity_action_result_sink_v2_fn sink, void* sink_data,
-                             bool handled, const char* json) noexcept {
+                             bool handled, const char* json) {
     if (sink == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     const loader_ns::entity_action_result_v2 result{
@@ -1680,7 +2086,7 @@ int32_t submit_action_result(loader_ns::entity_action_result_sink_v2_fn sink, vo
 
 int32_t run_menu_action(as_ctx_callback* callback, const std::string& payload_json,
                         loader_ns::entity_action_result_sink_v2_fn sink,
-                        void* sink_data) noexcept {
+                        void* sink_data) {
     ordered_json args = ordered_json::array();
     ordered_json payload = ordered_json::parse(payload_json, nullptr, false);
     args.push_back(payload.is_discarded() || payload.is_null() ? ordered_json::object()
@@ -1688,7 +2094,7 @@ int32_t run_menu_action(as_ctx_callback* callback, const std::string& payload_js
     cb_result result;
     const int32_t status = invoke_ctx_callback(callback, args, &result);
     if (status != SAO_OK)
-        return submit_action_result(sink, sink_data, false, nullptr);
+        return status;
     const std::string json = parse_result_json(result);
     return submit_action_result(sink, sink_data, true, json.empty() ? nullptr : json.c_str());
 }
@@ -1702,61 +2108,93 @@ int32_t SAO_PLUGINS_CALL provider_action_v2_dispatch(
         return SAO_ERR_INVALID_ARGUMENT;
     }
     auto* provider = static_cast<menu_provider*>(user_data);
-    if (provider->closing)
-        return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
-    std::lock_guard lock(provider->mutex);
-    // ACTION_ONLY providers dispatch straight to their panel/global handler,
-    // scoped to the action ids claimed by their panel meta when known.
-    if (provider->panel_handler != nullptr) {
-        if (!provider->claimed_ids.empty() &&
-            provider->claimed_ids.find(action_id_utf8) == provider->claimed_ids.end()) {
-            return submit_action_result(result_sink, result_sink_user_data, false, nullptr);
+    try {
+        engine_execution_guard engine_lock;
+        if (provider->closing)
+            return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
+        std::unique_lock lock(provider->mutex);
+        auto navigation = provider->navigation;
+        const auto navigation_result = navigation.activate(action_id_utf8);
+        if (navigation_result != menu_nav::NavigationResult::not_navigation) {
+            if (navigation_result == menu_nav::NavigationResult::stale)
+                return submit_action_result(result_sink, result_sink_user_data, false, nullptr);
+            lock.unlock();
+            if (!build_menu_snapshot(provider, provider->builder != nullptr
+                                                  ? provider->builder->engine : nullptr,
+                                     ctx_state_for(provider->ctx), &navigation))
+                return SAO_ERR_OS_CALL_FAILED;
+            return submit_action_result(result_sink, result_sink_user_data, true,
+                                        "{\"refresh\":true}");
         }
-        ordered_json args = ordered_json::array();
-        args.push_back(action_id_utf8);
-        ordered_json payload = ordered_json::parse(payload_json_utf8, nullptr, false);
-        args.push_back(payload.is_discarded() || payload.is_null()
-                           ? ordered_json::object()
-                           : payload);
-        cb_result result;
-        const int32_t status =
-            invoke_ctx_callback(provider->panel_handler, args, &result);
-        if (status != SAO_OK)
+        const auto found = provider->actions.find(action_id_utf8);
+        const auto visible = std::find_if(provider->rows.begin(), provider->rows.end(),
+            [action_id_utf8](const menu_nav::Row& row) {
+                return row.action_id == action_id_utf8 && row.can_activate;
+            });
+        if (std::string_view(action_id_utf8).starts_with("menu-action-") &&
+            (found == provider->actions.end() || visible == provider->rows.end()))
             return submit_action_result(result_sink, result_sink_user_data, false, nullptr);
-        const std::string json = parse_result_json(result);
-        return submit_action_result(result_sink, result_sink_user_data, true,
-                                    json.empty() ? nullptr : json.c_str());
-    }
-    const auto found = provider->actions.find(action_id_utf8);
-    if (found == provider->actions.end()) {
-        // fall back to the global action handler on the same ctx, if present.
-        if (provider->ctx != nullptr) {
-            if (const auto state = ctx_state_for(provider->ctx)) {
-                if (state->global_action_handler != nullptr &&
-                    state->global_action_handler->function != nullptr) {
-                    ordered_json args = ordered_json::array();
-                    args.push_back(action_id_utf8);
-                    ordered_json payload =
-                        ordered_json::parse(payload_json_utf8, nullptr, false);
-                    args.push_back(payload.is_discarded() || payload.is_null()
-                                       ? ordered_json::object()
-                                       : payload);
-                    cb_result result;
-                    const int32_t status = invoke_ctx_callback(
-                        state->global_action_handler, args, &result);
-                    if (status != SAO_OK)
-                        return submit_action_result(result_sink, result_sink_user_data, false,
-                                                    nullptr);
-                    const std::string json = parse_result_json(result);
-                    return submit_action_result(result_sink, result_sink_user_data, true,
-                                                json.empty() ? nullptr : json.c_str());
+        if (provider->panel_handler != nullptr) {
+            if (!provider->claimed_ids.empty() &&
+                provider->claimed_ids.find(action_id_utf8) == provider->claimed_ids.end()) {
+                return submit_action_result(result_sink, result_sink_user_data, false, nullptr);
+            }
+            auto* callback = provider->panel_handler;
+            lock.unlock();
+            ordered_json args = ordered_json::array();
+            args.push_back(action_id_utf8);
+            ordered_json payload = ordered_json::parse(payload_json_utf8, nullptr, false);
+            args.push_back(payload.is_discarded() || payload.is_null()
+                               ? ordered_json::object()
+                               : payload);
+            cb_result result;
+            const int32_t status = invoke_ctx_callback(callback, args, &result);
+            if (status != SAO_OK)
+                return status;
+            const std::string json = parse_result_json(result);
+            return submit_action_result(result_sink, result_sink_user_data, !result.value.is_null(),
+                                        json.empty() ? nullptr : json.c_str());
+        }
+        if (found == provider->actions.end()) {
+            lock.unlock();
+            if (provider->ctx != nullptr) {
+                if (const auto state = ctx_state_for(provider->ctx)) {
+                    if (state->global_action_handler != nullptr &&
+                        state->global_action_handler->function != nullptr) {
+                        ordered_json args = ordered_json::array();
+                        args.push_back(action_id_utf8);
+                        ordered_json payload =
+                            ordered_json::parse(payload_json_utf8, nullptr, false);
+                        args.push_back(payload.is_discarded() || payload.is_null()
+                                           ? ordered_json::object()
+                                           : payload);
+                        cb_result result;
+                        const int32_t status = invoke_ctx_callback(
+                            state->global_action_handler, args, &result);
+                        if (status != SAO_OK)
+                            return status;
+                        const std::string json = parse_result_json(result);
+                        return submit_action_result(result_sink, result_sink_user_data,
+                                                    !result.value.is_null(),
+                                                    json.empty() ? nullptr : json.c_str());
+                    }
                 }
             }
+            return submit_action_result(result_sink, result_sink_user_data, false, nullptr);
         }
-        return submit_action_result(result_sink, result_sink_user_data, false, nullptr);
+        if (visible == provider->rows.end())
+            return submit_action_result(result_sink, result_sink_user_data, false, nullptr);
+        const action_record action = found->second;
+        lock.unlock();
+        return run_menu_action(action.callback.get(), payload_json_utf8, result_sink,
+                               result_sink_user_data);
+    } catch (const std::exception& error) {
+        log_callback_failure(provider->builder, "menu.action", error.what());
+        return SAO_ERR_OS_CALL_FAILED;
+    } catch (...) {
+        log_callback_failure(provider->builder, "menu.action", "unknown native exception");
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    return run_menu_action(found->second.callback, payload_json_utf8, result_sink,
-                           result_sink_user_data);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1822,7 +2260,7 @@ bool register_action_only_provider(loader_ns::plugin_context_t* ctx,
         provider->provider_id.c_str(),
         nullptr,
         nullptr,
-        provider,
+        nullptr,
         nullptr,
         &provider_action_v2_dispatch,
         provider,
@@ -2167,20 +2605,34 @@ void local_module_call(asIScriptGeneric* generic) {
     void* result = nullptr;
     if (handle != nullptr && handle->module != nullptr) {
         const std::string name = arg_string(generic, 0);
-        const ordered_json args = generic_arg_to_json(generic->GetEngine(), generic, 1);
         std::vector<sc::script_value_ptr> positional;
-        if (args.is_array()) {
-            positional.reserve(args.size());
-            for (const auto& item : args)
-                positional.push_back(json_to_script_value(item));
-        } else if (!args.is_null()) {
-            positional.push_back(json_to_script_value(args));
+        // `call(name, ?&in a0 = null, ...)`: every trailing `?` slot is a
+        // positional arg; a null slot means the caller omitted it, so the
+        // first null terminates the argument list.
+        const int argc = generic->GetArgCount();
+        for (int index = 1; index < argc; ++index) {
+            const ordered_json arg = generic_arg_to_json(generic->GetEngine(), generic,
+                                                       static_cast<asUINT>(index));
+            if (arg.is_null())
+                break;
+            if (arg.is_array()) {
+                for (const auto& item : arg)
+                    positional.push_back(json_to_script_value(item));
+            } else {
+                positional.push_back(json_to_script_value(arg));
+            }
         }
         sc::script_value_ptr value;
         std::string error;
-        if (handle->module->call(name, positional, &value, &error) == SAO_OK && value)
+        const int32_t status = handle->module->call(name, positional, &value, &error);
+        if (status != SAO_OK) {
+            const std::string diagnostic = "LocalModule.call " + name + " failed (" +
+                                           std::to_string(status) + "): " + error;
+            set_active_exception(diagnostic.c_str());
+        } else if (value) {
             result = json_ref_from_ordered(generic->GetEngine(),
                                            script_value_to_json(*value));
+        }
     }
     *static_cast<void**>(generic->GetAddressOfReturnLocation()) = result;
 }
@@ -2765,6 +3217,11 @@ void ctx_register_ui_panel(asIScriptGeneric* generic) {
     if (ctx != nullptr && !panel_id.empty()) {
         const std::string meta_text = meta.is_null() ? "{}" : meta.dump();
         const auto state = ctx_state_or_create(ctx, generic->GetEngine());
+        if (!state || std::any_of(state->panel_records.begin(), state->panel_records.end(),
+                                 [&panel_id](const auto& panel) { return panel->id == panel_id; })) {
+            generic->SetReturnByte(0);
+            return;
+        }
         as_ctx_callback* render_record = nullptr;
         as_ctx_callback* action_record = nullptr;
         if (state) {
@@ -2772,20 +3229,27 @@ void ctx_register_ui_panel(asIScriptGeneric* generic) {
             action_record = action_fn != nullptr ? make_callback(state, action_fn, generic->GetEngine()) : nullptr;
         }
         auto record = std::make_unique<panel_record>();
+        record->id = panel_id;
         record->render = render_record;
         record->action = action_record;
-        ok = loader_ns::sao_plugins_ctx_register_ui_panel(
+        auto* raw_record = record.get();
+        state->panel_records.push_back(std::move(record));
+        const int32_t status = loader_ns::sao_plugins_ctx_register_ui_panel(
                  ctx, panel_id.c_str(), meta_text.c_str(),
                  render_record != nullptr ? &panel_render_dispatch : nullptr,
                  action_record != nullptr ? &panel_action_dispatch : nullptr,
-                 record.get()) == SAO_OK;
-        if (ok && state)
-            state->panel_records.push_back(std::move(record));
+                 raw_record);
+        ok = status == SAO_OK;
         if (!ok && state) {
-            if (render_record != nullptr)
-                retire_callback(state, render_record);
-            if (action_record != nullptr)
-                retire_callback(state, action_record);
+            const int32_t cleanup = status == loader_ns::SAO_PLUGINS_ERR_ALREADY_EXISTS ? SAO_OK :
+                loader_ns::sao_plugins_ctx_unregister_ui_panel(ctx, panel_id.c_str());
+            if (cleanup == SAO_OK || cleanup == SAO_ERR_HANDLE_INVALID) {
+                state->panel_records.pop_back();
+                if (render_record != nullptr)
+                    retire_callback(state, render_record);
+                if (action_record != nullptr)
+                    retire_callback(state, action_record);
+            }
         }
     }
     generic->SetReturnByte(ok ? 1 : 0);
@@ -2911,7 +3375,9 @@ void ctx_register_menu_category(asIScriptGeneric* generic) {
     const double priority = generic->GetArgDouble(3);
     bool ok = false;
     if (ctx != nullptr && !name.empty() && builder != nullptr) {
-        if (const auto state = ctx_state_or_create(ctx, generic->GetEngine())) {
+        const auto state = ctx_state_or_create(ctx, generic->GetEngine());
+        if (state) {
+            state->menus.reserve(state->menus.size() + 1);
             as_ctx_callback* record = make_callback(state, builder, generic->GetEngine());
             if (record != nullptr) {
                 const std::string slug = slugify(name);
@@ -2953,6 +3419,7 @@ void ctx_register_action_handler(asIScriptGeneric* generic) {
     bool ok = false;
     if (ctx != nullptr && fn != nullptr) {
         if (const auto state = ctx_state_or_create(ctx, generic->GetEngine())) {
+            state->action_providers.reserve(state->action_providers.size() + 1);
             as_ctx_callback* record = make_callback(state, fn, generic->GetEngine());
             if (record != nullptr) {
                 auto provider = std::make_shared<menu_provider>();
@@ -2979,9 +3446,9 @@ void ctx_register_engine(asIScriptGeneric* generic) {
     const int type_id = generic->GetArgTypeId(1);
     void* object = nullptr;
     if (type_id & asTYPEID_OBJHANDLE) {
-        object = *static_cast<void**>(generic->GetAddressOfArg(1));
+        object = generic_arg_object(generic, 1, type_id);
     } else if (type_id & asTYPEID_MASK_OBJECT) {
-        object = generic->GetAddressOfArg(1);
+        object = generic_arg_data(generic, 1);
     }
     bool ok = false;
     if (ctx != nullptr && !name.empty() && object != nullptr) {
@@ -3015,6 +3482,9 @@ bool get_engine_impl(asIScriptGeneric* generic, bool required) {
     if (ctx == nullptr || name.empty() || out_address == nullptr ||
         !(out_type & asTYPEID_OBJHANDLE))
         return false;
+    // `&out` arg slots hold a pointer to the caller's handle variable —
+    // dereference once to reach the storage the write must target.
+    void** slot = *static_cast<void***>(out_address);
     if (loader_ns::sao_plugins_ctx_get_engine(ctx, name.c_str()) == nullptr) {
         if (required)
             set_active_exception("engine not registered");
@@ -3024,8 +3494,7 @@ bool get_engine_impl(asIScriptGeneric* generic, bool required) {
     // re-addref them for the caller's declared handle type).
     if (const auto state = ctx_state_for(ctx)) {
         const auto found = state->engines.find(name);
-        if (found != state->engines.end()) {
-            void** slot = static_cast<void**>(out_address);
+        if (found != state->engines.end() && slot != nullptr) {
             if (*slot != nullptr) {
                 const int old_base =
                     out_type & ~(asTYPEID_OBJHANDLE | asTYPEID_HANDLETOCONST);
@@ -3255,7 +3724,9 @@ void ctx_open_file(asIScriptGeneric* generic) {
     std::string filters;
     const int filter_type = generic->GetArgTypeId(0);
     if (type_is_named(engine, filter_type, "string")) {
-        filters = *static_cast<const as_string*>(generic->GetAddressOfArg(0));
+        // `?&in filters`: the slot holds a pointer to the caller's string.
+        void* data = generic_arg_data(generic, 0);
+        filters = data != nullptr ? *static_cast<const as_string*>(data) : std::string{};
     } else {
         const ordered_json value = generic_arg_to_json(engine, generic, 0);
         if (!value.is_null())
@@ -3324,6 +3795,57 @@ void ctx_upload_compositor_frame(asIScriptGeneric* generic) {
         }
     }
     generic->SetReturnByte(ok ? 1 : 0);
+}
+
+void return_compositor_result(asIScriptGeneric* generic, const char* method,
+                              int32_t status, bool value) {
+    if (status == SAO_OK) {
+        generic->SetReturnByte(value ? 1 : 0);
+        return;
+    }
+    const std::string diagnostic = std::string("ctx.") + method + " failed (status=" +
+                                   std::to_string(status) + ")";
+    if (auto* ctx = context_of(generic))
+        loader_ns::sao_plugins_ctx_log(ctx, diagnostic.c_str());
+    set_active_exception(diagnostic.c_str());
+}
+
+void ctx_set_compositor_layer_mmf_source(asIScriptGeneric* generic) {
+    const std::string name = arg_string(generic, 0);
+    const std::string mmf = arg_string(generic, 1);
+    const int32_t status = name.find('\0') != std::string::npos ||
+                           mmf.find('\0') != std::string::npos
+        ? SAO_ERR_INVALID_ARGUMENT
+        : loader_ns::sao_plugins_ctx_set_compositor_layer_mmf_source(
+              context_of(generic), name.c_str(), mmf.c_str());
+    return_compositor_result(generic, "set_compositor_layer_mmf_source", status, true);
+}
+
+void ctx_set_compositor_layer_shared_texture_source(asIScriptGeneric* generic) {
+    const std::string name = arg_string(generic, 0);
+    const int32_t status = name.find('\0') != std::string::npos
+        ? SAO_ERR_INVALID_ARGUMENT
+        : loader_ns::sao_plugins_ctx_set_compositor_layer_shared_texture_source(
+              context_of(generic), name.c_str(), generic->GetArgQWord(1),
+              generic->GetArgDWord(2), generic->GetArgDWord(3));
+    return_compositor_result(generic, "set_compositor_layer_shared_texture_source", status, true);
+}
+
+void ctx_compositor_gpu_interop_available(asIScriptGeneric* generic) {
+    bool available = false;
+    const int32_t status = loader_ns::sao_plugins_ctx_compositor_gpu_interop_available(
+        context_of(generic), &available);
+    return_compositor_result(generic, "compositor_gpu_interop_available", status, available);
+}
+
+void ctx_compositor_layer_shared_texture_active(asIScriptGeneric* generic) {
+    const std::string name = arg_string(generic, 0);
+    bool active = false;
+    const int32_t status = name.find('\0') != std::string::npos
+        ? SAO_ERR_INVALID_ARGUMENT
+        : loader_ns::sao_plugins_ctx_compositor_layer_shared_texture_active(
+              context_of(generic), name.c_str(), &active);
+    return_compositor_result(generic, "compositor_layer_shared_texture_active", status, active);
 }
 
 void ctx_set_compositor_layer_position(asIScriptGeneric* generic) {
@@ -3482,6 +4004,78 @@ void ctx_load_local_path(asIScriptGeneric* generic) {
 // registration
 // ──────────────────────────────────────────────────────────────────────────
 
+// Legacy scalar coercions (old-platform script builtins): accept any value
+// through `?&in` and coerce via the JSON marshalling helpers above.
+int64_t coerce_json_i64(const ordered_json& value) noexcept {
+    try {
+        if (value.is_number_integer() || value.is_number_unsigned())
+            return value.get<int64_t>();
+        if (value.is_number_float())
+            return static_cast<int64_t>(value.get<double>());
+        if (value.is_boolean())
+            return value.get<bool>() ? 1 : 0;
+        if (value.is_string())
+            return static_cast<int64_t>(std::strtoll(
+                value.get_ref<const std::string&>().c_str(), nullptr, 10));
+    } catch (...) {
+    }
+    return 0;
+}
+
+double coerce_json_f64(const ordered_json& value) noexcept {
+    try {
+        if (value.is_number())
+            return value.get<double>();
+        if (value.is_boolean())
+            return value.get<bool>() ? 1.0 : 0.0;
+        if (value.is_string())
+            return std::strtod(value.get_ref<const std::string&>().c_str(), nullptr);
+    } catch (...) {
+    }
+    return 0.0;
+}
+
+std::string coerce_json_text(const ordered_json& value) noexcept {
+    try {
+        if (value.is_string())
+            return value.get<std::string>();
+        if (value.is_null())
+            return {};
+        if (value.is_number_float()) {
+            double number = value.get<double>();
+            if (number == std::trunc(number))
+                return std::to_string(static_cast<int64_t>(number));
+            return value.dump();
+        }
+        return value.dump();
+    } catch (...) {
+        return {};
+    }
+}
+
+void legacy_toint(asIScriptGeneric* generic) {
+    const ordered_json value = generic_arg_to_json(generic->GetEngine(), generic, 0);
+    generic->SetReturnQWord(static_cast<asQWORD>(coerce_json_i64(value)));
+}
+
+void legacy_tofloat(asIScriptGeneric* generic) {
+    const ordered_json value = generic_arg_to_json(generic->GetEngine(), generic, 0);
+    generic->SetReturnDouble(coerce_json_f64(value));
+}
+
+void legacy_tostring(asIScriptGeneric* generic) {
+    const ordered_json value = generic_arg_to_json(generic->GetEngine(), generic, 0);
+    return_string(generic, coerce_json_text(value));
+}
+
+int register_global_function(asIScriptEngine* engine, const char* decl, asSFuncPtr fn,
+                             bool* failed) {
+    const int result = engine->RegisterGlobalFunction(decl, fn, asCALL_GENERIC);
+    if (!registration_ok(result) && result != asALREADY_REGISTERED && failed != nullptr)
+        *failed = true;
+    return result;
+}
+
 int register_object_method(asIScriptEngine* engine, const char* type, const char* decl,
                            asSFuncPtr fn, bool* failed) {
     const int result = engine->RegisterObjectMethod(type, decl, fn, asCALL_GENERIC);
@@ -3557,6 +4151,10 @@ const std::pair<const char*, ctx_handler_fn> kCtxHandlers[] = {
     {"open_window", &ctx_open_window},
     {"create_compositor_layer", &ctx_create_compositor_layer},
     {"upload_compositor_frame", &ctx_upload_compositor_frame},
+    {"set_compositor_layer_mmf_source", &ctx_set_compositor_layer_mmf_source},
+    {"set_compositor_layer_shared_texture_source", &ctx_set_compositor_layer_shared_texture_source},
+    {"compositor_gpu_interop_available", &ctx_compositor_gpu_interop_available},
+    {"compositor_layer_shared_texture_active", &ctx_compositor_layer_shared_texture_active},
     {"set_compositor_layer_position", &ctx_set_compositor_layer_position},
     {"set_compositor_layer_visible", &ctx_set_compositor_layer_visible},
     {"set_compositor_layer_input", &ctx_set_compositor_layer_input},
@@ -3644,6 +4242,10 @@ const char* const kCtxSurfaceNames[] = {
     "open_file",           "open_window",
     "create_compositor_layer",
     "upload_compositor_frame",
+    "set_compositor_layer_mmf_source",
+    "set_compositor_layer_shared_texture_source",
+    "compositor_gpu_interop_available",
+    "compositor_layer_shared_texture_active",
     "set_compositor_layer_position",
     "set_compositor_layer_visible",
     "set_compositor_layer_input",
@@ -3674,26 +4276,57 @@ const char* const kCtxSurfaceNames[] = {
 
 // ── ctx surface teardown / registration entry points ──
 
-void ctx_surface_teardown(void* bound_context) noexcept {
+int32_t ctx_surface_teardown(void* bound_context) noexcept {
     auto* ctx = static_cast<loader_ns::plugin_context_t*>(bound_context);
     if (ctx == nullptr)
-        return;
+        return SAO_OK;
     std::shared_ptr<ctx_surface_state> state;
     {
         std::lock_guard lock(ctx_state_mutex());
         const auto found = ctx_states().find(ctx);
         if (found == ctx_states().end())
-            return;
+            return SAO_OK;
         state = found->second;
-        ctx_states().erase(found);
     }
     try {
+        for (const auto& panel : state->panel_records) {
+            const int32_t status = loader_ns::sao_plugins_ctx_unregister_ui_panel(ctx, panel->id.c_str());
+            if (status != SAO_OK && status != SAO_ERR_HANDLE_INVALID)
+                return status;
+        }
+        std::unordered_set<std::string> qualified_ids;
+        if (!state->menus.empty() || !state->action_providers.empty()) {
+            const char* plugin_id = loader_ns::sao_plugins_ctx_plugin_id(ctx);
+            if (plugin_id == nullptr || *plugin_id == '\0')
+                return SAO_ERR_HANDLE_INVALID;
+            const std::string prefix = std::string(plugin_id) + "/";
+            for (const auto& menu : state->menus)
+                qualified_ids.insert(prefix + menu->provider_id);
+            for (const auto& provider : state->action_providers)
+                qualified_ids.insert(prefix + provider->provider_id);
+        }
+        std::vector<const char*> provider_ids;
+        provider_ids.reserve(qualified_ids.size());
+        for (const auto& id : qualified_ids)
+            provider_ids.push_back(id.c_str());
+        if (!provider_ids.empty()) {
+            const int32_t status = loader_ns::plugin_context_unregister_entity_providers(
+                ctx, provider_ids.data(), provider_ids.size());
+            if (status != SAO_OK)
+                return status;
+        }
         for (auto& menu : state->menus)
             menu->closing = true;
         for (auto& provider : state->action_providers)
             provider->closing = true;
         for (auto& callback : state->callbacks)
             quiesce_ctx_callback(callback.get());
+        for (const auto& panel : state->panel_records) {
+            if (panel->render != nullptr)
+                panel->render->ctx = nullptr;
+            if (panel->action != nullptr)
+                panel->action->ctx = nullptr;
+        }
         {
             // engine channel records are owned by state->callbacks (quiesced
             // above); drop the channel index so late trampoline hits resolve
@@ -3702,14 +4335,13 @@ void ctx_surface_teardown(void* bound_context) noexcept {
             state->engine_channels.clear();
         }
 
-        std::vector<const char*> provider_ids;
-        for (auto& menu : state->menus)
-            provider_ids.push_back(menu->provider_id.c_str());
-        for (auto& provider : state->action_providers)
-            provider_ids.push_back(provider->provider_id.c_str());
-        if (!provider_ids.empty()) {
-            (void)loader_ns::plugin_context_unregister_entity_providers(
-                ctx, provider_ids.data(), provider_ids.size());
+        {
+            engine_execution_guard engine_lock;
+            for (auto& menu : state->menus) {
+                std::lock_guard lock(menu->mutex);
+                menu->actions.clear();
+                menu->tree.reset();
+            }
         }
         if (state->plugin != nullptr && state->plugin->engine != nullptr) {
             release_callback_functions(state, state->plugin->engine);
@@ -3730,11 +4362,16 @@ void ctx_surface_teardown(void* bound_context) noexcept {
                     if ((type->GetFlags() & asOBJ_REF) != 0 &&
                         !(type->GetFlags() & asOBJ_NOCOUNT) && record.object != nullptr) {
                         state->plugin->engine->ReleaseScriptObject(record.object, type);
+                        record.object = nullptr;
                     }
                 }
             }
         }
         std::lock_guard grave(graveyard_mutex());
+        callback_graveyard().reserve(callback_graveyard().size() + state->callbacks.size());
+        input_graveyard().reserve(input_graveyard().size() + state->input_records.size());
+        data_source_graveyard().reserve(data_source_graveyard().size() + state->data_source_records.size());
+        panel_graveyard().reserve(panel_graveyard().size() + state->panel_records.size());
         for (auto& callback : state->callbacks)
             callback_graveyard().push_back(std::move(callback));
         for (auto& record : state->input_records)
@@ -3743,7 +4380,11 @@ void ctx_surface_teardown(void* bound_context) noexcept {
             data_source_graveyard().push_back(std::move(record));
         for (auto& record : state->panel_records)
             panel_graveyard().push_back(std::move(record));
+        std::lock_guard lock(ctx_state_mutex());
+        ctx_states().erase(ctx);
+        return SAO_OK;
     } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
     }
 }
 
@@ -3766,6 +4407,15 @@ int32_t register_ctx_surface_bindings(asIScriptEngine* engine) noexcept {
                          "void engine_channel_cb(dictionary@ payload, string channel)") < 0 ||
                      failed;
         }
+
+        // legacy scalar coercion builtins — old scripts rely on toint,
+        // tofloat and tostring being global helpers, not object methods.
+        register_global_function(engine, "int64 toint(?&in value)",
+                                 asFUNCTION(legacy_toint), &failed);
+        register_global_function(engine, "double tofloat(?&in value)",
+                                 asFUNCTION(legacy_tofloat), &failed);
+        register_global_function(engine, "string tostring(?&in value)",
+                                 asFUNCTION(legacy_tostring), &failed);
 
         if (engine->GetTypeInfoByName("UiBuilder") == nullptr) {
             (void)engine->RegisterObjectType("UiBuilder", 0, asOBJ_REF | asOBJ_NOCOUNT);
@@ -3853,7 +4503,8 @@ int32_t register_ctx_surface_bindings(asIScriptEngine* engine) noexcept {
                                        "json@ get(const string &in name) const",
                                        asFUNCTION(ctx_dispatch), &failed);
                 register_object_method(engine, "LocalModule",
-                                       "json@ call(const string &in name, ?&in args = null) const",
+                                       "json@ call(const string &in name, ?&in a0 = null, "
+                                       "?&in a1 = null, ?&in a2 = null, ?&in a3 = null) const",
                                        asFUNCTION(ctx_dispatch), &failed);
             }
         }
@@ -3917,6 +4568,8 @@ int32_t register_ctx_surface_bindings(asIScriptEngine* engine) noexcept {
              asFUNCTION(ctx_dispatch), false, false, false},
             {"bool set_defaults(?&in defaults)", asFUNCTION(ctx_dispatch), false, false,
              false},
+            {"bool set_defaults(dictionary@ defaults)", asFUNCTION(ctx_dispatch), true,
+             false, false},
             {"bool register_ui_panel(const string &in panel_id, ?&in metadata = null, "
              "?&in render = null, ?&in on_action = null)",
              asFUNCTION(ctx_dispatch), false, false, false},
@@ -3989,6 +4642,15 @@ int32_t register_ctx_surface_bindings(asIScriptEngine* engine) noexcept {
             {"bool upload_compositor_frame(const string &in name, array<uint8>@ bytes, "
              "uint width, uint height)",
              asFUNCTION(ctx_dispatch), false, false, true},
+            {"bool set_compositor_layer_mmf_source(const string &in name, const string &in mmf)",
+             asFUNCTION(ctx_dispatch), false, false, false},
+            {"bool set_compositor_layer_shared_texture_source(const string &in name, "
+             "uint64 handle, uint width, uint height)",
+             asFUNCTION(ctx_dispatch), false, false, false},
+            {"bool compositor_gpu_interop_available()",
+             asFUNCTION(ctx_dispatch), false, false, false},
+            {"bool compositor_layer_shared_texture_active(const string &in name)",
+             asFUNCTION(ctx_dispatch), false, false, false},
             {"bool set_compositor_layer_position(const string &in name, int x, int y)",
              asFUNCTION(ctx_dispatch), false, false, false},
             {"bool set_compositor_layer_visible(const string &in name, bool visible)",
@@ -4036,7 +4698,7 @@ int32_t register_ctx_surface_bindings(asIScriptEngine* engine) noexcept {
 
 #else
 
-void ctx_surface_teardown(void*) noexcept {}
+int32_t ctx_surface_teardown(void*) noexcept { return SAO_OK; }
 
 int32_t register_ctx_surface_bindings(asIScriptEngine*) noexcept {
     return SAO_OK;

@@ -165,6 +165,23 @@ sao_plugins_ashost_load_plugin(as_host_handle_t host, const char* plugin_json_pa
     // Reflective-engine section first so manifest entries can call
     // sao_engine::* wrappers; takes PluginContext@ ctx as a param, so it
     // compiles even though this path has no module-bridge ctx global.
+    const std::string rewritten_entry = as_rewrite_legacy_source(entry_body);
+    constexpr char bridge_section[] = "PluginContext@ ctx;";
+    const bool inject_ctx = !as_script_declares_ctx_global(rewritten_entry);
+    if (inject_ctx) {
+        int r0 = mod->AddScriptSection("sao_module_bridge", bridge_section,
+                                       sizeof(bridge_section) - 1);
+        if (r0 < 0) {
+            const char* m = "AddScriptSection failed";
+            if (out_error_utf8) {
+                *out_error_utf8 = static_cast<char*>(std::malloc(std::strlen(m) + 1));
+                if (*out_error_utf8)
+                    std::strcpy(*out_error_utf8, m);
+            }
+            engine->DiscardModule(module_name.c_str());
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+    }
     const std::string engine_preamble = sao_as_engine_preamble(engine);
     int r = mod->AddScriptSection("sao_engine_preamble", engine_preamble.c_str(),
                                   engine_preamble.size());
@@ -178,7 +195,8 @@ sao_plugins_ashost_load_plugin(as_host_handle_t host, const char* plugin_json_pa
         engine->DiscardModule(module_name.c_str());
         return SAO_ERR_INVALID_ARGUMENT;
     }
-    r = mod->AddScriptSection(manifest.entry.c_str(), entry_body.c_str(), entry_body.size());
+    r = mod->AddScriptSection(manifest.entry.c_str(), rewritten_entry.c_str(),
+                              rewritten_entry.size());
     if (r < 0) {
         const char* m = "AddScriptSection failed";
         if (out_error_utf8) {

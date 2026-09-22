@@ -4,6 +4,7 @@
 #include "cs_sdk_bridge_internal.h"
 
 #include "sao/plugins/loader/loader_status.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
 #include "sao/plugins/sdk_binding/binding_csharp.h"
 #include "sao/sdk/sao_sdk.h"
 #include "sao/sdk/sao_sdk_provider.h"
@@ -250,6 +251,8 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
         if (status != SAO_OK || context == nullptr) {
             retain_error(owner, plugin, "loader canonical plugin context is unavailable");
         } else {
+            sao::plugins::script_ctx::ctx_surface_advisory_check(
+                sao::plugins::loader::engine_kind::csharp, context, manifest);
             std::string error;
             status = cshost_component_load(owner->host, *manifest, &component, error);
             if (status != SAO_OK)
@@ -575,6 +578,12 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* hos
     }
 }
 
+int32_t SAO_PLUGINS_CALL adapter_last_error(void* user_data, loader_plugin_handle_t plugin,
+                                            char** out_utf8) {
+    return sao_plugins_cshost_loader_adapter_get_last_error(
+        static_cast<cs_loader_adapter_owner_t>(user_data), plugin, out_utf8);
+}
+
 sao::plugins::loader::host_adapter_vtable adapter_vtable(cs_loader_adapter_owner_s* owner) {
     sao::plugins::loader::host_adapter_vtable table{};
     table.load_plugin = adapter_load;
@@ -584,6 +593,8 @@ sao::plugins::loader::host_adapter_vtable adapter_vtable(cs_loader_adapter_owner
     table.call_on_unload = adapter_on_unload;
     table.unload_plugin = adapter_unload;
     table.host_user_data = owner;
+    table.get_last_error = adapter_last_error;
+    table.free_error_string = sao_plugins_cshost_free_string;
     return table;
 }
 

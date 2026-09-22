@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_manifest.h"
 
 namespace sao::plugins::script_ctx {
@@ -38,5 +39,13 @@ std::vector<std::string> ctx_surface_missing(
 
 // All noted names for `language` (sorted snapshot).
 std::vector<std::string> ctx_surface_report(loader::engine_kind language);
+
+// Adapter-side load-time check: gathers the manifest's declared binds
+// (`platform.binds` entries plus `runtime_feature:<name>` requires tokens)
+// and ctx-logs an advisory list of names this host never bound.
+// Informational only — never fails the load.
+void ctx_surface_advisory_check(loader::engine_kind language,
+                                loader::plugin_context_t* ctx,
+                                const loader::plugin_manifest* manifest) noexcept;
 
 } // namespace sao::plugins::script_ctx

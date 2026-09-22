@@ -20,6 +20,7 @@
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #include "sao/plugins/loader/plugin_manifest.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
 
 #if defined(SAO_PLUGINS_ENABLE_CORECLR)
 #include "sao/plugins/csharp_host/cs_host.h"
@@ -512,6 +513,9 @@ int32_t SAO_PLUGINS_CALL adapter_load(
         !lctx)
         return SAO_ERR_NOT_INITIALIZED;
 
+    sao::plugins::script_ctx::ctx_surface_advisory_check(
+        loader::engine_kind::csharp, lctx, manifest);
+
     const std::wstring dir = widen_u8(manifest->source_path);
     const std::wstring abs_entry = dir + L'\\' + widen_u8(manifest->entry);
 
@@ -644,6 +648,12 @@ int32_t SAO_PLUGINS_CALL adapter_unload(plugin_handle_t plugin,
 #endif
 }
 
+int32_t SAO_PLUGINS_CALL adapter_last_error(void* user_data,
+                                            loader::plugin_handle_t plugin, char** out_utf8) {
+    return sao_plugins_csmini_adapter_get_last_error(
+        static_cast<csmini_adapter_owner_t>(user_data), plugin, out_utf8);
+}
+
 host_adapter_vtable make_vtable(csmini_adapter_owner_s* o) {
     host_adapter_vtable t{};
     t.load_plugin = adapter_load;
@@ -653,6 +663,8 @@ host_adapter_vtable make_vtable(csmini_adapter_owner_s* o) {
     t.call_on_unload = adapter_on_unload;
     t.unload_plugin = adapter_unload;
     t.host_user_data = o;
+    t.get_last_error = adapter_last_error;
+    t.free_error_string = sao_plugins_csmini_free_string;
     return t;
 }
 
@@ -680,13 +692,14 @@ sao_plugins_csmini_register_loader_adapter(
                         cfg->extra_assembly_dirs[k]);
 
 #if defined(SAO_PLUGINS_ENABLE_CORECLR)
-        // lazy init: only spin up the managed host when a dotnet root was
-        // supplied AND the runtime probes available.
-        if (!o->dotnet_root.empty()) {
+        // lazy init: spin up the managed host whenever a dotnet runtime
+        // probes available.  An explicit cfg->dotnet_root is preferred for
+        // hostfxr discovery; when absent, cshost_init auto-probes
+        // DOTNET_ROOT / DOTNET_ROOT_X64 / %ProgramFiles%\dotnet.
+        {
             bool avail = false;
-            if (csharp_host::sao_plugins_cshost_is_available(&avail) ==
-                    SAO_OK &&
-                avail) {
+            const int32_t probe_st = csharp_host::sao_plugins_cshost_is_available(&avail);
+            if (probe_st == SAO_OK && avail) {
                 const std::wstring fxr = find_hostfxr(o->dotnet_root);
                 csharp_host::cs_host_config hc{};
                 hc.hostfxr_path = fxr.empty() ? nullptr : fxr.c_str();
@@ -698,7 +711,7 @@ sao_plugins_csmini_register_loader_adapter(
                 } else {
                     o->host = nullptr;
                     set_err(o.get(),
-                            "dotnet_root probes available but coreclr "
+                            "dotnet runtime probes available but coreclr "
                             "init failed");
                 }
             }

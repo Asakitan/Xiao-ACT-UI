@@ -40,12 +40,27 @@ target_link_libraries(sao_plugins_python_host PUBLIC
     sao::sdk
 )
 
+# ctx_surface advisory wiring — script_ctx is a sibling in the unified
+# plugins tree but absent from standalone loader+host builds.
+if (TARGET sao_plugins_script_ctx)
+    target_link_libraries(sao_plugins_python_host PUBLIC sao_plugins_script_ctx)
+    target_compile_definitions(sao_plugins_python_host PRIVATE SAO_PYHOST_HAS_CTX_SURFACE)
+endif()
+
 # 嵌入式 CPython 3.11+ (Development.Embed).
 # QUIET 让本地无 Python dev headers 时 CMake 不 stop, 而是走 "无 embed" 分支
 # (py_host.cpp 里 SAO_HAS_PYTHON_EMBED 未定义 → init 返 NOT_IMPLEMENTED).
 #
 option(SAO_PLUGINS_PYTHON_AUTO_FETCH
     "Legacy compatibility switch; runtime downloads are disabled." OFF)
+
+# Embed discovery switch: ON lets the host compile the real CPython path
+# when a Python3 Development.Embed install is found (SAO_PYHOST_HOME /
+# Python3_ROOT / E:/Py / well-known roots below); OFF — or no headers
+# found — keeps py_host.cpp on the explicit SAO_ERR_NOT_IMPLEMENTED
+# capability return without importing python3xx.dll anywhere.
+option(SAO_PLUGINS_PYTHON_EMBED
+    "Embed CPython inside sao_plugins_python_host when Python3 Development.Embed is found" ON)
 if (SAO_PLUGINS_PYTHON_AUTO_FETCH)
     message(WARNING
         "SAO_PLUGINS_PYTHON_AUTO_FETCH is stale and is being forced OFF; "
@@ -77,7 +92,9 @@ if (NOT Python3_ROOT AND NOT Python3_ROOT_DIR)
     endforeach()
 endif()
 
+if (SAO_PLUGINS_PYTHON_EMBED)
 find_package(Python3 3.11 COMPONENTS Development.Embed QUIET)
+endif()
 set(_sao_python_resolved OFF)
 set(_sao_python_runtime_dll "")
 if (Python3_FOUND)

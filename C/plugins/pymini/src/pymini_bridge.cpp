@@ -243,7 +243,7 @@ struct pymini_script_module : script::script_module {
         } catch (const std::exception& e) {
             if (err)
                 *err = e.what();
-            return -5;
+            return SAO_ERR_UNKNOWN;
         }
     }
 };

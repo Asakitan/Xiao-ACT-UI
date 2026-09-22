@@ -3,9 +3,11 @@
 #include "as_plugin_internal.h"
 
 #include "sao/plugins/angel_host/as_gpu_hunt_bind.h"
+#include "sao/plugins/angel_host/as_host.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
 #include "sao/plugins/loader/plugin_manifest.h"
 #include "sao/sdk/sao_sdk.h"
 #include "sao/sdk/sao_sdk_provider.h"
@@ -281,6 +283,9 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
             if (status == SAO_OK)
                 status = SAO_ERR_NOT_INITIALIZED;
         } else {
+            sao::plugins::script_ctx::ctx_surface_advisory_check(
+                sao::plugins::loader::engine_kind::angelscript,
+                pending.loader_context, manifest);
             status = sao_plugins_ashost_create(&owner->config, &pending.host);
         }
         if (status == SAO_OK) {
@@ -473,6 +478,12 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* use
     }
 }
 
+int32_t SAO_PLUGINS_CALL adapter_last_error(void* user_data, loader_plugin_handle_t plugin,
+                                            char** out_utf8) {
+    return sao_plugins_ashost_loader_adapter_get_last_error(
+        static_cast<as_loader_adapter_owner_t>(user_data), plugin, out_utf8);
+}
+
 sao::plugins::loader::host_adapter_vtable adapter_vtable(as_loader_adapter_owner_s* owner) {
     sao::plugins::loader::host_adapter_vtable table{};
     table.load_plugin = adapter_load;
@@ -482,6 +493,8 @@ sao::plugins::loader::host_adapter_vtable adapter_vtable(as_loader_adapter_owner
     table.call_on_unload = adapter_on_unload;
     table.unload_plugin = adapter_unload;
     table.host_user_data = owner;
+    table.get_last_error = adapter_last_error;
+    table.free_error_string = sao_plugins_ashost_free_string;
     return table;
 }
 

@@ -20,6 +20,7 @@
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #include "sao/plugins/loader/plugin_manifest.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
 
 #if defined(SAO_PLUGINS_ENABLE_PYTHON)
 #include "sao/plugins/python_host/py_host.h"
@@ -167,6 +168,9 @@ int32_t pyh_load(pymini_adapter_owner_s* o, plugin_context_t* lctx,
     const int32_t st = python_host::sao_plugins_pyhost_load_plugin(
         o->host, dir.c_str(), entry.c_str(), id.c_str(), nullptr, &pyh);
     if (st != SAO_OK || !pyh) {
+        // pyhost keeps a published handle on load failure so last_error stays
+        // introspectable — harvest it, then release the handle so
+        // pyhost_shutdown does not see a leaked active_plugin.
         if (err) {
             char* pe = nullptr;
             if (pyh)
@@ -175,6 +179,8 @@ int32_t pyh_load(pymini_adapter_owner_s* o, plugin_context_t* lctx,
             if (pe)
                 python_host::sao_plugins_pyhost_free_string(pe);
         }
+        if (pyh)
+            (void)python_host::sao_plugins_pyhost_unload_plugin(pyh);
         return st;
     }
     // bind the canonical loader ctx (the pyhost ctx PyObject ↔ plugin_context_t)
@@ -287,6 +293,9 @@ int32_t SAO_PLUGINS_CALL adapter_load(
     if (loader::sao_plugins_lifecycle_get_context(plugin, &lctx) != SAO_OK ||
         !lctx)
         return SAO_ERR_NOT_INITIALIZED;
+
+    sao::plugins::script_ctx::ctx_surface_advisory_check(
+        loader::engine_kind::python, lctx, manifest);
 
     const std::wstring dir = widen_u8(manifest->source_path);
     const std::wstring abs_entry = dir + L'\\' + widen_u8(manifest->entry);
@@ -415,6 +424,12 @@ int32_t SAO_PLUGINS_CALL adapter_unload(plugin_handle_t plugin,
 #endif
 }
 
+int32_t SAO_PLUGINS_CALL adapter_last_error(void* user_data,
+                                            loader::plugin_handle_t plugin, char** out_utf8) {
+    return sao_plugins_pymini_adapter_get_last_error(
+        static_cast<pymini_adapter_owner_t>(user_data), plugin, out_utf8);
+}
+
 host_adapter_vtable make_vtable(pymini_adapter_owner_s* o) {
     host_adapter_vtable t{};
     t.load_plugin = adapter_load;
@@ -424,6 +439,8 @@ host_adapter_vtable make_vtable(pymini_adapter_owner_s* o) {
     t.call_on_unload = adapter_on_unload;
     t.unload_plugin = adapter_unload;
     t.host_user_data = o;
+    t.get_last_error = adapter_last_error;
+    t.free_error_string = sao_plugins_pymini_free_string;
     return t;
 }
 
@@ -458,6 +475,17 @@ sao_plugins_pymini_register_loader_adapter(
                 o->python_home.c_str())) {
             python_host::py_host_config hc{};
             hc.python_home = o->python_home.c_str();
+            // Shared module roots (e.g. legacy `gui_modules`) must reach the
+            // cpython delegate too — feed the same extra dirs pymini uses.
+            std::vector<const wchar_t*> extra_ptrs;
+            extra_ptrs.reserve(o->extra_dirs.size());
+            for (const auto& dir : o->extra_dirs)
+                extra_ptrs.push_back(dir.c_str());
+            if (!extra_ptrs.empty()) {
+                hc.extra_module_dirs = extra_ptrs.data();
+                hc.extra_module_dirs_count =
+                    static_cast<uint32_t>(extra_ptrs.size());
+            }
             // init inside a gil scope so Py_Initialize's exit state release
             // matches pyhost's own register path.
             gil_scope scope(true);

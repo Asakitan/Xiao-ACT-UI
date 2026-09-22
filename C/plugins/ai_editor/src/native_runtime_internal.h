@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -227,7 +228,9 @@ class NativeRuntime final {
     // kernel_map_panel_provider.h.
     std::unique_ptr<KernelMapPanelProvider> kernel_map_panel_;
     std::unique_ptr<McpManagementPanelProvider> mcp_management_panel_;
-    int32_t builtin_mcp_registration_status_ = SAO_AI_EDITOR_ERR_NOT_FOUND;
+    std::atomic<int32_t> builtin_mcp_registration_status_{SAO_AI_EDITOR_ERR_NOT_FOUND};
+    std::thread builtin_mcp_worker_;
+    mutable std::mutex builtin_mcp_mutex_;
     std::string builtin_mcp_server_path_;
     // Plugin manifest contributions (see plugin_contributions.h).  Scanned
     // once during initialize(); the MCP servers are registered under the
