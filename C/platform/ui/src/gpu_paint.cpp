@@ -25,8 +25,8 @@
 #include <vector>
 
 namespace sao::ui::detail {
-bool prepare_gpu_text_dwrite(const char* text_utf8, float size_px, std::wstring* out_text,
-                             void** out_format) noexcept;
+bool prepare_gpu_text_layout_dwrite(const char* text_utf8, float size_px, float width,
+                                    float height, void** out_layout) noexcept;
 }
 
 namespace {
@@ -237,25 +237,22 @@ bool draw_utf8(void* opaque, float x, float y, const char* text, float size, uin
     auto* state = static_cast<GpuPaintState*>(opaque);
     if (!state || !state->drawing || !text || !*text)
         return false;
-    std::wstring wide;
-    void* raw_format = nullptr;
+    void* raw_layout = nullptr;
     const sao::ui::detail::ScopedTextRole text_role(
         static_cast<sao::ui::detail::ClassicTextRole>(role),
         static_cast<sao::ui::detail::ClassicTextWeight>(weight));
-    if (!sao::ui::detail::prepare_gpu_text_dwrite(text, size, &wide, &raw_format) ||
-        raw_format == nullptr || wide.empty())
+    const float width = std::max(1.0F, static_cast<float>(state->width) - x);
+    const float height = std::max(1.0F, static_cast<float>(state->height) - y);
+    if (!sao::ui::detail::prepare_gpu_text_layout_dwrite(text, size, width, height, &raw_layout) ||
+        raw_layout == nullptr)
         return false;
-    ComPtr<IDWriteTextFormat> format;
-    format.Attach(static_cast<IDWriteTextFormat*>(raw_format));
+    ComPtr<IDWriteTextLayout> layout;
+    layout.Attach(static_cast<IDWriteTextLayout*>(raw_layout));
     ComPtr<ID2D1SolidColorBrush> value;
     if (!brush(state, argb, opacity, &value))
         return false;
-    const float right = static_cast<float>(state->width);
-    const float bottom = static_cast<float>(state->height);
-    const D2D1_RECT_F layout = D2D1::RectF(x, y, right, bottom);
-    state->target->DrawText(wide.data(), static_cast<UINT32>(wide.size()), format.Get(), &layout,
-                            value.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                            DWRITE_MEASURING_MODE_NATURAL);
+    state->target->DrawTextLayout(D2D1::Point2F(x, y), layout.Get(), value.Get(),
+                                  D2D1_DRAW_TEXT_OPTIONS_CLIP);
     return true;
 }
 

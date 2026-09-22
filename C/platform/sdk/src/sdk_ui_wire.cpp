@@ -200,9 +200,36 @@ struct CreatedWidget {
     sao_ui_script_canvas_handle_t script_canvas = nullptr;
 };
 
-struct LegacyCanvasResources {
-    std::vector<sao_ui_script_canvas_handle_t> canvases;
-    std::vector<sao_ui_widget_handle_t> placeholders;
+class PanelMutationLock {
+public:
+    explicit PanelMutationLock(const std::shared_ptr<std::mutex>& mutex) : mutex_(mutex) {
+        if (mutex_ == nullptr)
+            return;
+        for (auto* active = active_; active != nullptr; active = active->previous_)
+            if (active->mutex_ == mutex_)
+                return;
+        // Callback draining may wait for a different thread reentering this panel.
+        lock_ = std::unique_lock<std::mutex>(*mutex_, std::try_to_lock);
+        if (lock_.owns_lock()) {
+            previous_ = active_;
+            active_ = this;
+        }
+    }
+
+    ~PanelMutationLock() { unlock(); }
+    explicit operator bool() const noexcept { return lock_.owns_lock(); }
+    void unlock() {
+        if (lock_.owns_lock()) {
+            active_ = previous_;
+            lock_.unlock();
+        }
+    }
+
+private:
+    std::shared_ptr<std::mutex> mutex_;
+    std::unique_lock<std::mutex> lock_;
+    PanelMutationLock* previous_ = nullptr;
+    inline static thread_local PanelMutationLock* active_ = nullptr;
 };
 
 bool panel_native_handles_current(const PanelEntry& entry, sao_ui_panel_handle_t native_panel,
@@ -530,24 +557,6 @@ bool native_widget_update_state_uncertain(sao_status_t status) noexcept {
            status == SAO_STATUS_ERR_UNKNOWN;
 }
 
-sao_sdk_status_t remove_candidate_nodes_reverse(
-    sao_ui_panel_body_handle_t body,
-    const std::vector<sao_ui_layout_node_handle_t>& candidate_nodes) {
-    sao_sdk_status_t first_failure = SAO_SDK_OK;
-    for (auto it = candidate_nodes.rbegin(); it != candidate_nodes.rend(); ++it) {
-        if (*it == nullptr)
-            continue;
-        SaoUiBodyMutation mutation{};
-        mutation.kind = SAO_UI_BODY_REMOVE_NODE;
-        mutation.target = *it;
-        const auto status = static_cast<sao_sdk_status_t>(
-            sao_ui_panel_update_body(body, &mutation, 1));
-        if (first_failure == SAO_SDK_OK && status != SAO_SDK_OK)
-            first_failure = status;
-    }
-    return first_failure;
-}
-
 sao_sdk_status_t restore_widget_node(sao_ui_panel_body_handle_t body, const WidgetEntry& widget,
                                      sao_ui_layout_node_handle_t* out_node) {
     if (body == nullptr || widget.ui_widget == nullptr || out_node == nullptr)
@@ -570,92 +579,6 @@ sao_sdk_status_t restore_widget_node(sao_ui_panel_body_handle_t body, const Widg
     }
     return static_cast<sao_sdk_status_t>(
         sao_ui_panel_update_body(body, mutations, mutation_count));
-}
-
-sao_sdk_status_t restore_legacy_body(
-    sao_ui_panel_body_handle_t body, const std::vector<WidgetEntry>& old_widgets,
-    const std::vector<sao_ui_widget_handle_t>& old_placeholders,
-    std::vector<sao_ui_layout_node_handle_t>* out_widget_nodes,
-    std::vector<sao_ui_layout_node_handle_t>* out_placeholder_nodes) {
-    if (body == nullptr || out_widget_nodes == nullptr || out_placeholder_nodes == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    out_widget_nodes->assign(old_widgets.size(), nullptr);
-    out_placeholder_nodes->assign(old_placeholders.size(), nullptr);
-    if (old_widgets.empty() && old_placeholders.empty())
-        return SAO_SDK_OK;
-
-    static constexpr char kCanvasProps[] = R"({"active":true})";
-    std::vector<SaoUiLayoutSpec> placeholder_layouts(old_placeholders.size());
-    for (auto& layout : placeholder_layouts) {
-        layout.fixed_width_px = 640;
-        layout.fixed_height_px = 360;
-        layout.hit_testable = true;
-    }
-    std::vector<SaoUiBodyMutation> mutations;
-    mutations.reserve(old_widgets.size() * 2U + old_placeholders.size() * 2U);
-    for (size_t index = 0; index < old_widgets.size(); ++index) {
-        const auto& widget = old_widgets[index];
-        SaoUiBodyMutation add{};
-        add.kind = SAO_UI_BODY_ADD_WIDGET;
-        add.widget = widget.ui_widget;
-        add.spec = &widget.layout_spec;
-        add.out_new_node = &(*out_widget_nodes)[index];
-        mutations.push_back(add);
-        if (!widget.props_json.empty()) {
-            SaoUiBodyMutation props{};
-            props.kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
-            props.widget = widget.ui_widget;
-            props.props_json_utf8 =
-                reinterpret_cast<const uint8_t*>(widget.props_json.data());
-            props.props_len = widget.props_json.size();
-            mutations.push_back(props);
-        }
-    }
-    for (size_t index = 0; index < old_placeholders.size(); ++index) {
-        SaoUiBodyMutation add{};
-        add.kind = SAO_UI_BODY_ADD_WIDGET;
-        add.widget = old_placeholders[index];
-        add.spec = &placeholder_layouts[index];
-        add.out_new_node = &(*out_placeholder_nodes)[index];
-        mutations.push_back(add);
-        SaoUiBodyMutation props{};
-        props.kind = SAO_UI_BODY_UPDATE_WIDGET_PROPS;
-        props.widget = old_placeholders[index];
-        props.props_json_utf8 = reinterpret_cast<const uint8_t*>(kCanvasProps);
-        props.props_len = sizeof(kCanvasProps) - 1U;
-        mutations.push_back(props);
-    }
-    return static_cast<sao_sdk_status_t>(sao_ui_panel_update_body(
-        body, mutations.data(), mutations.size()));
-}
-
-void quarantine_panel_cleanup(ContextState* state, sao_sdk_ui_panel_t panel,
-                              sao_ui_panel_handle_t native_panel,
-                              sao_ui_panel_body_handle_t body, PanelEntry residual) {
-    if (state == nullptr)
-        return;
-    residual.cleanup_pending = true;
-    residual.unregistering = true;
-    std::lock_guard<std::mutex> lock(state->mu);
-    const auto found = state->panels.find(panel);
-    if (found != state->panels.end() && found->second.ui_body == body) {
-        found->second.cleanup_pending = true;
-        found->second.unregistering = true;
-        for (auto& widget : residual.widgets)
-            found->second.widgets.push_back(std::move(widget));
-        for (auto canvas : residual.canvases)
-            found->second.canvases.push_back(canvas);
-        for (auto placeholder : residual.canvas_placeholders)
-            found->second.canvas_placeholders.push_back(placeholder);
-        for (auto node : residual.canvas_placeholder_nodes)
-            found->second.canvas_placeholder_nodes.push_back(node);
-        return;
-    }
-    residual.sdk_handle = panel;
-    residual.ui_panel = native_panel == nullptr ? reinterpret_cast<sao_ui_panel_handle_t>(panel)
-                                                : native_panel;
-    residual.ui_body = body;
-    state->panel_cleanup_pending.push_back(std::move(residual));
 }
 
 void quarantine_widget_cleanup(ContextState* state, sao_sdk_ui_panel_t panel,
@@ -828,65 +751,10 @@ sao_sdk_status_t create_widget_for_kind(const SaoSdkWidgetSpec& spec, const Json
     return SAO_SDK_OK;
 }
 
-void clear_legacy_canvases(PanelEntry& panel) {
-    for (const auto canvas : panel.canvases) {
-        sao_ui_script_canvas_destroy(canvas);
-    }
-    panel.canvases.clear();
-    for (const auto placeholder : panel.canvas_placeholders) {
-        sao_ui_widget_destroy(placeholder);
-    }
-    panel.canvas_placeholders.clear();
-    panel.canvas_placeholder_nodes.clear();
-}
-
 void destroy_panel_resources(PanelEntry& panel) {
-    clear_legacy_canvases(panel);
     for (const auto& widget : panel.widgets)
         destroy_widget_for_kind(widget.kind, widget.ui_widget, widget.script_canvas);
     panel.widgets.clear();
-}
-
-sao_sdk_status_t materialize_legacy_canvas(const uint8_t* spec_json_utf8, size_t spec_len,
-                                           LegacyCanvasResources* out_resources) {
-    if (out_resources == nullptr)
-        return SAO_SDK_ERR_INVALID_ARGUMENT;
-    *out_resources = {};
-    if (spec_json_utf8 == nullptr || spec_len == 0)
-        return SAO_SDK_OK;
-    const std::string spec(reinterpret_cast<const char*>(spec_json_utf8), spec_len);
-    if (spec.find("\"canvas\"") == std::string::npos)
-        return SAO_SDK_OK;
-
-    SaoUiScriptCanvasSpec canvas_spec{};
-    canvas_spec.width_px = 640;
-    canvas_spec.height_px = 360;
-    canvas_spec.antialias = true;
-    canvas_spec.retain_ops_between_frames = true;
-    canvas_spec.max_ops_per_frame = 4000;
-    sao_ui_widget_handle_t widget = nullptr;
-    sao_ui_script_canvas_handle_t canvas = nullptr;
-    const sao_status_t canvas_rc =
-        sao_ui_script_canvas_create(nullptr, &canvas_spec, &widget, &canvas);
-    if (canvas_rc != SAO_STATUS_OK)
-        return static_cast<sao_sdk_status_t>(canvas_rc);
-
-    sao_ui_widget_handle_t placeholder = nullptr;
-    if (sao_ui_widget_create(SAO_UI_WIDGET_ROUNDED_PANEL, nullptr, &placeholder) != SAO_STATUS_OK) {
-        sao_ui_script_canvas_destroy(canvas);
-        return SAO_SDK_ERR_NOT_INITIALIZED;
-    }
-    static constexpr char kCanvasProps[] = R"({"active":true})";
-    if (sao_ui_widget_apply_props(placeholder, reinterpret_cast<const uint8_t*>(kCanvasProps),
-                                  sizeof(kCanvasProps) - 1) != SAO_STATUS_OK) {
-        sao_ui_widget_destroy(placeholder);
-        sao_ui_script_canvas_destroy(canvas);
-        return SAO_SDK_ERR_NOT_INITIALIZED;
-    }
-
-    out_resources->canvases.push_back(canvas);
-    out_resources->placeholders.push_back(placeholder);
-    return SAO_SDK_OK;
 }
 
 // ─── UI table vtable functions ───────────────────────────────────────
@@ -1056,25 +924,27 @@ sao_sdk_status_t SAO_SDK_CALL ui_register_panel(void* ctx_impl, const char* pane
     if (bridge != nullptr) {
         sao_sdk_status_t action_status = SAO_SDK_OK;
         {
-            std::lock_guard<std::mutex> native_lock(*native_mutex);
-            action_status = invoke_callback_barrier([&] {
+            PanelMutationLock native_lock(native_mutex);
+            action_status = !native_lock ? SAO_SDK_ERR_BUSY : invoke_callback_barrier([&] {
                 return static_cast<sao_sdk_status_t>(sao_ui_panel_set_action_handler(
                     native_panel, &legacy_action_bridge_callback, bridge.get()));
             });
         }
         if (action_status != SAO_SDK_OK) {
-            (void)ui_unregister_ui_panel(ctx_impl, *out_panel);
-            *out_panel = nullptr;
-            return action_status;
+            const auto rollback = ui_unregister_ui_panel(ctx_impl, *out_panel);
+            if (rollback == SAO_SDK_OK)
+                *out_panel = nullptr;
+            return rollback == SAO_SDK_OK ? action_status : rollback;
         }
     }
     if (initial_spec_json_utf8 != nullptr || spec_len != 0) {
         const auto spec_status = ui_set_panel_spec(ctx_impl, *out_panel,
                                                    initial_spec_json_utf8, spec_len);
         if (spec_status != SAO_SDK_OK) {
-            (void)ui_unregister_ui_panel(ctx_impl, *out_panel);
-            *out_panel = nullptr;
-            return spec_status;
+            const auto rollback = ui_unregister_ui_panel(ctx_impl, *out_panel);
+            if (rollback == SAO_SDK_OK)
+                *out_panel = nullptr;
+            return rollback == SAO_SDK_OK ? spec_status : rollback;
         }
     }
     return SAO_SDK_OK;
@@ -1091,11 +961,10 @@ sao_sdk_status_t SAO_SDK_CALL ui_set_panel_spec(void* ctx_impl, sao_sdk_ui_panel
     sao_ui_panel_handle_t native_panel = nullptr;
     sao_ui_panel_body_handle_t body = nullptr;
     std::shared_ptr<std::mutex> native_mutex;
-    std::vector<WidgetEntry> old_widgets;
-    std::vector<sao_ui_widget_handle_t> old_placeholders;
-    std::vector<sao_ui_layout_node_handle_t> old_placeholder_nodes;
-    std::string old_spec;
-    PanelEntry::UiMode old_mode = PanelEntry::UiMode::unspecified;
+    std::string candidate_spec;
+    if (spec_len > 1024U * 1024U) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (spec_len != 0)
+        candidate_spec.assign(reinterpret_cast<const char*>(spec_json_utf8), spec_len);
     {
         std::lock_guard<std::mutex> lock(state->mu);
         const auto it = state->panels.find(panel);
@@ -1104,194 +973,31 @@ sao_sdk_status_t SAO_SDK_CALL ui_set_panel_spec(void* ctx_impl, sao_sdk_ui_panel
         native_panel = it->second.ui_panel;
         body = it->second.ui_body;
         native_mutex = it->second.native_mutation_mutex;
-        old_widgets = it->second.widgets;
-        old_placeholders = it->second.canvas_placeholders;
-        old_placeholder_nodes = it->second.canvas_placeholder_nodes;
-        old_spec = it->second.legacy_spec_json;
-        old_mode = it->second.ui_mode;
     }
-    std::lock_guard<std::mutex> native_lock(*native_mutex);
+    PanelMutationLock native_lock(native_mutex);
+    if (!native_lock) return SAO_SDK_ERR_BUSY;
     {
         std::lock_guard<std::mutex> lock(state->mu);
         const auto it = state->panels.find(panel);
         if (it == state->panels.end()) return SAO_SDK_ERR_NOT_FOUND;
-        if (!panel_native_handles_current(it->second, native_panel, body) ||
-            it->second.ui_mode != old_mode ||
-            it->second.canvas_placeholders != old_placeholders ||
-            it->second.canvas_placeholder_nodes != old_placeholder_nodes)
+        if (!panel_native_handles_current(it->second, native_panel, body))
             return it->second.unregistering ? SAO_SDK_ERR_BUSY : SAO_SDK_ERR_HANDLE_INVALID;
-        for (const auto& old_widget : old_widgets)
-            if (!widget_entry_current(it->second, old_widget))
-                return SAO_SDK_ERR_HANDLE_INVALID;
     }
-    if (old_placeholders.size() != old_placeholder_nodes.size()) return SAO_SDK_ERR_INTERNAL;
-    LegacyCanvasResources replacement;
-    const auto stage_status = materialize_legacy_canvas(spec_json_utf8, spec_len, &replacement);
-    if (stage_status != SAO_SDK_OK) return stage_status;
-    std::string candidate_spec;
-    if (spec_json_utf8 != nullptr && spec_len != 0)
-        candidate_spec.assign(reinterpret_cast<const char*>(spec_json_utf8), spec_len);
-    std::vector<SaoUiLayoutSpec> layouts(replacement.placeholders.size());
-    for (auto& layout : layouts) {
-        layout.fixed_width_px = 640;
-        layout.fixed_height_px = 360;
-        layout.hit_testable = true;
-    }
-    std::vector<sao_ui_layout_node_handle_t> replacement_nodes(replacement.placeholders.size());
-    std::vector<SaoUiBodyMutation> mutations;
-    mutations.reserve(old_widgets.size() + old_placeholders.size() + replacement.placeholders.size());
-    for (const auto& old_widget : old_widgets) {
-        SaoUiBodyMutation mutation{};
-        mutation.kind = SAO_UI_BODY_REMOVE_NODE;
-        mutation.target = old_widget.layout_node;
-        mutation.widget = old_widget.ui_widget;
-        mutations.push_back(mutation);
-    }
-    for (size_t index = 0; index < old_placeholders.size(); ++index) {
-        SaoUiBodyMutation mutation{};
-        mutation.kind = SAO_UI_BODY_REMOVE_NODE;
-        mutation.target = old_placeholder_nodes[index];
-        mutation.widget = old_placeholders[index];
-        mutations.push_back(mutation);
-    }
-    for (size_t index = 0; index < replacement.placeholders.size(); ++index) {
-        SaoUiBodyMutation mutation{};
-        mutation.kind = SAO_UI_BODY_ADD_WIDGET;
-        mutation.widget = replacement.placeholders[index];
-        mutation.spec = &layouts[index];
-        mutation.out_new_node = &replacement_nodes[index];
-        mutations.push_back(mutation);
-    }
-    const auto native_status = invoke_callback_barrier([&] {
-        return static_cast<sao_sdk_status_t>(sao_ui_panel_set_spec(
-            native_panel, spec_json_utf8, spec_len));
-    });
-    if (native_status != SAO_SDK_OK) {
-        for (const auto canvas : replacement.canvases) sao_ui_script_canvas_destroy(canvas);
-        for (const auto placeholder : replacement.placeholders) sao_ui_widget_destroy(placeholder);
-        return native_status;
-    }
-    const bool needs_body_sync = !old_widgets.empty() || !old_placeholders.empty() || !replacement.placeholders.empty();
-    const auto body_status = needs_body_sync
-                                 ? sao_ui_panel_update_body(
-                                       body, mutations.empty() ? nullptr : mutations.data(),
-                                       mutations.size())
-                                 : SAO_STATUS_OK;
-    if (body_status != SAO_STATUS_OK) {
-        const auto candidate_remove = remove_candidate_nodes_reverse(body, replacement_nodes);
-        const auto rollback_spec = invoke_callback_barrier([&] {
-            return static_cast<sao_sdk_status_t>(sao_ui_panel_set_spec(
-                native_panel, old_spec.empty() ? nullptr
-                                                : reinterpret_cast<const uint8_t*>(old_spec.data()),
-                old_spec.size()));
-        });
-        std::vector<sao_ui_layout_node_handle_t> restored_widget_nodes;
-        std::vector<sao_ui_layout_node_handle_t> restored_placeholder_nodes;
-        const auto restore_body_status = restore_legacy_body(
-            body, old_widgets, old_placeholders, &restored_widget_nodes,
-            &restored_placeholder_nodes);
-        const auto rollback_body = rollback_spec != SAO_SDK_OK
-                                       ? rollback_spec
-                                       : restore_body_status;
-        if (candidate_remove == SAO_SDK_OK && rollback_body == SAO_SDK_OK) {
-            std::lock_guard<std::mutex> lock(state->mu);
-            const auto it = state->panels.find(panel);
-            if (it != state->panels.end() && it->second.ui_mode == old_mode) {
-                for (size_t index = 0; index < old_widgets.size(); ++index) {
-                    const auto found = std::find_if(
-                        it->second.widgets.begin(), it->second.widgets.end(),
-                        [&](const WidgetEntry& item) {
-                            return item.sdk_handle == old_widgets[index].sdk_handle;
-                        });
-                    if (found != it->second.widgets.end())
-                        found->layout_node = restored_widget_nodes[index];
-                }
-                it->second.canvas_placeholder_nodes = restored_placeholder_nodes;
-            }
-            for (const auto canvas : replacement.canvases)
-                sao_ui_script_canvas_destroy(canvas);
-            for (const auto placeholder : replacement.placeholders)
-                sao_ui_widget_destroy(placeholder);
-            return static_cast<sao_sdk_status_t>(body_status);
-        }
-        PanelEntry residual;
-        residual.canvases = std::move(replacement.canvases);
-        residual.canvas_placeholders = std::move(replacement.placeholders);
-        residual.canvas_placeholder_nodes = std::move(replacement_nodes);
-        quarantine_panel_cleanup(state, panel, native_panel, body, std::move(residual));
-        return candidate_remove != SAO_SDK_OK ? candidate_remove : rollback_body;
-    }
-    sao_sdk_status_t final_status = SAO_SDK_OK;
-    {
-        std::lock_guard<std::mutex> lock(state->mu);
-        const auto it = state->panels.find(panel);
-        if (it == state->panels.end())
-            final_status = SAO_SDK_ERR_NOT_FOUND;
-        else if (!panel_native_handles_current(it->second, native_panel, body) ||
-                 it->second.ui_mode != old_mode)
-            final_status = it->second.unregistering ? SAO_SDK_ERR_BUSY : SAO_SDK_ERR_HANDLE_INVALID;
-    }
-    if (final_status != SAO_SDK_OK) {
-        const auto candidate_remove = remove_candidate_nodes_reverse(body, replacement_nodes);
-        const auto rollback_spec = invoke_callback_barrier([&] {
-            return static_cast<sao_sdk_status_t>(sao_ui_panel_set_spec(
-                native_panel, old_spec.empty() ? nullptr
-                                                : reinterpret_cast<const uint8_t*>(old_spec.data()),
-                old_spec.size()));
-        });
-        std::vector<sao_ui_layout_node_handle_t> restored_widget_nodes;
-        std::vector<sao_ui_layout_node_handle_t> restored_placeholder_nodes;
-        const auto restore_body_status = restore_legacy_body(
-            body, old_widgets, old_placeholders, &restored_widget_nodes,
-            &restored_placeholder_nodes);
-        const auto rollback_body = rollback_spec != SAO_SDK_OK
-                                       ? rollback_spec
-                                       : restore_body_status;
-        if (candidate_remove == SAO_SDK_OK && rollback_body == SAO_SDK_OK) {
-            std::lock_guard<std::mutex> lock(state->mu);
-            const auto it = state->panels.find(panel);
-            if (it != state->panels.end() && it->second.ui_mode == old_mode) {
-                for (size_t index = 0; index < old_widgets.size(); ++index) {
-                    const auto found = std::find_if(
-                        it->second.widgets.begin(), it->second.widgets.end(),
-                        [&](const WidgetEntry& item) {
-                            return item.sdk_handle == old_widgets[index].sdk_handle;
-                        });
-                    if (found != it->second.widgets.end())
-                        found->layout_node = restored_widget_nodes[index];
-                }
-                it->second.canvas_placeholder_nodes = restored_placeholder_nodes;
-            }
-            for (const auto canvas : replacement.canvases)
-                sao_ui_script_canvas_destroy(canvas);
-            for (const auto placeholder : replacement.placeholders)
-                sao_ui_widget_destroy(placeholder);
-            return final_status;
-        }
-        PanelEntry residual;
-        residual.canvases = std::move(replacement.canvases);
-        residual.canvas_placeholders = std::move(replacement.placeholders);
-        residual.canvas_placeholder_nodes = std::move(replacement_nodes);
-        quarantine_panel_cleanup(state, panel, native_panel, body, std::move(residual));
-        return candidate_remove != SAO_SDK_OK ? candidate_remove : rollback_body;
-    }
-
     PanelEntry retired;
+    const auto native_status = invoke_callback_barrier([&] {
+        return static_cast<sao_sdk_status_t>(sao_ui_panel_body_set_spec(
+            body, spec_json_utf8, spec_len));
+    });
+    if (native_status != SAO_SDK_OK)
+        return native_status;
     {
         std::lock_guard<std::mutex> lock(state->mu);
         const auto it = state->panels.find(panel);
         if (it == state->panels.end() ||
-            !panel_native_handles_current(it->second, native_panel, body) ||
-            it->second.ui_mode != old_mode)
+            !panel_native_handles_current(it->second, native_panel, body))
             return SAO_SDK_ERR_BUSY;
         retired.widgets = std::move(it->second.widgets);
-        retired.canvases = std::move(it->second.canvases);
-        retired.canvas_placeholders = std::move(it->second.canvas_placeholders);
-        retired.canvas_placeholder_nodes = std::move(it->second.canvas_placeholder_nodes);
         it->second.widgets.clear();
-        it->second.canvases = std::move(replacement.canvases);
-        it->second.canvas_placeholders = std::move(replacement.placeholders);
-        it->second.canvas_placeholder_nodes = std::move(replacement_nodes);
         it->second.pending_widget_ids.clear();
         it->second.legacy_spec_json = std::move(candidate_spec);
         it->second.ui_mode = PanelEntry::UiMode::legacy_spec;
@@ -1325,7 +1031,8 @@ sao_sdk_status_t SAO_SDK_CALL ui_unregister_ui_panel(void* ctx_impl, sao_sdk_ui_
         bridge = it->second.legacy_action_bridge;
     }
 
-    std::lock_guard<std::mutex> native_lock(*native_mutex);
+    PanelMutationLock native_lock(native_mutex);
+    if (!native_lock) return SAO_SDK_ERR_BUSY;
     {
         std::lock_guard<std::mutex> lock(state->mu);
         const auto it = state->panels.find(panel);
@@ -1348,17 +1055,21 @@ sao_sdk_status_t SAO_SDK_CALL ui_unregister_ui_panel(void* ctx_impl, sao_sdk_ui_
     }
     const auto unregister_status = unregister_native_panel(native_panel);
     if (unregister_status != SAO_SDK_OK) {
+        sao_sdk_status_t restore_status = SAO_SDK_OK;
         if (bridge != nullptr) {
-            (void)invoke_callback_barrier([&] {
+            restore_status = invoke_callback_barrier([&] {
                 return static_cast<sao_sdk_status_t>(sao_ui_panel_set_action_handler(
                     native_panel, &legacy_action_bridge_callback, bridge.get()));
             });
         }
         std::lock_guard<std::mutex> lock(state->mu);
         const auto found = state->panels.find(panel);
-        if (found != state->panels.end())
+        if (found != state->panels.end()) {
             found->second.unregistering = false;
-        return unregister_status;
+            if (restore_status != SAO_SDK_OK)
+                found->second.cleanup_pending = true;
+        }
+        return restore_status == SAO_SDK_OK ? unregister_status : restore_status;
     }
 
     PanelEntry retired;
@@ -1441,7 +1152,11 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_add_widget(void* ctx_impl, sao_sdk_ui_pan
         return add_preflight_status;
     }
     pause_context_api_test_point(ContextApiTestPoint::panel_operation_unlocked);
-    std::lock_guard<std::mutex> native_lock(*native_mutex);
+    PanelMutationLock native_lock(native_mutex);
+    if (!native_lock) {
+        destroy_widget_for_kind(widget_spec->kind, created.widget, created.script_canvas);
+        return SAO_SDK_ERR_BUSY;
+    }
     sao_sdk_status_t add_locked_status = SAO_SDK_OK;
     {
         std::lock_guard<std::mutex> lock(state->mu);
@@ -1598,7 +1313,8 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_update_widget(void* ctx_impl, sao_sdk_ui_
         body = it->second.ui_body;
         native_mutex = it->second.native_mutation_mutex;
     }
-    std::lock_guard<std::mutex> native_lock(*native_mutex);
+    PanelMutationLock native_lock(native_mutex);
+    if (!native_lock) return SAO_SDK_ERR_BUSY;
     {
         std::lock_guard<std::mutex> lock(state->mu);
         const auto it = state->panels.find(panel);
@@ -1704,7 +1420,8 @@ sao_sdk_status_t SAO_SDK_CALL ui_panel_remove_widget(void* ctx_impl, sao_sdk_ui_
         body = it->second.ui_body;
         native_mutex = it->second.native_mutation_mutex;
     }
-    std::lock_guard<std::mutex> native_lock(*native_mutex);
+    PanelMutationLock native_lock(native_mutex);
+    if (!native_lock) return SAO_SDK_ERR_BUSY;
     {
         std::lock_guard<std::mutex> lock(state->mu);
         const auto it = state->panels.find(panel);
@@ -1793,16 +1510,6 @@ sao_sdk_status_t SAO_SDK_CALL ui_set_overlay(void* ctx_impl, const char* surface
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     if (spec_json_utf8 == nullptr && spec_len != 0)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
-    sao_sdk_overlay_token_t previous = 0;
-    {
-        std::lock_guard<std::mutex> lock(state->mu);
-        const auto it = state->overlays.find(surface_id_utf8);
-        if (it != state->overlays.end()) previous = reinterpret_cast<uint64_t>(it->second);
-    }
-    if (previous != 0) {
-        const auto clear_status = provider_overlay_clear(state, previous);
-        if (clear_status != SAO_SDK_OK) return clear_status;
-    }
     SaoSdkOverlaySpec spec{};
     spec.surface_id_utf8 = surface_id_utf8;
     spec.spec_json_utf8 = spec_json_utf8;
@@ -1985,10 +1692,10 @@ sao_sdk_status_t cleanup_ui_panels(ContextState* state) {
         auto candidate = current++;
         sao_sdk_status_t status = SAO_SDK_OK;
         const auto native_mutex = candidate->native_mutation_mutex;
-        std::unique_lock<std::mutex> native_lock;
-        if (native_mutex != nullptr)
-            native_lock = std::unique_lock<std::mutex>(*native_mutex);
-        if (candidate->ui_panel != nullptr) {
+        PanelMutationLock native_lock(native_mutex);
+        if (!native_lock)
+            status = SAO_SDK_ERR_BUSY;
+        if (status == SAO_SDK_OK && candidate->ui_panel != nullptr) {
             status = invoke_callback_barrier([&] {
                 return static_cast<sao_sdk_status_t>(
                     sao_ui_panel_set_action_handler(candidate->ui_panel, nullptr, nullptr));
@@ -2002,8 +1709,7 @@ sao_sdk_status_t cleanup_ui_panels(ContextState* state) {
             failed.splice(failed.end(), pending, candidate);
             continue;
         }
-        if (native_lock.owns_lock())
-            native_lock.unlock();
+        native_lock.unlock();
         destroy_panel_resources(*candidate);
         pending.erase(candidate);
     }
@@ -2097,6 +1803,49 @@ sao_sdk_unregister_ui_panel(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t 
         if (slot_status != SAO_SDK_OK)
             return slot_status;
         return slot(lease.state(), panel);
+    });
+}
+
+extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_panel_open(
+    const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel, uint32_t width, uint32_t height) {
+    sao_sdk_internal::ContextApiLease lease(ctx);
+    if (!lease)
+        return lease.status();
+    if (panel == nullptr || width > 16384 || height > 16384)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    return sao_sdk_internal::invoke_callback_barrier([&]() -> sao_sdk_status_t {
+        auto* state = lease.state();
+        sao_ui_panel_handle_t native{};
+        std::shared_ptr<std::mutex> mutation;
+        {
+            std::lock_guard lock(state->mu);
+            const auto entry = state->panels.find(panel);
+            if (entry == state->panels.end()) return SAO_SDK_ERR_NOT_FOUND;
+            if (entry->second.unregistering) return SAO_SDK_ERR_BUSY;
+            native = entry->second.ui_panel;
+            mutation = entry->second.native_mutation_mutex;
+        }
+        sao_sdk_internal::PanelMutationLock native_lock(mutation);
+        if (!native_lock) return SAO_SDK_ERR_BUSY;
+        {
+            std::lock_guard lock(state->mu);
+            const auto entry = state->panels.find(panel);
+            if (entry == state->panels.end() || entry->second.ui_panel != native ||
+                entry->second.native_mutation_mutex != mutation)
+                return SAO_SDK_ERR_HANDLE_INVALID;
+            if (entry->second.unregistering) return SAO_SDK_ERR_BUSY;
+        }
+        SaoPanelState geometry{};
+        auto status = sao_ui_panel_get_state(native, &geometry);
+        if (status == SAO_STATUS_OK && (width != 0 || height != 0))
+            status = sao_ui_panel_set_geometry(native, geometry.x, geometry.y,
+                width == 0 ? geometry.width : static_cast<int32_t>(width),
+                height == 0 ? geometry.height : static_cast<int32_t>(height));
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_panel_show(native);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_panel_bring_to_front(native);
+        return static_cast<sao_sdk_status_t>(status);
     });
 }
 
@@ -2315,7 +2064,21 @@ sao_sdk_test_panel_canvas_count(const struct SaoSdkContext* ctx, sao_sdk_ui_pane
         const auto it = state->panels.find(panel);
         if (it == state->panels.end())
             return 0;
-        return it->second.canvases.size();
+        if (it->second.legacy_spec_json.empty())
+            return 0;
+        const auto spec = nlohmann::json::parse(it->second.legacy_spec_json);
+        const auto count = [](const auto& self, const nlohmann::json& node) -> size_t {
+            size_t total = 0;
+            if (node.is_array()) {
+                for (const auto& child : node) total += self(self, child);
+            } else if (node.is_object()) {
+                if (node.value("type", std::string()) == "canvas") ++total;
+                for (const char* key : {"nodes", "children"})
+                    if (node.contains(key)) total += self(self, node[key]);
+            }
+            return total;
+        };
+        return count(count, spec);
     } catch (...) {
         return 0;
     }

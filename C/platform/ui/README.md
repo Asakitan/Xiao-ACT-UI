@@ -1,5 +1,177 @@
 # `platform/ui`
 
+## Measured labels, keyboard children and plugin status
+
+Typed Label and time-label wrapping, ellipsis, alignment and line height now use
+real font metrics, including trailing-space advance. Default size is16; normal/bold
+measurement and painting share a Body role. Explicit tracking uses measured glyph
+advances and a common baseline; fallback geometry is only for unavailable DirectWrite.
+
+Entity keyboard navigation has root/child focus, skips disabled rows and scrolls
+past the eight visible child slots. Enter/Space use the shared pointer action path;
+Left/Escape return to roots before full close. Publication changes and cancellation
+retire old child focus. Production routing respects focused widgets/panels, guides,
+modifiers and global Home/Insert; no motion timing changed.
+
+UI ABI1.20 consumes the first reserved byte of the56-byte plugin-tab descriptor for
+Unknown0/Active1/Disabled2. Remaining reserved bytes stay zero and all prefix offsets
+and strides are preserved. Names remain unchanged; separate status text and a real
+two-level plugin heading express state/ownership. Disabled tabs remain selectable,
+while action admission stays with the publisher's existing gates.
+
+Final Debug and the explicit offline readability probe passed54checks/5actions,
+ABI65556; font16/28 samples measure174x22/304x38 and mixed tracking uses27px height.
+After two interrupted independent attempts, the user explicitly requested parent
+review instead. That review completed without a new blocking finding, followed by
+a fresh full Debug build and54-check/plugin17/menu18/dark/handoff reruns, all exit0.
+Hardened acceptance passed22PEs/76files/17inputs and refreshed ship; the32,426,064-byte
+bundle has identical build/ship hashes. Evidence uses `readability-reviewed*`.
+Full-product focus, all-DPI, host matrices, complex grapheme clusters and frame-cost
+measurement remain separate checks; no independent-review verdict is claimed.
+
+## Latin typography and long labels
+
+The private DirectWrite layout applies 112% font size and 0.025em tracking to
+Latin ranges only. CJK and other non-Latin sizes remain unchanged. Measurement,
+software glyph masks, GPU text and Entity text share the same range formatting;
+no font binaries or public ABI changed. Four packaged web stylesheets use a
+Latin-only `size-adjust:112%`; their CJK face and explicit editor line height remain.
+Plugin tab titles/rows and table text reuse the existing measured UTF-8 codepoint
+ellipsis. Table alignment now uses the same width instead of a glyph-count estimate.
+The measured-label follow-up above supersedes the older typed Label fixed-grid sizing.
+
+Final Debug and offline plugin17/menu18-event sequences passed; seven initial
+font exports and five final exports exited0. Menu before/after inspection found no
+new text clipping or overlap. Workbench browser checks at1280x820,430x820,760x480
+found no page-horizontal overflow; native backend calls remain offline in that check.
+Independent final review passed after restoring the missing runtime-memory UI typography
+section and synchronizing review status; no source fix was needed. Saved logs and selected
+images were inspected; Debug exit and browser results remain parent-reported evidence.
+The parent subsequently passed Hardened acceptance:22PEs/76files/17inputs,
+32,415,312-byte bundle with matching build/ship hashes and four exact CSS copies.
+All-DPI, complex grapheme clusters, real backend integration and measured frame-cost
+checks remain separate.
+
+## SYSTEM-to-menu transition
+
+A successful release of a parked bootstrap hold consumes the next positive tick
+as a resume frame and stops using the advanced audio clock for scene time. This
+preserves the exit tail across synchronous launcher UI bring-up; repeated release
+does not restart it. Early release, failed bootstrap and outro retain their paths.
+Only a successful armed release with the final telemetry stage at100% enables
+the default SYSTEM camera flyby. Its frame/text/ring/rail share age-squared depth,
+perspective enlargement and a lens-side pass, with constant vertical center and
+material opacity. Loading1/6 through6/6 remains unchanged; even100% waits for release.
+The existing geometric backdrop aperture and natural-completion menu entrance remain.
+Ordinary non-held intro, custom geometry, pillars and audio resources are unchanged;
+reduced motion retains its250ms post-hold fade.
+Offline `--intro-handoff` checks each loading stage and100% before release, repeated
+release and a3s delayed first tick. Final Debug,11GPU keyframes,120-frame video and
+reduced-motion samples pass. Camera-flyby review passed without findings; Hardened
+acceptance passed22PE/76files with matching build/ship bundle hashes. Full production
+bootstrap and all-DPI behavior remain separate checks; exact evidence is in session-78.
+
+## Shared-texture source contract
+
+UI ABI 1.19 adds size-versioned source/state structures, explicit legacy/NT handle
+kinds, configurable keyed-mutex keys, bounded timeouts, and owner-thread attachment,
+state and capability queries. Invalid replacement preserves the committed source;
+zero/null attachment clears it. NT handles must already be valid in this process;
+the consumer retains its own duplicate. Legacy shared handles are never closed.
+
+The color path copies straight-alpha RGBA8/BGRA8 UNORM into a private GPU texture
+and premultiplies in a shader before existing composition/effects. MMF remains an
+independent alpha/hit-test and fallback source. Without MMF, irregular interactive
+layers read back alpha only; color does not take a readback/upload route. A successful
+copy activates the generation; timeout retains the last frame, abandonment requires
+reattachment, and device loss retires imported/derived resources before recovery.
+Device-less compositors report no GPU interop. Before the native timer-owner revision,
+Debug builds and Hardened acceptance passed. The GPU probe passed 566 checks for
+three sharing variants on two devices,
+12 replacements and zero pixel mismatches, including timeout/recovery, rejected
+replacement, clearing and retirement. Hardened acceptance passed 22 PEs/76 files;
+the 17-event tab preview passed again. These are pre-timer baseline results, not
+validation of the current launcher owner pump. Cross-process NT, cross-adapter, device-loss/
+abandonment injection, MMF/alpha fault cases and all-DPI behavior remain untested.
+
+The cutegirl pipe reader now publishes to a per-connection inbox consumed by Tick;
+Stop clears the inbox and GPU handshake state. Tick itself previously ran through
+the core timer worker, so that move alone did not establish compositor ownership.
+The launcher owner bind/pump/unbind path passed independent review and final builds.
+`sao_dir_probe --timer-owner-probe` passed 94 checks and seven native callbacks with
+zero timer/worker/context residue, including headless layer replacement and input
+reentry rejection; it does not exercise GPU or the full product. Timer callbacks may
+retire their layers, while Input/Render reentry protections remain. Final GPU566,
+navigation2446, six-host128-level and 17-event regressions all passed again, followed
+by Hardened22PE/76-file acceptance. Exact artifact identity is in session-77.
+
+Deep menus stay outside the UI's flat Entity ABI: hosts publish a current page,
+with queued Back/open requests committed through navigation candidates. There is
+no fixed depth cap, but limits remain 4096 nodes, 1 MiB text, 1024 root data rows
+and 1023 child data rows plus Back. CPython/pymini materialize callable submenus
+lazily along the selected path; other hosts currently execute subbuilders on refresh.
+
+## Persistent plugin tabs and legacy drawing (earlier session-77 baseline)
+
+UI ABI 1.18 adds a compositor-owned plugin tab rail with draggable title, scrolling,
+UTF-8/custom semantic icons and a refreshable ancillary action column. Item data is
+copied synchronously; selection follows stable plugin IDs. It remains visible when
+the Entity menu closes, while the launcher suppresses it during intro/outro/offline.
+Capture cancellation, viewport clamps and action-failure isolation are explicit.
+
+Panel canvas nodes now submit real bounded draw operations; RGBA frames decode to
+premultiplied BGRA bitmaps. Slider nodes honor their declared lo/hi ranges. SDK
+overlays reuse the same parser and paint context without panel chrome, and failed
+replacements retain the previous surface. Debug GPU preview completed 17 interaction
+events, 67 canvas operations, a 16-byte exact RGBA comparison and real overlay set.
+Post-review Debug rebuild and the same probes passed; Hardened acceptance passed
+with 22 PEs and 76 exact files, and the authenticated shipped bundle was refreshed.
+Full product/DPI/external-engine acceptance remains separate from this preview.
+
+## Link Start flight and shutdown (current)
+
+Default blue pillars now finish their full age-squared flight 300ms before the
+bootstrap hold; that remaining window settles history continuously instead of
+clearing visible trails on the cutoff frame. The one-shot flight, SYSTEM hold,
+audio duration, custom timelines and public ABI remain unchanged.
+Normal Link End keeps its 900ms scene, followed by a separate 650ms CRT shutdown:
+vertical collapse to a horizontal line, horizontal collapse to a dot, then power-off.
+Completion occurs at 1550ms, not at the end of the initial scene. Reduced motion
+retains the 180ms fade. The shared GPU constants remain 112 bytes.
+RelWithDebInfo compiler/linker and all four shaders passed; current GPU, independent
+review and package evidence are tracked in the session-70 final follow-up.
+
+## Link Start flight and loading hold (2026-09-21 historical baseline)
+
+Blue pillars make one scene-clock flight from `p3_start` to `p4_hold_end`, then
+remain off-screen. Only the central SYSTEM plate waits for bootstrap completion;
+its loading ring keeps rotating. The early wall-clock-driven loop and private
+`FrameState::motion_seconds` field are removed. Release timing, reduced motion,
+custom timelines and the public ABI are unchanged. See the session-70 follow-up
+for verification; earlier looping-flight evidence does not cover this revision.
+Independent review found that the first cutoff frame could retain old trails and
+then be cached indefinitely by `same_frame` during the hold. The default intro
+now uses zero history weight from the blue-flight cutoff onward; custom timelines
+and outro retain their existing history behavior. Post-repair RelWithDebInfo acceptance
+passed (22 PEs/76 files), and GPU exports at 7500/8700/9701/9750ms succeeded.
+The inspected 8700ms frame shows blue pillars passing the SYSTEM plate; the 9701ms
+frame shows the plate without pillars. Build/ship bundle hashes match. Independent
+review passed after the history fix; long bootstrap-hold live validation has not run.
+
+## Geometric menu transitions (2026-09-21)
+
+SAOmenu entrance/exit now combines an 88px bounded slide with staggered geometric
+assembly/retraction and cyan/gold scan edges. Material opacity stays constant; input
+rectangles follow the same clip as the visible controls. Root reversal and child
+join/move/split remain intact. Procedural and LIVE backgrounds share a 500/400ms
+horizontal-seam/beveled segmented aperture at fixed 0.93 material opacity. LIVE keeps
+its last frame through exit and uses a separate texture/pass without double warping;
+capture uses host pixels plus desktop origin, without a second DPI scale. Constants
+remain 80 bytes. Review passed after clip/input/DPI fixes; Release build and ship
+acceptance passed (22 PEs/76 files). Final GPU export is 540 frames/9s with all 18 events,
+including full close/reopen, and Settings round-trip. LIVE/DPI/device recovery remain
+separate live gates; see `docs/classic_implementation.md` and session-69.
+
 ## SaoMenu motion revision (2026-09-19)
 
 Entity consumes private resolved child anchor/extension/split values. Root reversals
@@ -76,8 +248,12 @@ the Python overlay.
    Every visible plugin/pet/mmf/panel is a *virtual layer* inside the
    compositor.  This is the "unified DWM overlay compositor" work.
 2. **SetWindowRgn owns click-through.**  It's the only cross-process-
-   reliable mechanism.  The host's RGN is never NULL.  (See the
-   `SetWindowRgn 裸调` handle-leak note.)
+  reliable mechanism. Creation does not pre-install an empty region; before the
+  first successful transaction there is no installed region, and `overlay_host`
+  records that null preimage explicitly,
+  installs the compositor region on success, and restores null on rollback.
+  Once Link Start has presented, the live host region must be nonempty. (See
+  the `SetWindowRgn 裸调` handle-leak note.)
 3. **`z_order` is the sole `SetWindowPos` authority.**  No other module
    changes topmost state directly.
 4. **Layer name reuse fails loudly.**  Reuse used to leak GL FBOs in the

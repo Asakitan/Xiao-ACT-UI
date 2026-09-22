@@ -1,12 +1,13 @@
 // SAO Auto — gpu_capture lifecycle gates + BGRA readback / hash helpers.
 // 1:1 with `render/gpu_capture.py`.
 //
-// The WGC session lifecycle remains stubbed (not implemented) —
-// the recognition path in the Python auth source relies on the
-// `windows_capture` pyo3 module which we have no equivalent for in
-// pure C++.  We keep the stubs so callers get an unambiguous
-// SAO_STATUS_ERR_NOT_INITIALIZED and fall back to their PrintWindow
-// path.
+// The WGC session lifecycle is implemented end-to-end: device + interop
+// creation, CreateFreeThreaded frame pool, capture session, polling
+// receive path (TryGetNextFrame → staging copy → packed BGRA) and
+// teardown.  When the toolchain lacks the WinRT projection headers or
+// the OS reports GraphicsCaptureSession unsupported, the session entry
+// points return SAO_STATUS_ERR_NOT_IMPLEMENTED so callers fall back to
+// their PrintWindow path.
 //
 // Stateless helpers add the "raw pixels" plumbing that the Python
 // auth source doesn't require (it consumes numpy arrays directly):
@@ -24,28 +25,28 @@
 #include "sao/ui/gpu_capture.h"
 
 #if defined(_WIN32)
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>
-#  include <d3d11.h>
-#  include <dxgi.h>
-#  include <roapi.h>
-#  if __has_include(<winrt/Windows.Graphics.Capture.h>) && \
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <d3d11.h>
+#include <dxgi.h>
+#include <roapi.h>
+#include <windows.h>
+#if __has_include(<winrt/Windows.Graphics.Capture.h>) && \
       __has_include(<windows.graphics.capture.interop.h>) && \
       __has_include(<windows.graphics.directx.direct3d11.interop.h>)
-#    define SAO_UI_HAS_WGC 1
-#    include <winrt/base.h>
-#    include <winrt/Windows.Foundation.h>
-#    include <winrt/Windows.Graphics.Capture.h>
-#    include <winrt/Windows.Graphics.DirectX.h>
-#    include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
-#    include <windows.graphics.capture.interop.h>
-#    include <windows.graphics.directx.direct3d11.interop.h>
-#  endif
+#define SAO_UI_HAS_WGC 1
+#include <windows.graphics.capture.interop.h>
+#include <windows.graphics.directx.direct3d11.interop.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Capture.h>
+#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
+#include <winrt/Windows.Graphics.DirectX.h>
+#include <winrt/base.h>
+#endif
 #endif
 
 #include <algorithm>
@@ -73,8 +74,8 @@ double monotonic_seconds() {
     ::QueryPerformanceCounter(&counter);
     ::QueryPerformanceFrequency(&frequency);
     return frequency.QuadPart == 0
-        ? 0.0
-        : static_cast<double>(counter.QuadPart) / static_cast<double>(frequency.QuadPart);
+               ? 0.0
+               : static_cast<double>(counter.QuadPart) / static_cast<double>(frequency.QuadPart);
 }
 
 bool ensure_winrt_thread_initialized() {
@@ -87,7 +88,8 @@ bool ensure_winrt_thread_initialized() {
 
 bool wgc_runtime_supported() {
     static const bool supported = [] {
-        if (!ensure_winrt_thread_initialized()) return false;
+        if (!ensure_winrt_thread_initialized())
+            return false;
         bool result = false;
         try {
             result = GraphicsCaptureSession::IsSupported();
@@ -99,7 +101,7 @@ bool wgc_runtime_supported() {
     return supported;
 }
 
-}  // namespace
+} // namespace
 
 struct WgcBackend {
     std::mutex mutex;
@@ -137,8 +139,10 @@ struct sao_ui_gpu_capture_s {
 namespace {
 
 void release_wgc_session_no_lock(WgcBackend& backend) {
-    if (backend.session != nullptr) backend.session.Close();
-    if (backend.frame_pool != nullptr) backend.frame_pool.Close();
+    if (backend.session != nullptr)
+        backend.session.Close();
+    if (backend.frame_pool != nullptr)
+        backend.frame_pool.Close();
     backend.session = nullptr;
     backend.frame_pool = nullptr;
     backend.item = nullptr;
@@ -157,24 +161,27 @@ void release_wgc_session_no_lock(WgcBackend& backend) {
 }
 
 void receive_wgc_frame(WgcBackend* backend) {
-    if (backend == nullptr) return;
+    if (backend == nullptr)
+        return;
     try {
         std::lock_guard<std::mutex> lock(backend->mutex);
-        if (backend->state != SAO_UI_GPU_CAPTURE_RUNNING || backend->frame_pool == nullptr) return;
+        if (backend->state != SAO_UI_GPU_CAPTURE_RUNNING || backend->frame_pool == nullptr)
+            return;
         auto frame = backend->frame_pool.TryGetNextFrame();
-        if (frame == nullptr) return;
-        auto access = frame.Surface().as<
-            Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+        if (frame == nullptr)
+            return;
+        auto access =
+            frame.Surface()
+                .as<Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
         winrt::com_ptr<ID3D11Texture2D> source;
-        winrt::check_hresult(access->GetInterface(
-            __uuidof(ID3D11Texture2D), source.put_void()));
+        winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), source.put_void()));
         D3D11_TEXTURE2D_DESC source_desc{};
         source->GetDesc(&source_desc);
         if (source_desc.Width == 0 || source_desc.Height == 0 ||
             (source_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
-             source_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)) return;
-        if (backend->staging == nullptr ||
-            backend->staging_width != source_desc.Width ||
+             source_desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB))
+            return;
+        if (backend->staging == nullptr || backend->staging_width != source_desc.Width ||
             backend->staging_height != source_desc.Height) {
             D3D11_TEXTURE2D_DESC staging_desc = source_desc;
             staging_desc.MipLevels = 1;
@@ -186,22 +193,20 @@ void receive_wgc_frame(WgcBackend* backend) {
             staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
             staging_desc.MiscFlags = 0;
             winrt::com_ptr<ID3D11Texture2D> staging;
-            winrt::check_hresult(backend->d3d_device->CreateTexture2D(
-                &staging_desc, nullptr, staging.put()));
+            winrt::check_hresult(
+                backend->d3d_device->CreateTexture2D(&staging_desc, nullptr, staging.put()));
             backend->staging = std::move(staging);
             backend->staging_width = source_desc.Width;
             backend->staging_height = source_desc.Height;
         }
         backend->d3d_context->CopyResource(backend->staging.get(), source.get());
         D3D11_MAPPED_SUBRESOURCE mapped{};
-        winrt::check_hresult(backend->d3d_context->Map(
-            backend->staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
+        winrt::check_hresult(
+            backend->d3d_context->Map(backend->staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
         const uint32_t packed_pitch = source_desc.Width * 4u;
-        backend->latest_bgra.resize(
-            static_cast<size_t>(packed_pitch) * source_desc.Height);
+        backend->latest_bgra.resize(static_cast<size_t>(packed_pitch) * source_desc.Height);
         for (uint32_t row = 0; row < source_desc.Height; ++row) {
-            std::memcpy(backend->latest_bgra.data() +
-                            static_cast<size_t>(row) * packed_pitch,
+            std::memcpy(backend->latest_bgra.data() + static_cast<size_t>(row) * packed_pitch,
                         static_cast<const uint8_t*>(mapped.pData) +
                             static_cast<size_t>(row) * mapped.RowPitch,
                         packed_pitch);
@@ -219,7 +224,8 @@ void receive_wgc_frame(WgcBackend* backend) {
 
 sao_status_t start_wgc_session(WgcBackend& backend) {
     if (backend.apartment_thread == 0) {
-        if (!ensure_winrt_thread_initialized()) return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+        if (!ensure_winrt_thread_initialized())
+            return SAO_STATUS_ERR_NOT_IMPLEMENTED;
         backend.apartment_thread = ::GetCurrentThreadId();
     } else if (backend.apartment_thread != ::GetCurrentThreadId()) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -227,33 +233,31 @@ sao_status_t start_wgc_session(WgcBackend& backend) {
 
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     D3D_FEATURE_LEVEL feature_level{};
-    HRESULT hr = ::D3D11CreateDevice(
-        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
-        nullptr, 0, D3D11_SDK_VERSION, backend.d3d_device.put(),
-        &feature_level, backend.d3d_context.put());
+    HRESULT hr = ::D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0,
+                                     D3D11_SDK_VERSION, backend.d3d_device.put(), &feature_level,
+                                     backend.d3d_context.put());
     if (FAILED(hr)) {
-        hr = ::D3D11CreateDevice(
-            nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags,
-            nullptr, 0, D3D11_SDK_VERSION, backend.d3d_device.put(),
-            &feature_level, backend.d3d_context.put());
+        hr = ::D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, nullptr, 0,
+                                 D3D11_SDK_VERSION, backend.d3d_device.put(), &feature_level,
+                                 backend.d3d_context.put());
     }
-    if (FAILED(hr)) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    if (FAILED(hr))
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
     auto dxgi_device = backend.d3d_device.as<IDXGIDevice>();
     winrt::com_ptr<IInspectable> inspectable;
-    winrt::check_hresult(::CreateDirect3D11DeviceFromDXGIDevice(
-        dxgi_device.get(), inspectable.put()));
+    winrt::check_hresult(
+        ::CreateDirect3D11DeviceFromDXGIDevice(dxgi_device.get(), inspectable.put()));
     backend.winrt_device = inspectable.as<IDirect3DDevice>();
 
     const auto activation = winrt::get_activation_factory<GraphicsCaptureItem>();
     const auto interop = activation.as<IGraphicsCaptureItemInterop>();
     winrt::check_hresult(interop->CreateForWindow(
-        backend.hwnd, winrt::guid_of<GraphicsCaptureItem>(),
-        winrt::put_abi(backend.item)));
+        backend.hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(backend.item)));
     const auto size = backend.item.Size();
-    if (size.Width <= 0 || size.Height <= 0) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    if (size.Width <= 0 || size.Height <= 0)
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
     backend.frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-        backend.winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized,
-        2, size);
+        backend.winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
     backend.session = backend.frame_pool.CreateCaptureSession(backend.item);
     try {
         backend.session.IsCursorCaptureEnabled(!backend.disable_cursor);
@@ -264,7 +268,7 @@ sao_status_t start_wgc_session(WgcBackend& backend) {
     return SAO_STATUS_OK;
 }
 
-}  // namespace
+} // namespace
 
 #else
 
@@ -272,24 +276,32 @@ struct sao_ui_gpu_capture_s {};
 
 #endif
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_create(
-    const SaoGpuCaptureConfig* config, sao_ui_gpu_capture_handle_t* out_handle) {
-    if (out_handle == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+extern "C" sao_status_t
+    SAO_UI_CALL sao_ui_gpu_capture_create(const SaoGpuCaptureConfig* config,
+                                          sao_ui_gpu_capture_handle_t* out_handle) {
+    if (out_handle == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_handle = nullptr;
-    if (config == nullptr || config->hwnd == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (config == nullptr || config->hwnd == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
 #if !defined(SAO_UI_HAS_WGC)
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #else
-    if (!wgc_runtime_supported()) return SAO_STATUS_ERR_NOT_IMPLEMENTED;
-    if (!::IsWindow(reinterpret_cast<HWND>(config->hwnd))) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!wgc_runtime_supported())
+        return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    if (!::IsWindow(reinterpret_cast<HWND>(config->hwnd)))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (config->format != 0 && config->format != DXGI_FORMAT_B8G8R8A8_UNORM) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     auto* capture = new (std::nothrow) sao_ui_gpu_capture_s();
-    if (capture == nullptr) return SAO_STATUS_ERR_UNKNOWN;
+    if (capture == nullptr)
+        return SAO_STATUS_ERR_UNKNOWN;
     capture->config = *config;
-    if (capture->config.format == 0) capture->config.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    if (capture->config.max_frame_age_sec <= 0.0) capture->config.max_frame_age_sec = 1.0;
+    if (capture->config.format == 0)
+        capture->config.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    if (capture->config.max_frame_age_sec <= 0.0)
+        capture->config.max_frame_age_sec = 1.0;
     capture->backend = std::make_unique<WgcBackend>();
     capture->backend->hwnd = reinterpret_cast<HWND>(config->hwnd);
     capture->backend->disable_cursor = config->disable_cursor;
@@ -298,32 +310,34 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_create(
 #endif
 }
 
-extern "C" void SAO_UI_CALL sao_ui_gpu_capture_destroy(
-    sao_ui_gpu_capture_handle_t handle) {
-    if (handle == nullptr) return;
+extern "C" void SAO_UI_CALL sao_ui_gpu_capture_destroy(sao_ui_gpu_capture_handle_t handle) {
+    if (handle == nullptr)
+        return;
     (void)sao_ui_gpu_capture_stop(handle);
     delete handle;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_ensure_session(
-    sao_ui_gpu_capture_handle_t handle) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_gpu_capture_ensure_session(sao_ui_gpu_capture_handle_t handle) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
 #if !defined(SAO_UI_HAS_WGC)
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #else
     std::lock_guard<std::mutex> lock(handle->backend->mutex);
-    if (handle->backend->state == SAO_UI_GPU_CAPTURE_RUNNING) return SAO_STATUS_OK;
+    if (handle->backend->state == SAO_UI_GPU_CAPTURE_RUNNING)
+        return SAO_STATUS_OK;
     if (handle->backend->state == SAO_UI_GPU_CAPTURE_UNSUPPORTED) {
         return SAO_STATUS_ERR_NOT_IMPLEMENTED;
     }
     try {
         const sao_status_t status = start_wgc_session(*handle->backend);
-        if (status != SAO_STATUS_OK) handle->backend->state = SAO_UI_GPU_CAPTURE_FAILED;
+        if (status != SAO_STATUS_OK)
+            handle->backend->state = SAO_UI_GPU_CAPTURE_FAILED;
         return status;
     } catch (const winrt::hresult_error& error) {
-        handle->backend->state = error.code() == E_NOTIMPL
-            ? SAO_UI_GPU_CAPTURE_UNSUPPORTED
-            : SAO_UI_GPU_CAPTURE_FAILED;
+        handle->backend->state =
+            error.code() == E_NOTIMPL ? SAO_UI_GPU_CAPTURE_UNSUPPORTED : SAO_UI_GPU_CAPTURE_FAILED;
         return error.code() == E_NOTIMPL ? SAO_STATUS_ERR_NOT_IMPLEMENTED
                                          : SAO_STATUS_ERR_OS_CALL_FAILED;
     } catch (...) {
@@ -333,11 +347,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_ensure_session(
 #endif
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_get_latest(
-    sao_ui_gpu_capture_handle_t handle, SaoGpuCaptureFrame* out_frame) {
-    if (out_frame == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_gpu_capture_get_latest(sao_ui_gpu_capture_handle_t handle, SaoGpuCaptureFrame* out_frame) {
+    if (out_frame == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     *out_frame = {};
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
 #if !defined(SAO_UI_HAS_WGC)
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #else
@@ -349,9 +365,10 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_get_latest(
     double capture_time = 0.0;
     {
         std::lock_guard<std::mutex> lock(handle->backend->mutex);
-        if (handle->backend->latest_bgra.empty()) return SAO_STATUS_ERR_NOT_FOUND;
-        if (monotonic_seconds() - handle->backend->latest_time >
-            handle->config.max_frame_age_sec) return SAO_STATUS_ERR_NOT_FOUND;
+        if (handle->backend->latest_bgra.empty())
+            return SAO_STATUS_ERR_NOT_FOUND;
+        if (monotonic_seconds() - handle->backend->latest_time > handle->config.max_frame_age_sec)
+            return SAO_STATUS_ERR_NOT_FOUND;
         latest = handle->backend->latest_bgra;
         width = handle->backend->latest_width;
         height = handle->backend->latest_height;
@@ -374,17 +391,21 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_get_latest(
 #endif
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_client_inset(
-    sao_ui_gpu_capture_handle_t handle,
-    int32_t* out_off_x, int32_t* out_off_y,
-    int32_t* out_client_w, int32_t* out_client_h) {
-    if (out_off_x != nullptr) *out_off_x = 0;
-    if (out_off_y != nullptr) *out_off_y = 0;
-    if (out_client_w != nullptr) *out_client_w = 0;
-    if (out_client_h != nullptr) *out_client_h = 0;
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    if (out_off_x == nullptr || out_off_y == nullptr ||
-        out_client_w == nullptr || out_client_h == nullptr) {
+extern "C" sao_status_t SAO_UI_CALL
+sao_ui_gpu_capture_client_inset(sao_ui_gpu_capture_handle_t handle, int32_t* out_off_x,
+                                int32_t* out_off_y, int32_t* out_client_w, int32_t* out_client_h) {
+    if (out_off_x != nullptr)
+        *out_off_x = 0;
+    if (out_off_y != nullptr)
+        *out_off_y = 0;
+    if (out_client_w != nullptr)
+        *out_client_w = 0;
+    if (out_client_h != nullptr)
+        *out_client_h = 0;
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_off_x == nullptr || out_off_y == nullptr || out_client_w == nullptr ||
+        out_client_h == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 #if !defined(SAO_UI_HAS_WGC)
@@ -395,7 +416,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_client_inset(
     POINT origin{};
     const HWND hwnd = reinterpret_cast<HWND>(handle->config.hwnd);
     if (!::GetClientRect(hwnd, &client) || !::GetWindowRect(hwnd, &window) ||
-        !::ClientToScreen(hwnd, &origin)) return SAO_STATUS_ERR_OS_CALL_FAILED;
+        !::ClientToScreen(hwnd, &origin))
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
     *out_off_x = origin.x - window.left;
     *out_off_y = origin.y - window.top;
     *out_client_w = client.right - client.left;
@@ -404,9 +426,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_client_inset(
 #endif
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_stop(
-    sao_ui_gpu_capture_handle_t handle) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
+extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_stop(sao_ui_gpu_capture_handle_t handle) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
 #if !defined(SAO_UI_HAS_WGC)
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #else
@@ -429,10 +451,12 @@ extern "C" bool SAO_UI_CALL sao_ui_gpu_capture_supported(void) {
 #endif
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_get_state(
-    sao_ui_gpu_capture_handle_t handle, int32_t* out_state) {
-    if (handle == nullptr) return SAO_STATUS_ERR_HANDLE_INVALID;
-    if (out_state == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_get_state(sao_ui_gpu_capture_handle_t handle,
+                                                                 int32_t* out_state) {
+    if (handle == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (out_state == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
 #if !defined(SAO_UI_HAS_WGC)
     *out_state = SAO_UI_GPU_CAPTURE_UNSUPPORTED;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
@@ -453,11 +477,11 @@ namespace {
 // height).  Simple 4-slot LRU — the recognition tick reuses one size,
 // so anything more elaborate would be over-engineering.
 struct StagingSlot {
-    ID3D11Device*        device = nullptr;
-    ID3D11Texture2D*     staging = nullptr;
-    uint32_t             width = 0;
-    uint32_t             height = 0;
-    uint32_t             usage_count = 0;
+    ID3D11Device* device = nullptr;
+    ID3D11Texture2D* staging = nullptr;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t usage_count = 0;
 };
 
 std::mutex& staging_cache_mutex() {
@@ -476,15 +500,12 @@ StagingSlot* staging_cache() {
 // Caller MUST hold staging_cache_mutex().  Returned pointer is
 // borrowed by the caller for one Map/Unmap round-trip; the slot
 // retains ownership.
-ID3D11Texture2D* acquire_staging_locked(ID3D11Device* device,
-                                        uint32_t width,
-                                        uint32_t height) {
+ID3D11Texture2D* acquire_staging_locked(ID3D11Device* device, uint32_t width, uint32_t height) {
     // Look for exact match first.
     StagingSlot* slots = staging_cache();
     for (uint32_t k = 0; k < kStagingSlotCount; ++k) {
         StagingSlot& s = slots[k];
-        if (s.device == device && s.width == width && s.height == height &&
-            s.staging != nullptr) {
+        if (s.device == device && s.width == width && s.height == height && s.staging != nullptr) {
             s.usage_count += 1;
             return s.staging;
         }
@@ -531,7 +552,8 @@ ID3D11Texture2D* acquire_staging_locked(ID3D11Device* device,
 
     ID3D11Texture2D* tex = nullptr;
     HRESULT hr = device->CreateTexture2D(&td, nullptr, &tex);
-    if (FAILED(hr) || tex == nullptr) return nullptr;
+    if (FAILED(hr) || tex == nullptr)
+        return nullptr;
 
     victim->device = device;
     victim->staging = tex;
@@ -544,28 +566,30 @@ ID3D11Texture2D* acquire_staging_locked(ID3D11Device* device,
 // sRGB decode / encode (per-channel).  Standard IEC 61966-2-1 curve.
 // Only invoked from premultiply_bgra when alpha_correct=true.
 float srgb_to_linear(float u) {
-    if (u <= 0.04045f) return u / 12.92f;
+    if (u <= 0.04045f)
+        return u / 12.92f;
     return ::powf((u + 0.055f) / 1.055f, 2.4f);
 }
 
 float linear_to_srgb(float u) {
-    if (u <= 0.0031308f) return u * 12.92f;
+    if (u <= 0.0031308f)
+        return u * 12.92f;
     return 1.055f * ::powf(u, 1.0f / 2.4f) - 0.055f;
 }
 
-}  // namespace
+} // namespace
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_bgra_from_texture(
-    void*     texture,
-    uint32_t  width,
-    uint32_t  height,
-    uint8_t*  buf_out,
-    uint32_t  buf_capacity,
+    void* texture, uint32_t width, uint32_t height, uint8_t* buf_out, uint32_t buf_capacity,
     uint32_t* stride_out) {
-    if (stride_out != nullptr) *stride_out = 0;
-    if (texture == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (buf_out == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if (width == 0 || height == 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (stride_out != nullptr)
+        *stride_out = 0;
+    if (texture == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (buf_out == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (width == 0 || height == 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
     ID3D11Texture2D* src = reinterpret_cast<ID3D11Texture2D*>(texture);
 
@@ -583,7 +607,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_bgra_from_texture(
 
     ID3D11Device* device = nullptr;
     src->GetDevice(&device);
-    if (device == nullptr) return SAO_STATUS_ERR_OS_CALL_FAILED;
+    if (device == nullptr)
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
 
     ID3D11DeviceContext* ctx = nullptr;
     device->GetImmediateContext(&ctx);
@@ -614,7 +639,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_bgra_from_texture(
         rc = SAO_STATUS_ERR_OS_CALL_FAILED;
     } else {
         const uint32_t pitch = mapped.RowPitch;
-        if (stride_out != nullptr) *stride_out = pitch;
+        if (stride_out != nullptr)
+            *stride_out = pitch;
         const uint32_t total = pitch * height;
         if (buf_capacity < total) {
             rc = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
@@ -629,12 +655,13 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_bgra_from_texture(
     return rc;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_premultiply_bgra(
-    uint8_t*  pixels,
-    uint32_t  size,
-    bool      alpha_correct) {
-    if (pixels == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    if ((size & 3u) != 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_premultiply_bgra(uint8_t* pixels,
+                                                                        uint32_t size,
+                                                                        bool alpha_correct) {
+    if (pixels == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if ((size & 3u) != 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
 
     const uint32_t px_count = size / 4u;
     if (alpha_correct) {
@@ -643,9 +670,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_premultiply_bgra(
         for (uint32_t i = 0; i < px_count; ++i) {
             uint8_t* p = pixels + i * 4u;
             const uint8_t a = p[3];
-            if (a == 255) continue;         // opaque — nothing to do
-            if (a == 0) {                    // fully transparent
-                p[0] = 0; p[1] = 0; p[2] = 0;
+            if (a == 255)
+                continue; // opaque — nothing to do
+            if (a == 0) { // fully transparent
+                p[0] = 0;
+                p[1] = 0;
+                p[2] = 0;
                 continue;
             }
             const float af = static_cast<float>(a) * (1.0f / 255.0f);
@@ -665,9 +695,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_premultiply_bgra(
         for (uint32_t i = 0; i < px_count; ++i) {
             uint8_t* p = pixels + i * 4u;
             const uint32_t a = p[3];
-            if (a == 255) continue;
+            if (a == 255)
+                continue;
             if (a == 0) {
-                p[0] = 0; p[1] = 0; p[2] = 0;
+                p[0] = 0;
+                p[1] = 0;
+                p[2] = 0;
                 continue;
             }
             p[0] = static_cast<uint8_t>((p[0] * a + 127u) / 255u);
@@ -682,14 +715,16 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_premultiply_bgra(
 // independent multiplicative constants + a byte-tail finaliser.  The
 // exact constants match commonly-used "xxh3-inspired" seeds; the point
 // is byte-for-byte determinism, not cryptographic strength.
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_compute_hash(
-    const uint8_t* pixels,
-    uint32_t       size,
-    uint64_t*      hash_hi_out,
-    uint64_t*      hash_lo_out) {
-    if (hash_hi_out != nullptr) *hash_hi_out = 0;
-    if (hash_lo_out != nullptr) *hash_lo_out = 0;
-    if (pixels == nullptr && size > 0) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_compute_hash(const uint8_t* pixels,
+                                                                    uint32_t size,
+                                                                    uint64_t* hash_hi_out,
+                                                                    uint64_t* hash_lo_out) {
+    if (hash_hi_out != nullptr)
+        *hash_hi_out = 0;
+    if (hash_lo_out != nullptr)
+        *hash_lo_out = 0;
+    if (pixels == nullptr && size > 0)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
     if (hash_hi_out == nullptr || hash_lo_out == nullptr) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
@@ -699,8 +734,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_compute_hash(
     // entropy than a single 64-bit accumulator.
     const uint64_t seed_hi = 0x9E3779B97F4A7C15ULL;
     const uint64_t seed_lo = 0xC6BC279692B5C323ULL;
-    const uint64_t mul_hi  = 0x9FB21C651E98DF25ULL;
-    const uint64_t mul_lo  = 0xBF58476D1CE4E5B9ULL;
+    const uint64_t mul_hi = 0x9FB21C651E98DF25ULL;
+    const uint64_t mul_lo = 0xBF58476D1CE4E5B9ULL;
 
     uint64_t hi = seed_hi ^ static_cast<uint64_t>(size);
     uint64_t lo = seed_lo ^ static_cast<uint64_t>(size);
@@ -740,21 +775,21 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_compute_hash(
     return SAO_STATUS_OK;
 }
 
-#else  // !_WIN32
+#else // !_WIN32
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_bgra_from_texture(
-    void*, uint32_t, uint32_t, uint8_t*, uint32_t, uint32_t*) {
+extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_bgra_from_texture(void*, uint32_t, uint32_t,
+                                                                         uint8_t*, uint32_t,
+                                                                         uint32_t*) {
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_premultiply_bgra(
-    uint8_t*, uint32_t, bool) {
+extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_premultiply_bgra(uint8_t*, uint32_t, bool) {
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 }
 
-extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_compute_hash(
-    const uint8_t*, uint32_t, uint64_t*, uint64_t*) {
+extern "C" sao_status_t SAO_UI_CALL sao_ui_gpu_capture_compute_hash(const uint8_t*, uint32_t,
+                                                                    uint64_t*, uint64_t*) {
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 }
 
-#endif  // _WIN32
+#endif // _WIN32

@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <string_view>
 
 namespace sao::ui::detail {
 
@@ -56,5 +58,16 @@ sao_status_t paint_elevation_shadow(sao_ui_paint_ctx_handle_t context, float x, 
 // DirectWrite is unavailable so callers keep their codepoint fallback.
 bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
                          float* out_height) noexcept;
+
+float measure_ui_text_width(std::string_view text, float size_px);
+std::string ellipsize_ui_text(std::string_view text, float size_px, float available_width);
+
+struct UiTextMetrics {
+    float width{};
+    float height{};
+    float baseline{};
+};
+
+UiTextMetrics measure_ui_text_metrics(std::string_view text, float size_px);
 
 } // namespace sao::ui::detail

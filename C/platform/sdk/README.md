@@ -6,6 +6,40 @@ reached through `SaoSdkContext`'s vtable — plugins never link
 
 ## Design summary
 
+The loader-to-launcher platform-provider bridge is independently versioned at 1.5;
+it appends MMF/shared-texture source and truthful GPU-availability/source-active slots
+without changing `SaoSdkContext` or flat Entity row layouts. Language hosts normalize
+nested menus into current-page Entity rows, retaining navigation and callback ownership
+outside the platform. Managed C# uses the native source APIs rather than polling MMF
+and uploading frames from a managed timer. UI's source/state contract is ABI 1.19;
+the color route is GPU copy plus shader premultiplication, with native MMF alpha/
+hit-test and fallback retained. Navigation queues Back/open requests until candidate
+publication, without a fixed depth cap; budgets are 4096 nodes, 1 MiB text, 1024 root
+data rows and 1023 child data rows plus Back. CPython/pymini execute callable submenus
+lazily along the selected path; other hosts currently run subbuilders during refresh.
+
+The pre-timer-revision baseline includes Debug compilation, Hardened acceptance
+(22 PEs/76 files), six-host 128-level roundtrips and 566 direct UI texture checks.
+The host matrix is CPython, pymini, Lua, Emma, AngelScript and managed C#; native csmini
+has static-review/build evidence only, not that 128-level runtime coverage.
+Cutegirl's per-connection pipe inbox and Stop handshake reset are implemented, and
+its rebuilt managed artifact matches the Debug mirror; neither fact proves owner-thread
+dispatch. Core timer callbacks previously ran on a worker thread. The new launcher
+owner bind/pump/unbind integration passed independent review and final Debug/Hardened
+builds. Its real-provider probe passed 94 checks/seven native callbacks with zero
+timer/worker residue, including self/peer cancellation, headless layer replacement
+and retained input reentry checks. It is not GPU or full-product coverage. All five
+existing regression modes passed again; Hardened acceptance passed 22 PEs/76 files.
+Final bundle identity is recorded in session-77; full external-engine integration
+remains a separate gate.
+
+Legacy callback-backed panels now refresh their real native body on open, redraw and
+actions. `sao_sdk_panel_open` validates context ownership before showing an existing
+panel. Legacy canvas placeholders are removed; canonical panel parsing owns drawing.
+The platform overlay provider renders bounded canvas/RGBA documents into transparent
+compositor layers and replaces them transactionally; stale tokens never clear a newer
+surface. Native/SDK mutation reentry returns BUSY rather than nesting panel transactions.
+
 - `include/sao/sdk/sao_sdk.h` is the one header a plugin includes.
 - It transitively drags in the sub-tables (UI / event / mem / net /
   config / hotkey / TTS / banner) — every one is a `struct` of function

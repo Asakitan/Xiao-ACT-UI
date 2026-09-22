@@ -183,21 +183,51 @@ float3 lensSample(float2 uv, float split) {
                   fieldTexture.Sample(fieldSampler, uv).g,
                   fieldTexture.Sample(fieldSampler, uv - float2(split, 0)).b);
 }
+float4 aperture(float2 uv, float3 color) {
+    float progress = saturate(openness);
+    if (progress <= 0.0) return float4(0, 0, 0, 0);
+    if (progress >= 1.0) return float4(color, 1.0);
+    float2 pixel = (uv - 0.5) * resolution;
+    float2 q = abs(pixel);
+    float segmentWidth = max(24.0, resolution.x / 18.0);
+    float column = floor(q.x / segmentWidth);
+    float seed = hash21(float2(column, pixel.y < 0.0 ? 19.0 : 37.0));
+    float delay = seed * 0.10;
+    float travel = saturate((progress - 0.18 - delay) / (0.82 - delay));
+    float bevel = min(48.0, min(resolution.x, resolution.y) * 0.06) * travel;
+    float halfWidth = (resolution.x * 0.5 + 2.0) * saturate(progress / 0.32);
+    float halfHeight = 0.75 + (resolution.y * 0.5 + bevel + 3.0) * travel;
+    float d = max(max(q.x - halfWidth, q.y - halfHeight),
+        (q.x + q.y - halfWidth - halfHeight + bevel) * 0.70710678);
+    float coverage = saturate(0.5 - d);
+    float scan = saturate(1.25 - abs(d)) * coverage;
+    float3 cyan = float3(0.30, 0.88, 1.0);
+    float3 amber = float3(1.0, 0.72, 0.28);
+    float3 edgeColor = lerp(cyan, amber, step(0.64, seed));
+    float fragmentLength = 7.0 * sin(3.14159265 * saturate((progress - 0.08) / 0.84));
+    float fragment = 0.0;
+    if (fragmentLength > 0.0 && progress > 0.08 && progress < 0.92) {
+        float dash = abs(frac((pixel.x + seed * 23.0) / 36.0) * 36.0 - 18.0);
+        float chip = max(abs(d - (5.0 + seed * 9.0)) - 0.65, dash - fragmentLength);
+        fragment = saturate(0.5 - chip) * (1.0 - coverage);
+    }
+    return float4(lerp(color, edgeColor, scan) * coverage + edgeColor * fragment,
+        coverage + fragment);
+}
 float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     float t = reducedMotion > 0.5 ? 0.0 : time;
     if (renderPass < 0.5) return float4(procedural(uv, t), 1.0);
+    if (renderPass > 1.5) return aperture(uv, fieldTexture.Sample(fieldSampler, uv).rgb);
     if (highContrast > 0.5) {
-        float alpha = saturate(openness);
-        return float4(lerp(float3(1, 1, 1), float3(0, 0, 0), themeDarkness(uv)) * alpha, alpha);
+        return aperture(uv, lerp(float3(1, 1, 1), float3(0, 0, 0), themeDarkness(uv)));
     }
     float quiet = menuQuiet(uv);
     float2 p = uv - 0.5;
     float r2 = dot(p, p), r = sqrt(r2);
-    float edge = 1.0 - saturate(openness);
-    float strength = 0.44 + edge * 0.18 + sin(t * 0.4) * 0.02;
+    float strength = 0.44 + sin(t * 0.4) * 0.02;
     float2 drift = float2(sin(t * 0.62) * 0.006, cos(t * 0.51) * 0.004);
     float2 direction = p / max(r, 0.001);
-    float spread = (0.0008 + r2 * 0.003) * (1.0 + edge);
+    float spread = 0.0008 + r2 * 0.003;
     float split = 0.0015 + r2 * 0.004;
     spread *= 1.0 - quiet * 0.85;
     split *= 1.0 - quiet;
@@ -215,11 +245,10 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     color += lensSample(warped, split) * 0.36;
     color += lensSample(warped + direction * spread, split) * 0.22;
     color += lensSample(warped + direction * spread * 2.0, split) * 0.12;
-    color *= (1.0 - (0.34 + edge * 0.18)) * (1.0 - smoothstep(0.25, 0.75, r) * 0.12);
+    color *= 0.66 * (1.0 - smoothstep(0.25, 0.75, r) * 0.12);
     color *= 0.985 + 0.015 * sin(uv.y * 980.0);
-    float ring = band(r - lerp(0.18, 0.72, saturate(openness)), 0.0025);
+    float ring = band(r - 0.72, 0.0025);
     color += lerp(0.58, 0.42, themeDarkness(saturate(warped))) * ring * 0.035 *
         (1.0 - quiet) * (1.0 - saturate(fpsPressure));
-    float alpha = saturate(openness);
-    return float4(saturate(color) * alpha, alpha);
+    return aperture(uv, saturate(color));
 }

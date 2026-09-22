@@ -40,7 +40,10 @@
 // Minor 15 adds reusable Link Start outro; minor 16 adds tracked DC mutations.
 // Minor 17 adds sao_ui_panel_find_widget (spec-node id → live widget handle)
 // plus the append-only 'canvas' spec leaf wired to the scriptable canvas.
-#define SAO_UI_ABI_VERSION_MINOR 17u
+// Minor 18 adds persistent compositor-backed plugin tabs.
+// Minor 19 adds typed shared-texture import and observable GPU interop state.
+// Minor 20 assigns plugin-tab lifecycle status within reserved bytes; strides are unchanged.
+#define SAO_UI_ABI_VERSION_MINOR 20u
 #define SAO_UI_ABI_VERSION ((SAO_UI_ABI_VERSION_MAJOR << 16) | SAO_UI_ABI_VERSION_MINOR)
 
 #ifdef __cplusplus

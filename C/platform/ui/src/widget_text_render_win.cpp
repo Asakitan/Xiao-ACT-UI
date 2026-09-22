@@ -408,6 +408,8 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float 
                                                     format.Get(), std::numeric_limits<float>::max(),
                                                     std::numeric_limits<float>::max(), &layout)))
             return false;
+        if (!apply_product_text_typography(layout.Get(), text, size_px))
+            return false;
 
         DWRITE_TEXT_METRICS metrics{};
         if (FAILED(layout->GetMetrics(&metrics)) || !std::isfinite(metrics.width) ||
@@ -469,6 +471,37 @@ bool render_text_bitmap(DwriteBackend& backend, const std::wstring& text, float 
 
 } // namespace
 
+bool apply_product_text_typography(IDWriteTextLayout* layout, std::wstring_view text,
+                                  float size_px) noexcept {
+    if (!layout || !std::isfinite(size_px) || size_px <= 0.0F ||
+        text.size() > std::numeric_limits<UINT32>::max())
+        return false;
+    ComPtr<IDWriteTextLayout1> spaced_layout;
+    if (FAILED(layout->QueryInterface(IID_PPV_ARGS(&spaced_layout))))
+        return false;
+    const auto latin = [](wchar_t character) {
+        return (character >= 0x20 && character <= 0x024F) ||
+               (character >= 0x1E00 && character <= 0x1EFF);
+    };
+    const float latin_size = size_px * 1.12F;
+    const float half_spacing = latin_size * 0.0125F;
+    for (size_t index = 0; index < text.size();) {
+        if (!latin(text[index])) {
+            ++index;
+            continue;
+        }
+        const size_t first = index++;
+        while (index < text.size() && latin(text[index]))
+            ++index;
+        const DWRITE_TEXT_RANGE range{static_cast<UINT32>(first),
+                                      static_cast<UINT32>(index - first)};
+        if (FAILED(layout->SetFontSize(latin_size, range)) ||
+            FAILED(spaced_layout->SetCharacterSpacing(half_spacing, half_spacing, 0.0F, range)))
+            return false;
+    }
+    return true;
+}
+
 HRESULT create_product_text_format(float size_px, IDWriteTextFormat** out_format) noexcept {
     auto& backend = DwriteBackend::instance();
     if (!backend.ready()) return E_FAIL;
@@ -476,32 +509,35 @@ HRESULT create_product_text_format(float size_px, IDWriteTextFormat** out_format
         {ClassicTextRole::Body, ClassicTextWeight::Normal}, out_format);
 }
 
-bool prepare_gpu_text_dwrite(const char* text_utf8, float size_px, std::wstring* out_text,
-                             void** out_format) noexcept {
-    if (out_text == nullptr || out_format == nullptr)
+bool prepare_gpu_text_layout_dwrite(const char* text_utf8, float size_px, float width,
+                                    float height, void** out_layout) noexcept {
+    if (out_layout == nullptr)
         return false;
-    out_text->clear();
-    *out_format = nullptr;
+    *out_layout = nullptr;
     if (text_utf8 == nullptr || *text_utf8 == '\0' || !std::isfinite(size_px) || size_px <= 0.0F)
         return false;
     DwriteBackend& backend = DwriteBackend::instance();
-    if (!backend.ready() || !utf8_to_utf16(text_utf8, out_text) ||
-        out_text->size() > std::numeric_limits<UINT32>::max())
+    std::wstring text;
+    if (!backend.ready() || !utf8_to_utf16(text_utf8, &text) ||
+        text.size() > std::numeric_limits<UINT32>::max())
         return false;
-    const ClassicTextStyle style = resolved_text_style(*out_text);
+    const ClassicTextStyle style = resolved_text_style(text);
     if (style.role == ClassicTextRole::Display) {
-        for (wchar_t& character : *out_text)
+        for (wchar_t& character : text)
             if (character >= L'a' && character <= L'z')
                 character -= L'a' - L'A';
     }
-    IDWriteTextFormat* format = nullptr;
+    ComPtr<IDWriteTextFormat> format;
     if (FAILED(create_text_format(backend, size_px, style, &format)))
         return false;
-    if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP))) {
-        format->Release();
+    if (FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)))
         return false;
-    }
-    *out_format = format;
+    ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(backend.dwrite->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()),
+                                               format.Get(), width, height, &layout)) ||
+        !apply_product_text_typography(layout.Get(), text, size_px))
+        return false;
+    *out_layout = layout.Detach();
     return true;
 }
 
@@ -631,6 +667,8 @@ bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
         if (FAILED(backend.dwrite->CreateTextLayout(wide.data(), static_cast<UINT32>(wide.size()),
                                                     format.Get(), std::numeric_limits<float>::max(),
                                                     std::numeric_limits<float>::max(), &layout)))
+            return false;
+        if (!apply_product_text_typography(layout.Get(), wide, size_px))
             return false;
         DWRITE_TEXT_METRICS metrics{};
         if (FAILED(layout->GetMetrics(&metrics)) || !std::isfinite(metrics.width) ||

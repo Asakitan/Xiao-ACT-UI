@@ -2,7 +2,7 @@ cbuffer Constants : register(b0) {
     float2 resolution; float time; float sceneTime;
     float flightSpan; float historyScale; float connectedAlpha; float reducedMotion;
     float cameraZ; float alphaMul; float radiusMul; float energy;
-    float flash; float birthLead; float startupWave; float motionMix;
+    float flash; float shutdownProgress; float startupWave; float motionMix;
     float coolMix; float2 blurDirection; float bloomExtract;
     float3 backgroundColor; float padding1;
     float3 effectTint; float exitProgress;

@@ -1,5 +1,74 @@
 # Classic SAO implementation and acceptance
 
+## Three readability recommendations — September 22, 2026
+
+Typed Label now shares actual advance/height/baseline between wrapping, ellipsis,
+alignment and rendering, including custom tracking and bold. Child keyboard focus
+supports disabled skipping, scrolling beyond8rows, real Enter/Space actions and
+Left/Escape return-before-close; publication/cancel invalidate stale focus. Plugin
+status is separate from identity using UI ABI1.20's reserved-byte state without
+changing the56-byte stride. The visible heading expresses plugin ownership only.
+
+Final Debug launcher/Preview and the54-check/5-action offline probe passed with
+ABI65556. Label size16/28 measures174x22/304x38; mixed normal/tracked rows both use
+27px height after baseline alignment. Actual labels and menu/tab snapshots are
+under `.sao/ui-preview/readability-final*`; no visible overlap or clipping was found
+in the inspected samples. Existing plugin17/menu18-event, dark and handoff exports
+also passed. Following two interrupted independent attempts, the user explicitly
+requested parent review. Parent review completed without a new blocking finding;
+full Debug and54-check/plugin17/menu18/dark/handoff reruns passed using the current
+disk revision (`readability-reviewed*`). Hardened acceptance passed22PE/76files/17inputs;
+ship now contains the32,426,064-byte bundle with matching build/ship hashes.
+Full-product focus/all-DPI, complex grapheme clusters and performance remain unverified.
+
+## Readability follow-up — September 22, 2026
+
+Latin glyphs use112% sizing and0.025em native tracking, applied before DirectWrite
+measurement and drawing in all three native text backends. CJK size, font files,
+existing motion and public ABI remain unchanged. Plugin tab text and table text now
+reuse measured codepoint-safe ellipsis; table alignment uses actual advance widths.
+Workbench/embedded tools/guide use112% for the Latin font face only; the workbench
+welcome heading no longer uses negative letter spacing.
+
+Debug rebuilt after the long-text changes; plugin17-event, menu18-event and natural
+handoff probes passed. Seven initial font captures and five final captures exited0;
+the root-menu before/after comparison found no new clipping/overlap. Workbench font
+loading reports Latin112%/CJK100%, and three browser viewports have no page overflow.
+Final review passed after a documentation-only fix to the missing runtime-memory
+UI typography section; no source changes or build/product reruns were made. Saved
+logs and selected images were checked; Debug exit and browser results remain
+parent-reported. Subsequent parent Hardened acceptance passed22PE/76files/17inputs;
+the32,415,312-byte bundle and four CSS assets match the ship copies at that earlier
+font-only checkpoint. Label metrics, child keyboard and plugin status are now
+implemented above; static backdrop scheduling remains a profiling opportunity.
+
+## Geometric entrance and exit — September 21, 2026
+
+Entity retains the 450/300ms reversible state machine but uses at most 88px of slide
+combined with staggered full-strength scan assembly/retraction. Header, root rows,
+footer and children are geometrically clipped; cyan/gold cut edges and small moving
+fragments mark the front. Root and close-button hit rectangles share the reveal geometry.
+Reduced-motion/high-contrast behavior and public ABI are preserved. The offline
+`--menu-motion` timeline now has 18 events. Escape closes the menu at 6400ms;
+Home at 7000/7600/8400ms opens/closes/opens it, covering complete exit and reentry.
+The background uses a 500/400ms horizontal seam and segmented beveled aperture;
+opacity stays 0.93 inside its geometric coverage. LIVE waits for a first frame and
+retains the final frame through exit; a separate texture/pass samples the already-warped
+frame. Capture extents are host pixels, not rescaled DIPs. Constants remain 80 bytes.
+
+Independent Review passed after zero-area/empty-state clips, reversal tails, hit bounds
+and duplicate capture-DPI scaling were repaired. Release build and release acceptance
+passed, with 22 PEs/76 exact files and a 31,066,192-byte runtime bundle. Final shipped-input
+GPU preview exported 540 frames/9 seconds, 18 events, Settings round-trip and both themes;
+the contact sheet was inspected. Open background pixels retain alpha 237; completed
+close samples retain only the NerveGear control, with no background material pixels.
+Video: `sao_auto/.sao/ui-preview/geometric-20260921/menu-geometric.mp4`, SHA256
+`4bc1b10239b36f68b5ffaf533ac69df55347116a8b62be53bc7e5b160f819108`.
+An earlier hostless run was all-transparent because no D3D device is created without
+a host; it is excluded from visual evidence. User-approved normal product closure
+released the preview single-instance lock. LIVE capture, device loss and all-DPI
+accessibility remain separate gates. Older fade/timing descriptions below are historical.
+
 ## SaoMenu motion — September 19, 2026
 
 Root 450/300ms opening/closing preserves positions on reversal. First child opening

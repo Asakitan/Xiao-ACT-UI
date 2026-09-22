@@ -7,6 +7,9 @@
 
 namespace sao::ui::linkstart_gpu {
 
+inline constexpr int32_t kOutroSceneDurationMs = 900;
+inline constexpr int32_t kOutroShutdownDurationMs = 650;
+
 struct Renderer;
 
 struct FrameState {

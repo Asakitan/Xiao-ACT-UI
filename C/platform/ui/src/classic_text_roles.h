@@ -5,6 +5,11 @@
 // with ScopedTextRole, while the renderer keeps Auto as the default.
 
 #include <cstdint>
+#include <string_view>
+
+#if defined(_WIN32)
+struct IDWriteTextLayout;
+#endif
 
 namespace sao::ui::detail {
 
@@ -54,5 +59,10 @@ class ScopedTextRole final {
 constexpr const char* kClassicDisplayFontFamily = "SAO UI";
 constexpr const char* kClassicBodyFontFamily = "SAO UI";
 constexpr const char* kClassicMonospaceFontFamily = "SAO UI";
+
+#if defined(_WIN32)
+bool apply_product_text_typography(IDWriteTextLayout* layout, std::wstring_view text,
+                                  float size_px) noexcept;
+#endif
 
 } // namespace sao::ui::detail

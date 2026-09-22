@@ -8,7 +8,7 @@ cbuffer Constants : register(b0) {
     float2 resolution; float time; float sceneTime;
     float flightSpan; float historyScale; float connectedAlpha; float reducedMotion;
     float cameraZ; float alphaMul; float radiusMul; float energy;
-    float flash; float birthLead; float startupWave; float motionMix;
+    float flash; float shutdownProgress; float startupWave; float motionMix;
     float coolMix; float2 blurDirection; float bloomExtract;
     float3 backgroundColor; float padding1;
     float3 effectTint; float exitProgress;
@@ -22,6 +22,36 @@ float3 bloom_sample(float2 uv) {
     const float chroma = peak - min(color.r, min(color.g, color.b));
     return bloomExtract > 0.5 ? color * contribution * lerp(0.35, 1.0, smoothstep(0.04, 0.30, chroma)) /
                                 max(peak, 0.0001) : color;
+}
+
+float3 display_color(float2 uv, float2 position) {
+    const float aspect = resolution.x / max(1.0, resolution.y);
+    const float radius = length((uv - 0.5) * float2(aspect, 1.0));
+    float3 color = max(0.0, sceneTexture.Sample(linearSampler, uv).rgb);
+    const float2 texel = 1.0 / max(resolution, 1.0);
+    const float3 luma = float3(0.2126, 0.7152, 0.0722);
+    const float north = dot(sceneTexture.Sample(linearSampler, uv - float2(0, texel.y)).rgb, luma);
+    const float south = dot(sceneTexture.Sample(linearSampler, uv + float2(0, texel.y)).rgb, luma);
+    const float east = dot(sceneTexture.Sample(linearSampler, uv + float2(texel.x, 0)).rgb, luma);
+    const float west = dot(sceneTexture.Sample(linearSampler, uv - float2(texel.x, 0)).rgb, luma);
+    const float center = dot(color, luma);
+    const float high = max(center, max(max(north, south), max(east, west)));
+    const float low = min(center, min(min(north, south), min(east, west)));
+    const float2 gradient = float2(east - west, south - north);
+    const float2 edgeOffset = gradient / max(length(gradient), 0.0001) * texel * 0.65;
+    const float edge = smoothstep(max(0.02, high * 0.12), max(0.04, high * 0.28), high - low);
+    const float3 softened = (sceneTexture.Sample(linearSampler, uv + edgeOffset).rgb +
+                             sceneTexture.Sample(linearSampler, uv - edgeOffset).rgb) * 0.5;
+    color = lerp(color, softened, edge * 0.40);
+    color *= 1.0 - smoothstep(0.35, 1.25, radius) * 0.018;
+    const float peak = max(color.r, max(color.g, color.b));
+    const float shoulder = 0.96 + 0.04 * (1.0 - exp(-max(0.0, peak - 0.96) * 4.0));
+    color *= min(1.0, shoulder / max(peak, 0.0001));
+    color = lerp(color * 12.92, 1.055 * pow(max(color, 0.0), 1.0 / 2.4) - 0.055,
+                  step(0.0031308, color));
+    const float dither = frac(52.9829189 * frac(dot(floor(position),
+                                                    float2(0.06711056, 0.00583715))));
+    return saturate(color + (dither - 0.5) / 255.0);
 }
 
 float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
@@ -74,31 +104,25 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     color = lerp(max(0.0, color + glow), history, saturate(padding1) * motionMask);
     return float4(color, 1.0);
     }
-    float3 color = max(0.0, sceneTexture.Sample(linearSampler, uv).rgb);
-    const float2 texel = 1.0 / max(resolution, 1.0);
-    const float3 luma = float3(0.2126, 0.7152, 0.0722);
-    const float north = dot(sceneTexture.Sample(linearSampler, uv - float2(0, texel.y)).rgb, luma);
-    const float south = dot(sceneTexture.Sample(linearSampler, uv + float2(0, texel.y)).rgb, luma);
-    const float east = dot(sceneTexture.Sample(linearSampler, uv + float2(texel.x, 0)).rgb, luma);
-    const float west = dot(sceneTexture.Sample(linearSampler, uv - float2(texel.x, 0)).rgb, luma);
-    const float center = dot(color, luma);
-    const float high = max(center, max(max(north, south), max(east, west)));
-    const float low = min(center, min(min(north, south), min(east, west)));
-    const float2 gradient = float2(east - west, south - north);
-    const float2 edgeOffset = gradient / max(length(gradient), 0.0001) * texel * 0.65;
-    const float edge = smoothstep(max(0.02, high * 0.12), max(0.04, high * 0.28), high - low);
-    const float3 softened = (sceneTexture.Sample(linearSampler, uv + edgeOffset).rgb +
-                             sceneTexture.Sample(linearSampler, uv - edgeOffset).rgb) * 0.5;
-    color = lerp(color, softened, edge * 0.40);
-    color *= 1.0 - smoothstep(0.35, 1.25, radius) * 0.018;
-    const float peak = max(color.r, max(color.g, color.b));
-    const float shoulder = 0.96 + 0.04 * (1.0 - exp(-max(0.0, peak - 0.96) * 4.0));
-    color *= min(1.0, shoulder / max(peak, 0.0001));
-    color = lerp(color * 12.92, 1.055 * pow(max(color, 0.0), 1.0 / 2.4) - 0.055,
-                  step(0.0031308, color));
-    const float dither = frac(52.9829189 * frac(dot(floor(position.xy),
-                                                    float2(0.06711056, 0.00583715))));
-    color = saturate(color + (dither - 0.5) / 255.0);
+    if (reducedMotion < 0.5 && shutdownProgress > 0.0) {
+        const float collapse = smoothstep(0.0, 0.58, shutdownProgress);
+        const float pinch = smoothstep(0.58, 0.86, shutdownProgress);
+        const float2 pixel = 1.0 / max(resolution, 1.0);
+        const float2 extent = float2(lerp(0.5, pixel.x, pinch),
+                                     lerp(0.5, pixel.y, collapse));
+        const float2 distance = abs(uv - 0.5);
+        const float2 edge = 1.0 - smoothstep(extent - pixel * 0.5,
+                                            extent + pixel * 0.5, distance);
+        const float2 sampleUv = saturate(0.5 + (uv - 0.5) / max(extent * 2.0, pixel));
+        const float3 screen = lerp(display_color(sampleUv, position.xy),
+            float3(1.0, 1.0, 1.0), collapse);
+        const float glow = exp(-pow(max(0.0, distance.y - extent.y) / (pixel.y * 3.0), 2.0)) *
+            exp(-pow(max(0.0, distance.x - extent.x) / (pixel.x * 3.0), 2.0)) * collapse * 0.22;
+        const float power = 1.0 - smoothstep(0.86, 1.0, shutdownProgress);
+        const float alpha = saturate(edge.x * edge.y + glow) * power * saturate(connectedAlpha);
+        return float4(screen * alpha, alpha);
+    }
+    const float3 color = display_color(uv, position.xy);
     float alpha = saturate(connectedAlpha);
     if (reducedMotion < 0.5 && exitProgress > 0.80) {
         const float edgeWidth = 1.5 / max(1.0, resolution.y);

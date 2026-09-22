@@ -74,8 +74,7 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_get_mode(
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_show(
     sao_ui_fisheye_backdrop_handle_t handle, const SaoUiFisheyeBackdropRect* rect, int32_t z_order);
 
-// Hiding wakes the live worker immediately. Owner-thread ticks reap the worker
-// and fade procedural content out over 400ms while preserving one-layer reuse.
+// Windows ticks reap capture and collapse the aperture over 400ms, retaining the last live frame.
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_fisheye_backdrop_hide(sao_ui_fisheye_backdrop_handle_t handle);
 
@@ -83,8 +82,7 @@ sao_ui_fisheye_backdrop_hide(sao_ui_fisheye_backdrop_handle_t handle);
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_fisheye_backdrop_tick(sao_ui_fisheye_backdrop_handle_t handle);
 
-// Deterministic owner-thread step, 0..1000ms. Tick/service derive the same step
-// from steady_clock. Procedural show fades in over 500ms (instant in reduced motion).
+// Deterministic 0..1000ms step; Windows opens geometrically in 500ms, snapping for accessibility.
 SAO_UI_API sao_status_t SAO_UI_CALL
 sao_ui_fisheye_backdrop_advance(sao_ui_fisheye_backdrop_handle_t handle, uint32_t delta_ms);
 

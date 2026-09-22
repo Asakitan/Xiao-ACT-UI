@@ -574,6 +574,348 @@ int32_t resolve_container_layout_mode(const ContainerResponsiveLayout& layout,
     return viewport_width >= threshold ? layout.primary_mode : layout.fallback_mode;
 }
 
+bool canvas_number(const json& object, const char* key, int32_t fallback,
+                   int32_t minimum, int32_t maximum, int32_t* output) {
+    const auto value = object.find(key);
+    if (value == object.end()) {
+        *output = fallback;
+        return true;
+    }
+    if (!value->is_number())
+        return false;
+    const double number = value->get<double>();
+    if (!std::isfinite(number) || number < minimum || number > maximum)
+        return false;
+    *output = static_cast<int32_t>(std::nearbyint(number));
+    return true;
+}
+
+bool canvas_color(const json& object, const char* key, std::string_view fallback,
+                  uint32_t* output) {
+    const auto property = object.find(key);
+    if (property != object.end() && !property->is_string())
+        return false;
+    std::string value = property == object.end() ? std::string(fallback)
+                                                : property->get<std::string>();
+    const auto first = value.find_first_not_of(" \t\r\n");
+    value = first == std::string::npos ? std::string()
+                                      : value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (value.empty())
+        value = std::string(fallback);
+    if (value.empty() || value == "transparent") {
+        *output = 0;
+        return true;
+    }
+    if (value.size() == 4U && value.front() == '#') {
+        std::string expanded{"#"};
+        for (size_t index = 1; index < value.size(); ++index) {
+            expanded += value[index];
+            expanded += value[index];
+        }
+        value = std::move(expanded);
+    }
+    if (value.front() == '#')
+        return parse_argb(json(value), output);
+    auto token = semantic_accent_token(value);
+    if (value == "white") token = SAO_UI_TOKEN_WHITE;
+    else if (value == "black") token = SAO_UI_TOKEN_BLACK;
+    else if (value == "bg" || value == "body") token = SAO_UI_TOKEN_APP_CARD;
+    else if (value == "border" || value == "sep" || value == "grid") token = SAO_UI_TOKEN_APP_BORDER;
+    else if (value == "header") token = SAO_UI_TOKEN_APP_BG;
+    else if (value == "title") token = SAO_UI_TOKEN_APP_GOLD;
+    else if (value == "subtitle") token = SAO_UI_TOKEN_APP_ACCENT;
+    else if (value == "value" || value == "mono") token = SAO_UI_TOKEN_APP_TEXT;
+    else if (value == "label") token = SAO_UI_TOKEN_APP_TEXT_2;
+    if (!token.has_value())
+        token = color_token_for_name(value);
+    if (!token.has_value())
+        return false;
+    *output = sao::ui::detail::panel_theme_color(*token);
+    return true;
+}
+
+std::string normalized_type(const json& node);
+
+bool canvas_spec(const json& props, SaoUiScriptCanvasSpec* spec) {
+    *spec = {};
+    const bool frame = normalized_type(props) == "rgba_frame";
+    if (!canvas_number(props, "width", 320, 1, 4096, &spec->width_px) ||
+        !canvas_number(props, "height", frame ? 480 : 160, 1, 4096, &spec->height_px) ||
+        !canvas_color(props, frame ? "background" : "bg",
+                      props.contains("ops") ? "body" : "transparent", &spec->bg_argb))
+        return false;
+    int32_t position = 0;
+    if (!canvas_number(props, "x", 0, -32768, 32768, &position) ||
+        !canvas_number(props, "y", 0, -32768, 32768, &position) ||
+        !canvas_number(props, "z", 0, -10000, 10000, &position))
+        return false;
+    for (const char* key : {"draggable", "antialias", "retain_ops_between_frames", "premultiplied"}) {
+        const auto value = props.find(key);
+        if (value != props.end() && !value->is_boolean())
+            return false;
+    }
+    if (frame) {
+        for (const char* key : {"width", "height"}) {
+            const auto value = props.find(key);
+            if (value != props.end() && value->get<double>() != std::nearbyint(value->get<double>()))
+                return false;
+        }
+        if (props.contains("ops"))
+            return false;
+        const auto hit = props.find("hit_test");
+        if (hit != props.end() && (!hit->is_string() ||
+            (*hit != "none" && *hit != "rect" && *hit != "alpha")))
+            return false;
+    }
+    spec->draggable_owns_pointer = props.value("draggable", frame);
+    spec->antialias = props.value("antialias", true);
+    spec->retain_ops_between_frames = props.value("retain_ops_between_frames", true);
+    spec->max_ops_per_frame = 4000;
+    return true;
+}
+
+bool decode_rgba_frame(const json& props, const SaoUiScriptCanvasSpec& spec,
+                       std::vector<uint8_t>& pixels) {
+    pixels.clear();
+    const auto source = props.find("frame_rgba_b64");
+    if (source == props.end())
+        return true;
+    if (!source->is_string() ||
+        (props.contains("premultiplied") && !props["premultiplied"].is_boolean()))
+        return false;
+    const auto& text = source->get_ref<const std::string&>();
+    if (text.empty())
+        return true;
+    const size_t expected = static_cast<size_t>(spec.width_px) * spec.height_px * 4U;
+    const size_t encoded = (expected + 2U) / 3U * 4U;
+    if (text.size() != encoded)
+        return false;
+    pixels.reserve(expected);
+    const auto sextet = [](char character) -> int {
+        if (character >= 'A' && character <= 'Z') return character - 'A';
+        if (character >= 'a' && character <= 'z') return character - 'a' + 26;
+        if (character >= '0' && character <= '9') return character - '0' + 52;
+        if (character == '+') return 62;
+        if (character == '/') return 63;
+        return -1;
+    };
+    for (size_t offset = 0; offset < text.size(); offset += 4U) {
+        const int a = sextet(text[offset]);
+        const int b = sextet(text[offset + 1U]);
+        const bool pad2 = text[offset + 2U] == '=';
+        const bool pad3 = text[offset + 3U] == '=';
+        const int c = pad2 ? 0 : sextet(text[offset + 2U]);
+        const int d = pad3 ? 0 : sextet(text[offset + 3U]);
+        if (a < 0 || b < 0 || c < 0 || d < 0 || (pad2 && !pad3) ||
+            ((pad2 || pad3) && offset + 4U != text.size()) ||
+            (pad2 && (b & 15)) || (pad3 && !pad2 && (c & 3)))
+            return false;
+        pixels.push_back(static_cast<uint8_t>((a << 2) | (b >> 4)));
+        if (!pad2) pixels.push_back(static_cast<uint8_t>((b << 4) | (c >> 2)));
+        if (!pad3) pixels.push_back(static_cast<uint8_t>((c << 6) | d));
+    }
+    if (pixels.size() != expected)
+        return false;
+    const bool premultiplied = props.value("premultiplied", false);
+    for (size_t index = 0; index < pixels.size(); index += 4U) {
+        const auto alpha = pixels[index + 3U];
+        for (size_t channel = 0; channel < 3U; ++channel) {
+            if (premultiplied) {
+                if (pixels[index + channel] > alpha)
+                    return false;
+            } else {
+                pixels[index + channel] = static_cast<uint8_t>(
+                    (static_cast<uint32_t>(pixels[index + channel]) * alpha + 127U) / 255U);
+            }
+        }
+        std::swap(pixels[index], pixels[index + 2U]);
+    }
+    return true;
+}
+
+struct CanvasSpecOps {
+    std::vector<SaoUiCanvasOp> ops;
+    std::vector<std::string> text;
+    std::vector<std::vector<int32_t>> points;
+
+    bool append(SaoUiCanvasOp op) {
+        if (ops.size() >= 4000U)
+            return false;
+        ops.push_back(op);
+        return true;
+    }
+
+    bool color(int32_t kind, uint32_t argb) {
+        SaoUiCanvasOp op{};
+        op.op = kind;
+        op.i[0] = static_cast<int32_t>(argb);
+        return append(op);
+    }
+
+    bool line(int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
+        SaoUiCanvasOp op{};
+        op.op = SAO_UI_CANVAS_OP_LINE;
+        op.i[0] = x1; op.i[1] = y1; op.i[2] = x2; op.i[3] = y2;
+        return append(op);
+    }
+};
+
+sao_status_t compile_canvas_ops(const json& props, CanvasSpecOps* compiled) {
+    SaoUiScriptCanvasSpec spec{};
+    if (!canvas_spec(props, &spec))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    const auto source = props.find("ops");
+    if (source == props.end())
+        return SAO_STATUS_OK;
+    if (!source->is_array() || source->size() > 4000U)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    compiled->text.resize(source->size());
+    compiled->points.resize(source->size());
+    compiled->ops.reserve(std::min<size_t>(4000U, source->size() * 4U + 2U));
+    SaoUiCanvasOp background{};
+    background.op = SAO_UI_CANVAS_OP_RECT;
+    background.i[2] = spec.width_px;
+    background.i[3] = spec.height_px;
+    if (!compiled->color(SAO_UI_CANVAS_OP_SET_FILL, spec.bg_argb) || !compiled->append(background))
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    for (size_t index = 0; index < source->size(); ++index) {
+        const auto& input = (*source)[index];
+        if (!input.is_object() || !input.contains("op") || !input["op"].is_string())
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        std::string kind = input["op"].get<std::string>();
+        const auto first = kind.find_first_not_of(" \t\r\n");
+        kind = first == std::string::npos ? std::string()
+                         : kind.substr(first, kind.find_last_not_of(" \t\r\n") - first + 1);
+        std::transform(kind.begin(), kind.end(), kind.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (kind != "line" && kind != "rect" && kind != "oval" && kind != "polygon" &&
+            kind != "text" && kind != "ctext")
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        const bool text = kind == "text" || kind == "ctext";
+        uint32_t fill = 0, outline = 0;
+        int32_t line_width = 0;
+        if (!canvas_color(input, "fill", text || kind == "line" ? "value" : "", &fill) ||
+            !canvas_color(input, "outline", "", &outline) ||
+            !canvas_number(input, "width", kind == "line" ? 1 : 0,
+                            kind == "line" ? 1 : 0, 20, &line_width))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        SaoUiCanvasOp op{};
+        if (kind == "line") {
+            const char* keys[] = {"x1", "y1", "x2", "y2"};
+            for (size_t axis = 0; axis < 4; ++axis)
+                if (!canvas_number(input, keys[axis], 0, -32768, 32768, &op.i[axis]))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            op.op = SAO_UI_CANVAS_OP_LINE;
+        } else if (kind == "polygon") {
+            const auto vertices = input.find("points");
+            if (vertices == input.end() || !vertices->is_array() || vertices->size() < 3U ||
+                vertices->size() > 4096U)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            auto& points = compiled->points[index];
+            const bool pairs = vertices->front().is_array();
+            if (!pairs && (vertices->size() < 6U || vertices->size() % 2U != 0U))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            for (const auto& vertex : *vertices) {
+                if (pairs && (!vertex.is_array() || vertex.size() != 2U))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const auto append_coordinate = [&](const json& value) {
+                    if (!value.is_number()) return false;
+                    const double number = value.get<double>();
+                    if (!std::isfinite(number) || number < -32768 || number > 32768) return false;
+                    points.push_back(static_cast<int32_t>(std::nearbyint(number)));
+                    return true;
+                };
+                if (pairs ? (!append_coordinate(vertex[0]) || !append_coordinate(vertex[1]))
+                          : !append_coordinate(vertex))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+            op.op = SAO_UI_CANVAS_OP_POLYGON;
+            op.i[0] = static_cast<int32_t>(points.size() / 2U);
+            op.aux = points.data();
+            op.aux_len = points.size() * sizeof(int32_t);
+        } else {
+            if (!canvas_number(input, "x", 0, -32768, 32768, &op.i[0]) ||
+                !canvas_number(input, "y", 0, -32768, 32768, &op.i[1]))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            if (text) {
+                if (!input.contains("text") || !input["text"].is_string() ||
+                    !canvas_number(input, "size", 10, 6, 48, &op.i[2]))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                auto& value = compiled->text[index];
+                value = input["text"].get<std::string>();
+                if (value.size() > 4000U || value.find('\0') != std::string::npos)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                if (input.contains("bold") && !input["bold"].is_boolean())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                op.i_ex[0] = input.value("bold", false) ? 1 : 0;
+                const sao::ui::detail::ScopedTextRole text_style(
+                    sao::ui::detail::ClassicTextRole::Auto,
+                    op.i_ex[0] != 0 ? sao::ui::detail::ClassicTextWeight::Bold
+                                    : sao::ui::detail::ClassicTextWeight::Normal);
+                const auto anchor_property = input.find("anchor");
+                if (anchor_property != input.end() && !anchor_property->is_string())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const std::string anchor = input.value("anchor", std::string("nw"));
+                if (anchor != "nw" && anchor != "n" && anchor != "ne" && anchor != "w" &&
+                    anchor != "center" && anchor != "e" && anchor != "sw" && anchor != "s" && anchor != "se")
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                float width = 0, height = 0;
+                if (!value.empty() && !sao::ui::detail::measure_text_dwrite(
+                        value.c_str(), static_cast<float>(op.i[2]), &width, &height))
+                    return SAO_STATUS_ERR_NOT_INITIALIZED;
+                if (!std::isfinite(width) || !std::isfinite(height) || width > 262144 || height > 262144)
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                const float dx = anchor == "n" || anchor == "center" || anchor == "s" ? width * 0.5F
+                                   : anchor == "ne" || anchor == "e" || anchor == "se" ? width : 0.0F;
+                const float dy = anchor == "w" || anchor == "center" || anchor == "e" ? height * 0.5F
+                                   : anchor == "sw" || anchor == "s" || anchor == "se" ? height : 0.0F;
+                op.i[0] -= static_cast<int32_t>(std::nearbyint(dx));
+                op.i[1] -= static_cast<int32_t>(std::nearbyint(dy));
+                op.op = SAO_UI_CANVAS_OP_TEXT;
+                op.aux = value.data();
+                op.aux_len = value.size();
+            } else {
+                if (!canvas_number(input, "w", 0, 0, 4096, &op.i[2]) ||
+                    !canvas_number(input, "h", 0, 0, 4096, &op.i[3]))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+                op.op = kind == "rect" ? SAO_UI_CANVAS_OP_RECT : SAO_UI_CANVAS_OP_OVAL;
+            }
+        }
+        if (!compiled->color(kind == "line" ? SAO_UI_CANVAS_OP_SET_STROKE : SAO_UI_CANVAS_OP_SET_FILL, fill))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (kind == "line" || (outline != 0 && line_width > 0)) {
+            SaoUiCanvasOp width{};
+            width.op = SAO_UI_CANVAS_OP_SET_LINE_W;
+            width.f[0] = static_cast<float>(line_width);
+            if (!compiled->append(width)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        if (!compiled->append(op)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (kind != "line" && !text && outline != 0 && line_width > 0) {
+            if (!compiled->color(SAO_UI_CANVAS_OP_SET_STROKE, outline))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            auto& points = compiled->points[index];
+            if (kind == "rect") {
+                points = {op.i[0], op.i[1], op.i[0] + op.i[2], op.i[1],
+                          op.i[0] + op.i[2], op.i[1] + op.i[3], op.i[0], op.i[1] + op.i[3]};
+            } else if (kind == "oval") {
+                for (int segment = 0; segment < 48; ++segment) {
+                    const double angle = segment * 6.283185307179586 / 48.0;
+                    points.push_back(static_cast<int32_t>(std::nearbyint(op.i[0] + op.i[2] * (1.0 + std::cos(angle)) * 0.5)));
+                    points.push_back(static_cast<int32_t>(std::nearbyint(op.i[1] + op.i[3] * (1.0 + std::sin(angle)) * 0.5)));
+                }
+            }
+            for (size_t point = 0; point < points.size(); point += 2U) {
+                const size_t next = (point + 2U) % points.size();
+                if (!compiled->line(points[point], points[point + 1U], points[next], points[next + 1U]))
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
+        }
+    }
+    return SAO_STATUS_OK;
+}
+
 struct OwnedWidget {
     struct DropdownItem {
         int32_t id{};
@@ -596,6 +938,10 @@ struct OwnedWidget {
     float slider_value{};
     bool enabled{true};
     bool owns_handle{true};
+    std::shared_ptr<void> canvas_owner;
+    int32_t frame_bitmap{};
+    std::array<uint32_t, SAO_UI_COLOR_TOKEN_COUNT> canvas_colors{};
+    bool canvas_colors_valid{};
 
     ~OwnedWidget() {
         if (owns_handle)
@@ -658,8 +1004,65 @@ sao_status_t apply_owned_widget_props(OwnedWidget* widget) {
         }
         return sao_ui_sparkline_set_values(widget->handle, samples.data(), samples.size());
     }
-    if (widget->type == "canvas")
-        return SAO_STATUS_OK;  // canvas state flows through ops, not props
+    if (widget->type == "rgba_frame") {
+        SaoUiScriptCanvasSpec spec{};
+        std::vector<uint8_t> pixels;
+        if (!canvas_spec(widget->props, &spec) || !decode_rgba_frame(widget->props, spec, pixels))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        const auto canvas = reinterpret_cast<sao_ui_script_canvas_handle_t>(widget->handle);
+        int32_t bitmap = 0;
+        sao_status_t status = SAO_STATUS_OK;
+        if (!pixels.empty())
+            status = sao_ui_script_canvas_register_bitmap(canvas, pixels.data(),
+                static_cast<uint32_t>(spec.width_px), static_cast<uint32_t>(spec.height_px),
+                static_cast<uint32_t>(spec.width_px) * 4U, &bitmap);
+        SaoUiCanvasOp ops[3]{};
+        ops[0].op = SAO_UI_CANVAS_OP_SET_FILL;
+        ops[0].i[0] = static_cast<int32_t>(spec.bg_argb);
+        ops[1].op = SAO_UI_CANVAS_OP_RECT;
+        ops[1].i[2] = spec.width_px;
+        ops[1].i[3] = spec.height_px;
+        ops[2].op = SAO_UI_CANVAS_OP_BITMAP;
+        ops[2].i[2] = spec.width_px;
+        ops[2].i[3] = spec.height_px;
+        ops[2].i[4] = bitmap;
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_script_canvas_begin_draw(canvas);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_script_canvas_submit_ops(canvas, ops, pixels.empty() ? 2U : 3U);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_script_canvas_end_draw(canvas);
+        if (status != SAO_STATUS_OK) {
+            if (bitmap != 0)
+                (void)sao_ui_script_canvas_unregister_bitmap(canvas, bitmap);
+            return status;
+        }
+        const int32_t previous_bitmap = std::exchange(widget->frame_bitmap, bitmap);
+        if (previous_bitmap != 0)
+            status = sao_ui_script_canvas_unregister_bitmap(canvas, previous_bitmap);
+        for (size_t index = 0; index < widget->canvas_colors.size(); ++index)
+            widget->canvas_colors[index] = sao::ui::detail::panel_theme_color(static_cast<SaoUiColorToken>(index));
+        widget->canvas_colors_valid = true;
+        return status;
+    }
+    if (widget->type == "canvas") {
+        CanvasSpecOps compiled;
+        const sao_status_t parsed = compile_canvas_ops(widget->props, &compiled);
+        if (parsed != SAO_STATUS_OK || !widget->props.contains("ops"))
+            return parsed;
+        const auto canvas = reinterpret_cast<sao_ui_script_canvas_handle_t>(widget->handle);
+        sao_status_t status = sao_ui_script_canvas_begin_draw(canvas);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_script_canvas_submit_ops(canvas, compiled.ops.data(), compiled.ops.size());
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_script_canvas_end_draw(canvas);
+        if (status == SAO_STATUS_OK) {
+            for (size_t index = 0; index < widget->canvas_colors.size(); ++index)
+                widget->canvas_colors[index] = sao::ui::detail::panel_theme_color(static_cast<SaoUiColorToken>(index));
+            widget->canvas_colors_valid = true;
+        }
+        return status;
+    }
     const std::string props = widget->props.dump();
     return sao_ui_widget_apply_props(widget->handle, reinterpret_cast<const uint8_t*>(props.data()),
                                      props.size());
@@ -706,12 +1109,48 @@ struct PanelContent {
     int32_t panel_width_px{};
     int32_t viewport_top_px{};
     int32_t viewport_height_px{};
+    uint64_t canvas_pixels{};
     std::mutex mutex;
 
     ~PanelContent() {
         sao_ui_layout_tree_destroy(tree);
     }
 };
+
+sao_status_t retain_manual_canvases(const PanelContent& previous, PanelContent& replacement) {
+    for (const auto& next : replacement.widgets) {
+        if (next->type != "canvas" || next->props.contains("ops"))
+            continue;
+        const OwnedWidget* old = nullptr;
+        if (!next->id.empty()) {
+            const auto found = previous.by_id.find(next->id);
+            if (found != previous.by_id.end()) old = found->second;
+        } else {
+            for (const auto& candidate : previous.widgets)
+                if (candidate->path == next->path) { old = candidate.get(); break; }
+        }
+        if (old == nullptr || old->type != "canvas" || old->props.contains("ops") ||
+            old->canvas_owner == nullptr)
+            continue;
+        SaoUiScriptCanvasSpec old_spec{}, next_spec{};
+        if (!canvas_spec(old->props, &old_spec) || !canvas_spec(next->props, &next_spec))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (old_spec.width_px != next_spec.width_px || old_spec.height_px != next_spec.height_px ||
+            old_spec.bg_argb != next_spec.bg_argb || old_spec.antialias != next_spec.antialias ||
+            old_spec.retain_ops_between_frames != next_spec.retain_ops_between_frames ||
+            old_spec.draggable_owns_pointer != next_spec.draggable_owns_pointer)
+            continue;
+        replacement.by_handle.emplace(old->handle, next.get());
+        if (!sao::ui::detail::layout_replace_widget(next->node, old->handle)) {
+            replacement.by_handle.erase(old->handle);
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
+        replacement.by_handle.erase(next->handle);
+        next->canvas_owner = old->canvas_owner;
+        next->handle = old->handle;
+    }
+    return SAO_STATUS_OK;
+}
 
 struct PanelFrame {
     std::shared_ptr<const sao::ui::detail::PaintDisplayList> commands;
@@ -1338,6 +1777,14 @@ bool validate_spec_node(const json& node, int32_t depth, size_t* node_count,
     if ((!is_container_type(type) && !is_leaf_type(type)) ||
         (type == "sparkline" && !require_normalized_children))
         return false;
+    if (type == "canvas" || type == "rgba_frame") {
+        SaoUiScriptCanvasSpec spec{};
+        if (node.contains("nodes") || !canvas_spec(node, &spec))
+            return false;
+        const auto ops = node.find("ops");
+        if (ops != node.end() && (!ops->is_array() || ops->size() > 4000U))
+            return false;
+    }
     const auto children = node.find("children");
     const bool has_children = children != node.end();
     if (has_children && !children->is_array())
@@ -1381,6 +1828,8 @@ bool validate_spec_document(const json& input) {
     }
     if (!input.is_object())
         return false;
+    if (normalized_type(input) == "canvas" || normalized_type(input) == "rgba_frame")
+        return validate_spec_node(input, 0, &node_count, false);
     if (const auto nodes = input.find("nodes"); nodes != input.end()) {
         if (!nodes->is_array())
             return false;
@@ -1586,7 +2035,7 @@ int32_t widget_kind(const std::string& type) {
         return SAO_UI_WIDGET_TABLE;
     if (type == "sparkline")
         return SAO_UI_WIDGET_SPARKLINE;
-    if (type == "canvas")
+    if (type == "canvas" || type == "rgba_frame")
         return SAO_UI_WIDGET_SCRIPTABLE_CANVAS;
     return SAO_UI_WIDGET_TEXT;
 }
@@ -1702,7 +2151,18 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
     if (not nodes.is_array())
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     for (size_t index = 0; index < nodes.size(); ++index) {
-        const auto& node = nodes[index];
+        const auto& source_node = nodes[index];
+        json canvas_node;
+        if (normalized_type(source_node) == "canvas" || normalized_type(source_node) == "rgba_frame") {
+            SaoUiScriptCanvasSpec native_spec{};
+            if (!canvas_spec(source_node, &native_spec))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            canvas_node = source_node;
+            canvas_node["type"] = normalized_type(source_node);
+            canvas_node["width"] = native_spec.width_px;
+            canvas_node["height"] = native_spec.height_px;
+        }
+        const auto& node = canvas_node.is_null() ? source_node : canvas_node;
         const std::string node_path = parent_path.empty()
                                           ? std::to_string(index)
                                           : std::string(parent_path) + "/" + std::to_string(index);
@@ -1816,13 +2276,24 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
         if (type == "slider") {
             if (!owned->props.contains("value") || !owned->props["value"].is_number())
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            for (const char* key : {"lo", "hi", "min_value", "max_value"}) {
+                const auto bound = owned->props.find(key);
+                if (bound != owned->props.end() && !bound->is_number())
+                    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            }
             const double raw_value = owned->props["value"].get<double>();
-            if (!std::isfinite(raw_value) || raw_value < 0.0 || raw_value > 1.0)
+            const double minimum = owned->props.value("lo", owned->props.value("min_value", 0.0));
+            const double maximum = owned->props.value("hi", owned->props.value("max_value", 1.0));
+            if (!std::isfinite(raw_value) || !std::isfinite(minimum) || !std::isfinite(maximum) ||
+                minimum >= maximum || minimum < -std::numeric_limits<float>::max() ||
+                maximum > std::numeric_limits<float>::max() ||
+                static_cast<float>(minimum) >= static_cast<float>(maximum) ||
+                !std::isfinite(static_cast<float>(maximum) - static_cast<float>(minimum)))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             SaoUiSliderSpec slider{};
-            slider.value = static_cast<float>(raw_value);
-            slider.min_value = 0.0F;
-            slider.max_value = 1.0F;
+            slider.value = static_cast<float>(std::clamp(raw_value, minimum, maximum));
+            slider.min_value = static_cast<float>(minimum);
+            slider.max_value = static_cast<float>(maximum);
             slider.step = owned->props.value("step", 0.0F);
             slider.vertical = owned->props.value("vertical", false);
             slider.disabled = !owned->enabled;
@@ -1881,22 +2352,24 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
             sparkline.max_points = 120U;
             sparkline.line_width_px = 2.0F;
             status = sao_ui_sparkline_create(nullptr, &sparkline, &owned->handle);
-        } else if (type == "canvas") {
-            // Scriptable canvas leaf (UI ABI minor 17).  Draw state arrives
-            // later via the owner's own op submission; the spec only fixes
-            // geometry and the canvas spec.  Width/height are advisory — the
-            // layout node still controls painted bounds via fixed_width/height.
-            SaoUiScriptCanvasSpec canvas_spec{};
-            canvas_spec.width_px = std::max(1, node.value("width", 320));
-            canvas_spec.height_px = std::max(1, node.value("height", 160));
-            canvas_spec.bg_argb = 0x00000000u;
-            canvas_spec.draggable_owns_pointer = false;
-            canvas_spec.antialias = true;
-            canvas_spec.retain_ops_between_frames = true;
-            canvas_spec.max_ops_per_frame = 4000;
+        } else if (type == "canvas" || type == "rgba_frame") {
+            SaoUiScriptCanvasSpec native_spec{};
+            if (!canvas_spec(node, &native_spec))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            content.canvas_pixels += static_cast<uint64_t>(native_spec.width_px) * native_spec.height_px;
+            if (content.canvas_pixels > 16U * 1024U * 1024U)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            if (node.contains("ops") || type == "rgba_frame")
+                native_spec.bg_argb = 0;
             sao_ui_script_canvas_handle_t canvas_handle = nullptr;
-            status = sao_ui_script_canvas_create(nullptr, &canvas_spec, &owned->handle,
+            status = sao_ui_script_canvas_create(nullptr, &native_spec, &owned->handle,
                                                  &canvas_handle);
+            if (status == SAO_STATUS_OK) {
+                owned->owns_handle = false;
+                owned->canvas_owner = std::shared_ptr<void>(canvas_handle, [](void* handle) {
+                    sao_ui_script_canvas_destroy(static_cast<sao_ui_script_canvas_handle_t>(handle));
+                });
+            }
         } else {
             status = sao_ui_widget_create(owned->kind, nullptr, &owned->handle);
         }
@@ -1905,7 +2378,7 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
         status = apply_owned_widget_props(owned.get());
         if (status != SAO_STATUS_OK)
             return status;
-        if (type != "sparkline" && type != "canvas") {
+        if (type != "sparkline" && type != "canvas" && type != "rgba_frame") {
             status = sao_ui_widget_set_enabled(owned->handle, owned->enabled);
             if (status != SAO_STATUS_OK && status != SAO_STATUS_ERR_NOT_IMPLEMENTED)
                 return status;
@@ -1920,6 +2393,18 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
             spec.fixed_height_px = std::max(1, node["height"].get<int32_t>());
         if (node.contains("width") and node["width"].is_number_integer())
             spec.fixed_width_px = std::max(1, node["width"].get<int32_t>());
+        if (type == "canvas" || type == "rgba_frame") {
+            SaoUiScriptCanvasSpec native_spec{};
+            if (!canvas_spec(node, &native_spec))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            spec.fixed_width_px = native_spec.width_px;
+            spec.fixed_height_px = native_spec.height_px;
+            spec.hit_testable = false;
+            if (!canvas_number(node, "x", 0, -32768, 32768, &spec.absolute_x_px) ||
+                !canvas_number(node, "y", 0, -32768, 32768, &spec.absolute_y_px) ||
+                !canvas_number(node, "z", 0, -10000, 10000, &spec.absolute_z))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        }
         if (parent_type == "row") {
             if (type == "button")
                 spec.min_width_px = std::max(spec.min_width_px, 72);
@@ -2086,6 +2571,9 @@ sao_status_t migrate_responsive_content_state(sao_ui_panel_s* panel,
         focused_path = panel->responsive_focus_path;
     }
     std::scoped_lock lock(current->mutex, replacement->mutex);
+    const sao_status_t canvas_status = retain_manual_canvases(*current, *replacement);
+    if (canvas_status != SAO_STATUS_OK)
+        return canvas_status;
     for (const auto& previous : current->widgets) {
         if (previous->handle == focused_widget || previous->props.value("focused", false)) {
             focused_id = previous->id;
@@ -2121,7 +2609,8 @@ sao_status_t migrate_responsive_content_state(sao_ui_panel_s* panel,
         sao_status_t status = apply_owned_widget_props(replacement_entry.get());
         if (status != SAO_STATUS_OK)
             return status;
-        if (replacement_entry->type == "sparkline" || replacement_entry->type == "canvas")
+        if (replacement_entry->type == "sparkline" || replacement_entry->type == "canvas" ||
+            replacement_entry->type == "rgba_frame")
             continue;
         status = sao_ui_widget_set_enabled(replacement_entry->handle, replacement_entry->enabled);
         if (status != SAO_STATUS_OK)
@@ -2584,7 +3073,12 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                                                     static_cast<float>(node_clip.height_px));
                 if (status != SAO_STATUS_OK)
                     break;
-                status = sao_ui_widget_paint_at(widget->handle, context, rect.x_px, rect.y_px,
+                 if (((widget->type == "canvas" && widget->props.contains("ops")) ||
+                     widget->type == "rgba_frame") &&
+                    (!widget->canvas_colors_valid || widget->canvas_colors != theme.colors))
+                    status = apply_owned_widget_props(widget);
+                if (status == SAO_STATUS_OK)
+                    status = sao_ui_widget_paint_at(widget->handle, context, rect.x_px, rect.y_px,
                                                 std::max(1, rect.width_px),
                                                 std::max(1, rect.height_px), 1.0F);
                 const sao_status_t widget_pop = sao_ui_paint_ctx_pop_clip(context);
@@ -3093,7 +3587,7 @@ sao_status_t widget_at(sao_ui_panel_s* panel, int32_t x, int32_t y,
     const auto found = content->by_handle.find(hit.widget);
     if (found != content->by_handle.end() &&
         (!found->second->enabled || found->second->type == "sparkline" ||
-         found->second->type == "canvas"))
+         found->second->type == "canvas" || found->second->type == "rgba_frame"))
         return SAO_STATUS_OK;
     *out_widget = hit.widget;
     return SAO_STATUS_OK;
@@ -4896,6 +5390,9 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_spec(sao_ui_panel_handle_t 
         }
         if (previous != nullptr) {
             std::scoped_lock lock(previous->mutex, replacement->mutex);
+            status = retain_manual_canvases(*previous, *replacement);
+            if (status != SAO_STATUS_OK)
+                return status;
             sao::ui::detail::layout_restore_viewports(previous->root, replacement->root);
             if (!active_edit_id.empty()) {
                 const auto old_edit = previous->by_id.find(active_edit_id);
@@ -5000,7 +5497,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
                                                                const uint8_t* props_json_utf8,
                                                                size_t props_len) {
     if (panel == nullptr || widget_id_utf8 == nullptr || widget_id_utf8[0] == '\0' ||
-        (props_json_utf8 == nullptr && props_len != 0U)) {
+        (props_json_utf8 == nullptr && props_len != 0U) || props_len > kMaximumPanelSpecBytes) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     PanelOperation operation(panel);
@@ -5051,6 +5548,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
             if (found == content->by_id.end())
                 return SAO_STATUS_ERR_NOT_FOUND;
             widget = found->second;
+        }
+        if ((widget->type == "canvas" || widget->type == "rgba_frame") && spec_updated) {
+            // Stage the entire panel before publishing any canvas geometry or op changes.
+            return sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(candidate_spec.data()),
+                                         candidate_spec.size());
+        }
+        {
+            std::scoped_lock lock(content->mutex);
             previous_props = widget->props;
             previous_action = widget->action;
             previous_args = widget->action_args;
@@ -5077,7 +5582,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
             }
             sao_status_t status = apply_owned_widget_props(widget);
             if (status == SAO_STATUS_OK && widget->type != "sparkline" &&
-                widget->type != "canvas")
+                widget->type != "canvas" && widget->type != "rgba_frame")
                 status = sao_ui_widget_set_enabled(widget->handle, widget->enabled);
             if (status != SAO_STATUS_OK) {
                 widget->props = std::move(previous_props);
@@ -5100,7 +5605,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
             widget->action_args = std::move(previous_args);
             widget->enabled = previous_enabled;
             (void)apply_owned_widget_props(widget);
-            if (widget->type != "sparkline" && widget->type != "canvas")
+            if (widget->type != "sparkline" && widget->type != "canvas" && widget->type != "rgba_frame")
                 (void)sao_ui_widget_set_enabled(widget->handle, widget->enabled);
         }
         return status;

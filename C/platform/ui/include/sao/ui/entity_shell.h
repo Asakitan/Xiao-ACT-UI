@@ -42,6 +42,7 @@ enum SaoUiEntityAction : int32_t {
     SAO_UI_ENTITY_ACTION_OPEN_SETTINGS_PANEL = 140,
     SAO_UI_ENTITY_ACTION_OPEN_HOTKEY_PANEL = 141,
     SAO_UI_ENTITY_ACTION_OPEN_MEMORY_VIEWER = 142,
+    SAO_UI_ENTITY_ACTION_OPEN_USER_MENU = 143,
 };
 
 typedef sao_status_t(SAO_UI_CALL* sao_ui_entity_action_fn_t)(
@@ -173,9 +174,7 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_mouse(
     int32_t button,
     int32_t wheel_delta);
 
-// Keyboard navigation: Left/Up previous root, Right/Down next root,
-// Enter/Space activate the hovered root (fires the action callback for
-// leaf roots), Escape closes the open menu overlay.
+// Arrows navigate roots/children; Enter/Space activate, Left/Escape return before closing.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_entity_shell_handle_key(
     sao_ui_entity_shell_handle_t handle,
     uint32_t virtual_key,

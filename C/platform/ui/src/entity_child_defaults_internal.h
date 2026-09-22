@@ -66,7 +66,15 @@ inline sao_status_t apply(sao_ui_menu_handle_t menu) noexcept {
         {"全部 Light", "sao:sun", SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT, true, {false, false, false}},
         {"全部 Dark", "sao:moon", SAO_UI_ENTITY_ACTION_SET_ALL_DARK, true, {false, false, false}},
     }};
-    return sao_ui_menu_set_children(menu, "Skins", skins.data(), skins.size());
+    status = sao_ui_menu_set_children(menu, "Skins", skins.data(), skins.size());
+    if (status != SAO_STATUS_OK)
+        return status;
+
+    const std::array<SaoUiMenuItem, 2> about{{
+        {"用户", "sao:user", SAO_UI_ENTITY_ACTION_OPEN_USER_MENU, true, {false, false, false}},
+        {"使用指南", "sao:info", SAO_UI_ENTITY_ACTION_OPEN_ABOUT, true, {false, false, false}},
+    }};
+    return sao_ui_menu_set_children(menu, "About", about.data(), about.size());
 }
 
 } // namespace sao::ui::entity_child_defaults

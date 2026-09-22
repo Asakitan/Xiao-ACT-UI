@@ -12,6 +12,17 @@
 #include "widget_raster_internal.h"
 #include "widget_typed_internal.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <dwrite.h>
+#include <wrl/client.h>
+#endif
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -22,6 +33,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -40,6 +52,10 @@ bool draw_text_dwrite(sao_ui_paint_ctx_s& context, float x, float y, const char*
 // Callers fall back to codepoint estimates when this returns false.
 bool measure_text_dwrite(const char* text_utf8, float size_px, float* out_width,
                          float* out_height) noexcept;
+#if defined(_WIN32)
+bool prepare_gpu_text_layout_dwrite(const char* text_utf8, float size_px, float width,
+                                    float height, void** out_layout) noexcept;
+#endif
 } // namespace sao::ui::detail
 
 struct sao_ui_widget_s {
@@ -2963,6 +2979,49 @@ bool text_edit_snapshot(sao_ui_widget_handle_t widget, TextEditSnapshot& out) no
         return false;
     }
 }
+
+float measure_ui_text_width(std::string_view text, float size_px) {
+    return measured_text_width(text, size_px);
+}
+
+UiTextMetrics measure_ui_text_metrics(std::string_view text, float size_px) {
+    if (!std::isfinite(size_px) || size_px <= 0.0F)
+        throw std::invalid_argument("Invalid text size");
+#if defined(_WIN32)
+    const std::string owned(text.empty() ? std::string_view("Ag中") : text);
+    void* raw_layout = nullptr;
+    if (prepare_gpu_text_layout_dwrite(owned.c_str(), size_px,
+            std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), &raw_layout)) {
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+        layout.Attach(static_cast<IDWriteTextLayout*>(raw_layout));
+        DWRITE_TEXT_METRICS metrics{};
+        DWRITE_LINE_METRICS line{};
+        UINT32 line_count{};
+        if (SUCCEEDED(layout->GetMetrics(&metrics)) &&
+            SUCCEEDED(layout->GetLineMetrics(&line, 1, &line_count)) && line_count == 1 &&
+            std::isfinite(metrics.widthIncludingTrailingWhitespace) &&
+            std::isfinite(metrics.height) && metrics.widthIncludingTrailingWhitespace >= 0.0F &&
+            metrics.height > 0.0F) {
+            return {text.empty() ? 0.0F : metrics.widthIncludingTrailingWhitespace, metrics.height, line.baseline};
+        }
+        throw std::runtime_error("DirectWrite text metrics failed");
+    }
+    float probe_width = 0.0F;
+    float probe_height = 0.0F;
+    if (measure_text_dwrite("Ag中", 16.0F, &probe_width, &probe_height))
+        throw std::runtime_error("DirectWrite text layout failed");
+#endif
+    const float scale = std::max(1.0F, std::floor(size_px / 5.0F));
+    float width = 0.0F;
+    for (size_t offset = 0; offset < text.size(); offset += utf8_codepoint_bytes(text, offset))
+        width += scale * 6.0F;
+    return {width, scale * 7.0F, scale * 5.0F};
+}
+
+std::string ellipsize_ui_text(std::string_view text, float size_px, float available_width) {
+    return ellipsize_utf8(text, size_px, available_width);
+}
+
 sao_status_t text_edit_update(sao_ui_widget_handle_t widget,
                               const TextEditSnapshot& value) noexcept {
     try {

@@ -94,6 +94,9 @@ SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_register_ui_panel(
 SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
 sao_sdk_unregister_ui_panel(const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel);
 
+SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_panel_open(
+    const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel, uint32_t width, uint32_t height);
+
 SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_panel_add_widget(
     const struct SaoSdkContext* ctx, sao_sdk_ui_panel_t panel,
     const struct SaoSdkWidgetSpec* widget_spec, sao_sdk_ui_widget_t* out_widget);

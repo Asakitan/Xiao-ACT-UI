@@ -88,9 +88,10 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <d3d11.h>
+#include <d3d11_1.h>
 #include <dxgi.h>
 #include <windows.h>
+#include <wrl/client.h>
 
 // FXC headers use the Windows BYTE typedef.
 #include "sao_ui_compositor_master_ps.h"
@@ -122,6 +123,11 @@ static_assert(sizeof(sao_ui_compositor_handle_t) == sizeof(void*),
 static_assert(sizeof(sao_ui_layer_handle_t) == sizeof(void*), "layer handle must be pointer-width");
 static_assert(sizeof(sao_ui_composition_slot_handle_t) == sizeof(void*),
               "composition slot handle must be pointer-width");
+static_assert(sizeof(SaoUiSharedTextureSource) == 48u);
+static_assert(offsetof(SaoUiSharedTextureSource, acquire_key) == 24u);
+static_assert(offsetof(SaoUiSharedTextureSource, timeout_ms) == 40u);
+static_assert(sizeof(SaoUiSharedTextureState) == 48u);
+static_assert(offsetof(SaoUiSharedTextureState, generation) == 32u);
 
 // ---------------------------------------------------------------------------
 // Internal types.
@@ -167,6 +173,21 @@ struct PostInputTask {
     sao_ui_compositor_post_input_fn_t fn{nullptr};
     void* user{nullptr};
 };
+
+#if defined(_WIN32)
+struct NtSharedHandleCloser {
+    void operator()(void* handle) const noexcept { ::CloseHandle(handle); }
+};
+using OwnedNtSharedHandle = std::unique_ptr<void, NtSharedHandleCloser>;
+
+struct SharedTextureImport {
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> private_texture;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> private_srv;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> keyed_mutex;
+};
+#endif
 
 struct sao_ui_layer_s {
     std::string name; // owning copy (config's name_utf8 is caller memory).
@@ -217,10 +238,13 @@ struct sao_ui_layer_s {
     void* shared_handle{nullptr};
     uint32_t shared_width{0};
     uint32_t shared_height{0};
+    SaoUiSharedTextureSource shared_source{};
+    SaoUiSharedTextureState shared_state{sizeof(SaoUiSharedTextureState)};
+    bool shared_reopen_blocked{false};
+    bool shared_bgra_cache{false};
 #if defined(_WIN32)
-    ID3D11Texture2D* shared_texture{nullptr};
-    ID3D11Texture2D* shared_staging{nullptr};
-    IDXGIKeyedMutex* shared_keyed_mutex{nullptr};
+    OwnedNtSharedHandle shared_nt_handle;
+    std::unique_ptr<SharedTextureImport> shared_import;
 #endif
     sao_ui_layer_render_fn_t render_fn{nullptr};
     std::recursive_mutex legacy_render_gate;
@@ -627,6 +651,9 @@ bool layer_accepts_input_at_locked(const sao_ui_layer_s* layer, int32_t host_x, 
     const int64_t local_x = static_cast<int64_t>(host_x) - layer->x;
     const int64_t local_y = static_cast<int64_t>(host_y) - layer->y;
     if (local_x < 0 || local_y < 0 || local_x >= layer->width || local_y >= layer->height)
+        return false;
+    if (layer->shared_handle != nullptr && layer->input_rects.empty() && !layer->rect_hit &&
+        (layer->bgra_pixels.empty() || layer->bgra_width == 0 || layer->bgra_height == 0))
         return false;
 
     bool hit = false;
@@ -1051,12 +1078,14 @@ bool clear_bgra_cache(sao_ui_layer_s* layer) {
     layer->bgra_width = 0;
     layer->bgra_height = 0;
     layer->bgra_stride = 0;
+    layer->shared_bgra_cache = false;
     return had_cache;
 }
 
 void release_detached_layer_payload(sao_ui_layer_s* layer) {
 #if defined(_WIN32)
     release_shared_texture_objects(layer);
+    layer->shared_nt_handle.reset();
     release_layer_gpu_surface(layer);
 #endif
     std::vector<SaoUiLayerInputRect>{}.swap(layer->input_rects);
@@ -1106,11 +1135,17 @@ struct D3dUnmapGuard {
 
 struct KeyedMutexReleaseGuard {
     IDXGIKeyedMutex* mutex;
-    bool acquired;
+    ID3D11DeviceContext* context;
+    uint64_t release_key;
+    bool acquired{false};
+    HRESULT release() noexcept {
+        if (!std::exchange(acquired, false))
+            return S_OK;
+        context->Flush();
+        return mutex->ReleaseSync(release_key);
+    }
     ~KeyedMutexReleaseGuard() {
-        if (acquired) {
-            (void)mutex->ReleaseSync(SAO_UI_SHARED_TEXTURE_KEYED_MUTEX_KEY);
-        }
+        (void)release();
     }
 };
 
@@ -1131,124 +1166,291 @@ struct MappedViewGuard {
 };
 
 void release_shared_texture_objects(sao_ui_layer_s* layer) {
-    if (layer->shared_keyed_mutex != nullptr) {
-        layer->shared_keyed_mutex->Release();
-        layer->shared_keyed_mutex = nullptr;
+    if (layer->shared_import == nullptr)
+        return;
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    layer->shared_import->texture->GetDevice(device.GetAddressOf());
+    const HRESULT removed = device->GetDeviceRemovedReason();
+    layer->shared_import.reset();
+    release_layer_gpu_surface(layer);
+    layer->shared_state.imported = 0;
+    layer->shared_state.active = 0;
+    layer->shared_state.acquired_frames = 0;
+    if (layer->shared_state.generation != UINT64_MAX)
+        ++layer->shared_state.generation;
+    layer->shared_state.last_status = SAO_STATUS_ERR_DEVICE_LOST;
+    layer->shared_state.last_hresult = FAILED(removed) ? removed : DXGI_ERROR_DEVICE_REMOVED;
+    if (layer->shared_bgra_cache)
+        clear_bgra_cache(layer);
+    mark_layer_dirty(layer, true);
+}
+
+sao_status_t shared_result(sao_ui_layer_s* layer, HRESULT hr) noexcept {
+    sao_status_t status = SAO_STATUS_ERR_OS_CALL_FAILED;
+    if (hr == S_OK)
+        status = SAO_STATUS_OK;
+    else if (hr == static_cast<HRESULT>(WAIT_TIMEOUT))
+        status = SAO_STATUS_ERR_TIMEOUT;
+    else if (hr == static_cast<HRESULT>(WAIT_ABANDONED))
+        status = SAO_STATUS_ERR_SURFACE_INVALID;
+    else if (hr == E_INVALIDARG)
+        status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+    else if (hr == E_HANDLE)
+        status = SAO_STATUS_ERR_HANDLE_INVALID;
+    else if (hr == E_ACCESSDENIED)
+        status = SAO_STATUS_ERR_ACCESS_DENIED;
+    else if (hr == E_NOINTERFACE || hr == E_NOTIMPL || hr == DXGI_ERROR_UNSUPPORTED)
+        status = SAO_STATUS_ERR_CAPABILITY_MISSING;
+    else if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET ||
+             hr == DXGI_ERROR_DEVICE_HUNG || hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR)
+        status = SAO_STATUS_ERR_DEVICE_LOST;
+    layer->shared_state.last_hresult = hr;
+    layer->shared_state.last_status = status;
+    return status;
+}
+
+HRESULT shared_device_capabilities(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
+    if (device == nullptr || context == nullptr)
+        return DXGI_ERROR_UNSUPPORTED;
+    const HRESULT removed = device->GetDeviceRemovedReason();
+    if (removed != S_OK)
+        return removed;
+    if (device->GetFeatureLevel() < D3D_FEATURE_LEVEL_10_0)
+        return DXGI_ERROR_UNSUPPORTED;
+    for (const DXGI_FORMAT format : {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM}) {
+        UINT support = 0;
+        const HRESULT hr = device->CheckFormatSupport(format, &support);
+        if (hr != S_OK)
+            return hr;
+        const UINT required = D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE |
+                              (format == DXGI_FORMAT_B8G8R8A8_UNORM
+                             ? D3D11_FORMAT_SUPPORT_RENDER_TARGET |
+                                 D3D11_FORMAT_SUPPORT_BLENDABLE
+                             : 0u);
+        if ((support & required) != required)
+            return DXGI_ERROR_UNSUPPORTED;
     }
-    if (layer->shared_staging != nullptr) {
-        layer->shared_staging->Release();
-        layer->shared_staging = nullptr;
+    return S_OK;
+}
+
+HRESULT open_shared_texture(ID3D11Device* device, const SaoUiSharedTextureSource& source,
+                            std::unique_ptr<SharedTextureImport>* out_import) {
+    auto candidate = std::make_unique<SharedTextureImport>();
+    const auto handle = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(source.shared_handle));
+    HRESULT hr = S_OK;
+    if (source.handle_kind == SAO_UI_SHARED_HANDLE_NT) {
+        Microsoft::WRL::ComPtr<ID3D11Device1> device1;
+        hr = device->QueryInterface(IID_PPV_ARGS(device1.GetAddressOf()));
+        if (hr != S_OK)
+            return hr;
+        hr = device1->OpenSharedResource1(handle, IID_PPV_ARGS(candidate->texture.GetAddressOf()));
+    } else {
+        hr = device->OpenSharedResource(handle, IID_PPV_ARGS(candidate->texture.GetAddressOf()));
     }
-    if (layer->shared_texture != nullptr) {
-        layer->shared_texture->Release();
-        layer->shared_texture = nullptr;
+    if (hr != S_OK)
+        return hr;
+    if (candidate->texture == nullptr)
+        return E_FAIL;
+    D3D11_TEXTURE2D_DESC desc{};
+    candidate->texture->GetDesc(&desc);
+    const bool nt = (desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE) != 0;
+    const bool keyed = (desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) != 0;
+    if (desc.Width != source.width || desc.Height != source.height ||
+        desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1 ||
+        desc.SampleDesc.Quality != 0 || desc.Usage != D3D11_USAGE_DEFAULT ||
+        desc.CPUAccessFlags != 0 ||
+        (desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) ||
+        nt != (source.handle_kind == SAO_UI_SHARED_HANDLE_NT) ||
+        (nt && !keyed) ||
+        (!nt && !keyed && (desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED) == 0))
+        return E_INVALIDARG;
+    if (keyed) {
+        hr = candidate->texture.As(&candidate->keyed_mutex);
+        if (hr != S_OK)
+            return hr;
+    }
+    UINT support = 0;
+    hr = device->CheckFormatSupport(desc.Format, &support);
+    if (hr != S_OK)
+        return hr;
+    constexpr UINT required = D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE;
+    if ((support & required) != required)
+        return DXGI_ERROR_UNSUPPORTED;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.MiscFlags = 0;
+    hr = device->CreateTexture2D(&desc, nullptr, candidate->private_texture.GetAddressOf());
+    if (hr == S_OK)
+        hr = device->CreateShaderResourceView(candidate->private_texture.Get(), nullptr,
+                                              candidate->private_srv.GetAddressOf());
+    if (hr == S_OK)
+        hr = device->GetDeviceRemovedReason();
+    if (hr == S_OK)
+        *out_import = std::move(candidate);
+    return hr;
+}
+
+bool shared_frame_ready(const sao_ui_layer_s* layer) noexcept {
+    return layer->shared_state.active != 0 && layer->shared_import != nullptr &&
+           layer->shared_import->private_srv != nullptr;
+}
+
+HRESULT read_shared_alpha(sao_ui_layer_s* layer, ID3D11Device* device,
+                          ID3D11DeviceContext* context) {
+    auto& imported = *layer->shared_import;
+    if (imported.staging == nullptr) {
+        D3D11_TEXTURE2D_DESC desc{};
+        imported.private_texture->GetDesc(&desc);
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        const HRESULT hr = device->CreateTexture2D(&desc, nullptr, imported.staging.GetAddressOf());
+        if (hr != S_OK)
+            return hr;
+    }
+    std::vector<uint8_t> alpha(static_cast<size_t>(layer->shared_width) * layer->shared_height * 4u);
+    context->CopyResource(imported.staging.Get(), imported.private_texture.Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    const HRESULT hr = context->Map(imported.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (hr != S_OK)
+        return hr;
+    const D3dUnmapGuard unmap_guard{context, imported.staging.Get()};
+    for (uint32_t y = 0; y < layer->shared_height; ++y) {
+        const auto* src = static_cast<const uint8_t*>(mapped.pData) +
+                          static_cast<size_t>(y) * mapped.RowPitch;
+        auto* dst = alpha.data() + static_cast<size_t>(y) * layer->shared_width * 4u;
+        for (uint32_t x = 0; x < layer->shared_width; ++x)
+            dst[x * 4u + 3u] = src[x * 4u + 3u];
+    }
+    layer->bgra_pixels = std::move(alpha);
+    layer->bgra_width = layer->shared_width;
+    layer->bgra_height = layer->shared_height;
+    layer->bgra_stride = layer->shared_width * 4u;
+    layer->shared_bgra_cache = true;
+    return S_OK;
+}
+
+void refresh_shared_alpha_locked(sao_ui_layer_s* layer, ID3D11Device* device,
+                                 ID3D11DeviceContext* context, bool frame_changed) {
+    if (frame_changed && layer->shared_bgra_cache)
+        clear_bgra_cache(layer);
+    if (!shared_frame_ready(layer) || !layer->mmf_name.empty() || !layer->input_enabled ||
+        layer->click_through || layer->rect_hit || !layer->input_rects.empty() ||
+        (!frame_changed && layer->shared_bgra_cache))
+        return;
+    clear_bgra_cache(layer);
+    mark_layer_dirty(layer, true);
+    HRESULT hr = S_OK;
+    try {
+        hr = read_shared_alpha(layer, device, context);
+    } catch (const std::bad_alloc&) {
+        hr = E_OUTOFMEMORY;
+    } catch (...) {
+        hr = E_FAIL;
+    }
+    if (hr != S_OK) {
+        const HRESULT removed = device->GetDeviceRemovedReason();
+        if (removed != S_OK) {
+            release_shared_texture_objects(layer);
+            shared_result(layer, removed);
+            layer->shared_state.last_status = SAO_STATUS_ERR_DEVICE_LOST;
+        } else {
+            shared_result(layer, hr);
+        }
     }
 }
 
 bool refresh_shared_texture_locked(sao_ui_layer_s* layer,
                                    sao_ui_d3d11_device_handle_t device_handle) {
-    if (layer->shared_handle == nullptr || layer->shared_width == 0 || layer->shared_height == 0 ||
-        device_handle == nullptr) {
+    if (layer->shared_handle == nullptr)
         return false;
-    }
     auto* device = static_cast<ID3D11Device*>(sao_ui_d3d11_device_ptr(device_handle));
-    if (device == nullptr) {
-        clear_bgra_cache(layer);
-        return false;
-    }
-    if (layer->shared_texture == nullptr) {
-        if (FAILED(device->OpenSharedResource(layer->shared_handle, __uuidof(ID3D11Texture2D),
-                                              reinterpret_cast<void**>(&layer->shared_texture))) ||
-            layer->shared_texture == nullptr) {
-            release_shared_texture_objects(layer);
-            clear_bgra_cache(layer);
-            return false;
-        }
-        IDXGIKeyedMutex* keyed_mutex = nullptr;
-        if (SUCCEEDED(layer->shared_texture->QueryInterface(
-                __uuidof(IDXGIKeyedMutex), reinterpret_cast<void**>(&keyed_mutex)))) {
-            layer->shared_keyed_mutex = keyed_mutex;
-        }
-    }
-    D3D11_TEXTURE2D_DESC source_desc{};
-    layer->shared_texture->GetDesc(&source_desc);
-    if (source_desc.Width != layer->shared_width || source_desc.Height != layer->shared_height) {
+    auto* context = static_cast<ID3D11DeviceContext*>(sao_ui_d3d11_device_context_ptr(device_handle));
+    if (device == nullptr || context == nullptr) {
         release_shared_texture_objects(layer);
-        clear_bgra_cache(layer);
+        shared_result(layer, DXGI_ERROR_UNSUPPORTED);
         return false;
     }
-    if (layer->shared_staging == nullptr) {
-        D3D11_TEXTURE2D_DESC staging_desc = source_desc;
-        staging_desc.Usage = D3D11_USAGE_STAGING;
-        staging_desc.BindFlags = 0;
-        staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        staging_desc.MiscFlags = 0;
-        if (FAILED(device->CreateTexture2D(&staging_desc, nullptr, &layer->shared_staging)) ||
-            layer->shared_staging == nullptr) {
-            release_shared_texture_objects(layer);
-            clear_bgra_cache(layer);
-            return false;
-        }
-    }
-    auto* context =
-        static_cast<ID3D11DeviceContext*>(sao_ui_d3d11_device_context_ptr(device_handle));
-    if (context == nullptr) {
-        clear_bgra_cache(layer);
-        return false;
-    }
-    if (FAILED(device->GetDeviceRemovedReason())) {
-        // Device was removed after we opened / allocated the shared texture,
-        // staging texture, and keyed mutex earlier in this call (or on a
-        // prior tick). Every one of those COM pointers is now dangling: the
-        // caller will observe DEVICE_LOST, tear the compositor down, and
-        // rebuild fresh. Without this cleanup the layer would keep holding
-        // released COM refs, so both the immediate rebuild and the next
-        // refresh would silently reuse invalid memory.
+    const HRESULT removed = device->GetDeviceRemovedReason();
+    if (removed != S_OK) {
         release_shared_texture_objects(layer);
-        clear_bgra_cache(layer);
+        shared_result(layer, removed);
+        layer->shared_state.last_status = SAO_STATUS_ERR_DEVICE_LOST;
         return false;
     }
-    KeyedMutexReleaseGuard keyed_guard{layer->shared_keyed_mutex, false};
-    if (layer->shared_keyed_mutex != nullptr) {
-        const HRESULT acquire_status = layer->shared_keyed_mutex->AcquireSync(
-            SAO_UI_SHARED_TEXTURE_KEYED_MUTEX_KEY, SAO_UI_SHARED_TEXTURE_KEYED_MUTEX_TIMEOUT_MS);
-        if (acquire_status == static_cast<HRESULT>(WAIT_TIMEOUT)) {
+    if (layer->shared_reopen_blocked)
+        return false;
+    try {
+        if (layer->shared_import == nullptr) {
+            if (layer->shared_state.generation == UINT64_MAX) {
+                shared_result(layer, E_FAIL);
+                layer->shared_reopen_blocked = true;
+                return false;
+            }
+            const HRESULT hr = open_shared_texture(device, layer->shared_source, &layer->shared_import);
+            if (hr != S_OK) {
+                shared_result(layer, hr);
+                layer->shared_reopen_blocked = device->GetDeviceRemovedReason() == S_OK;
+                if (!layer->shared_reopen_blocked)
+                    layer->shared_state.last_status = SAO_STATUS_ERR_DEVICE_LOST;
+                return false;
+            }
+            layer->shared_state.imported = 1;
+        }
+        auto& imported = *layer->shared_import;
+        HRESULT acquire_hr = S_OK;
+        HRESULT release_hr = S_OK;
+        HRESULT copy_hr = S_OK;
+        {
+            KeyedMutexReleaseGuard guard{imported.keyed_mutex.Get(), context,
+                                          layer->shared_source.release_key};
+            if (guard.mutex != nullptr) {
+                acquire_hr = guard.mutex->AcquireSync(layer->shared_source.acquire_key,
+                                                       layer->shared_source.timeout_ms);
+                guard.acquired = acquire_hr == S_OK;
+            }
+            if (acquire_hr == S_OK) {
+                context->CopyResource(imported.private_texture.Get(), imported.texture.Get());
+                if (guard.mutex == nullptr)
+                    context->Flush();
+                release_hr = guard.release();
+                copy_hr = device->GetDeviceRemovedReason();
+            }
+        }
+        if (acquire_hr == static_cast<HRESULT>(WAIT_TIMEOUT)) {
+            const HRESULT reason = device->GetDeviceRemovedReason();
+            if (reason != S_OK) {
+                release_shared_texture_objects(layer);
+                shared_result(layer, reason);
+                layer->shared_state.last_status = SAO_STATUS_ERR_DEVICE_LOST;
+            } else {
+                shared_result(layer, acquire_hr);
+                refresh_shared_alpha_locked(layer, device, context, false);
+            }
             return false;
         }
-        if (acquire_status != S_OK) {
+        const HRESULT hr = acquire_hr != S_OK ? acquire_hr
+                            : release_hr != S_OK ? release_hr : copy_hr;
+        if (hr != S_OK) {
             release_shared_texture_objects(layer);
-            clear_bgra_cache(layer);
+            shared_result(layer, hr);
+            layer->shared_reopen_blocked = device->GetDeviceRemovedReason() == S_OK;
+            if (!layer->shared_reopen_blocked)
+                layer->shared_state.last_status = SAO_STATUS_ERR_DEVICE_LOST;
             return false;
         }
-        keyed_guard.acquired = true;
+        layer->shared_state.active = 1;
+        if (layer->shared_state.acquired_frames != UINT64_MAX)
+            ++layer->shared_state.acquired_frames;
+        shared_result(layer, S_OK);
+        mark_layer_dirty(layer, true);
+        refresh_shared_alpha_locked(layer, device, context, true);
+        return true;
+    } catch (const std::bad_alloc&) {
+        shared_result(layer, E_OUTOFMEMORY);
+    } catch (...) {
+        shared_result(layer, E_FAIL);
     }
-    context->CopyResource(layer->shared_staging, layer->shared_texture);
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(layer->shared_staging, 0, D3D11_MAP_READ, 0, &mapped))) {
-        clear_bgra_cache(layer);
-        return false;
-    }
-    const D3dUnmapGuard unmap_guard{context, layer->shared_staging};
-    const size_t pixel_count = static_cast<size_t>(layer->shared_width) * layer->shared_height;
-    std::vector<uint8_t> converted(pixel_count * 4u);
-    for (uint32_t y = 0; y < layer->shared_height; ++y) {
-        const uint8_t* src =
-            static_cast<const uint8_t*>(mapped.pData) + static_cast<size_t>(y) * mapped.RowPitch;
-        uint8_t* dst = converted.data() + static_cast<size_t>(y) * layer->shared_width * 4u;
-        for (uint32_t x = 0; x < layer->shared_width; ++x) {
-            const uint8_t alpha = src[x * 4u + 3u];
-            dst[x * 4u + 0u] = scale_alpha(src[x * 4u + 2u], alpha);
-            dst[x * 4u + 1u] = scale_alpha(src[x * 4u + 1u], alpha);
-            dst[x * 4u + 2u] = scale_alpha(src[x * 4u + 0u], alpha);
-            dst[x * 4u + 3u] = alpha;
-        }
-    }
-    layer->bgra_pixels = std::move(converted);
-    layer->bgra_width = layer->shared_width;
-    layer->bgra_height = layer->shared_height;
-    layer->bgra_stride = layer->shared_width * 4u;
-    mark_layer_dirty(layer, true);
-    return true;
+    return false;
 }
 
 bool compose_premultiplied_bgra_locked(const sao_ui_compositor_s* comp, void* d3d11_device_ptr,
@@ -1261,7 +1463,7 @@ struct MasterLayerConstants {
     float origin[2];
     float size[2];
     float opacity;
-    float padding;
+    float straight_alpha;
 };
 static_assert(sizeof(MasterLayerConstants) == 32u);
 
@@ -1399,7 +1601,8 @@ bool has_visible_native_layer_locked(const sao_ui_compositor_s* compositor) {
         return false;
     return std::ranges::any_of(compositor->layers, [](const auto& layer) {
         return !layer->composition_input_proxy && layer->visible && layer->alpha > 0.0F &&
-               (is_native_gpu_layer(layer.get()) || !layer->bgra_pixels.empty());
+               (is_native_gpu_layer(layer.get()) || layer->shared_handle != nullptr ||
+                !layer->bgra_pixels.empty());
     });
 }
 
@@ -1427,14 +1630,16 @@ bool gpu_composition_extent_locked(const sao_ui_compositor_s* compositor, uint32
     for (const auto& layer : compositor->layers) {
         if (layer->composition_input_proxy || !layer->visible || layer->alpha <= 0.0F)
             continue;
-        const uint32_t width = layer->paint_commands != nullptr ? layer->paint_width
+        const uint32_t width = shared_frame_ready(layer.get()) ? layer->shared_width
+                              : layer->paint_commands != nullptr ? layer->paint_width
+                              : layer->d3d11_render_fn != nullptr
+                                  ? static_cast<uint32_t>(std::max(0, layer->width))
+                                  : layer->bgra_width;
+        const uint32_t height = shared_frame_ready(layer.get()) ? layer->shared_height
+                               : layer->paint_commands != nullptr ? layer->paint_height
                                : layer->d3d11_render_fn != nullptr
-                                   ? static_cast<uint32_t>(std::max(0, layer->width))
-                                   : layer->bgra_width;
-        const uint32_t height = layer->paint_commands != nullptr ? layer->paint_height
-                                : layer->d3d11_render_fn != nullptr
-                                    ? static_cast<uint32_t>(std::max(0, layer->height))
-                                    : layer->bgra_height;
+                                   ? static_cast<uint32_t>(std::max(0, layer->height))
+                                   : layer->bgra_height;
         right = std::max(right, static_cast<int64_t>(layer->x) + width);
         bottom = std::max(bottom, static_cast<int64_t>(layer->y) + height);
         if ((layer->effects.flags & SAO_UI_LAYER_EFFECT_SHADOW) != 0u) {
@@ -1470,6 +1675,8 @@ sao_status_t compose_native_layers_gpu_locked(sao_ui_compositor_s* compositor, f
         sao_ui_d3d11_device_context_ptr(compositor->d3d11_device));
     if (device == nullptr || context == nullptr)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
+    if (device->GetDeviceRemovedReason() != S_OK)
+        return SAO_STATUS_ERR_DEVICE_LOST;
 
     if (!gpu_composition_extent_locked(compositor, out_width, out_height))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -1482,12 +1689,19 @@ sao_status_t compose_native_layers_gpu_locked(sao_ui_compositor_s* compositor, f
     D3D11_VIEWPORT viewport{
         0.0F, 0.0F, static_cast<float>(*out_width), static_cast<float>(*out_height), 0.0F, 1.0F};
     const auto draw_surface = [&](ID3D11ShaderResourceView* surface, int32_t x, int32_t y,
-                                  uint32_t width, uint32_t height, float opacity) -> sao_status_t {
-        ID3D11RenderTargetView* target = compositor->gpu_master_rtv;
+                                  uint32_t width, uint32_t height, float opacity,
+                                  bool straight_alpha = false,
+                                  ID3D11RenderTargetView* output = nullptr) -> sao_status_t {
+        ID3D11RenderTargetView* target = output != nullptr ? output : compositor->gpu_master_rtv;
+        D3D11_VIEWPORT draw_viewport = viewport;
+        if (output != nullptr) {
+            draw_viewport.Width = static_cast<float>(width);
+            draw_viewport.Height = static_cast<float>(height);
+        }
         context->OMSetRenderTargets(1, &target, nullptr);
         context->OMSetDepthStencilState(compositor->gpu_master_depth, 0);
         context->RSSetState(compositor->gpu_master_rasterizer);
-        context->RSSetViewports(1, &viewport);
+        context->RSSetViewports(1, &draw_viewport);
         context->SetPredication(nullptr, FALSE);
         context->IASetInputLayout(nullptr);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1501,11 +1715,11 @@ sao_status_t compose_native_layers_gpu_locked(sao_ui_compositor_s* compositor, f
                                 &mapped)))
             return gpu_failure_status(device);
         auto* constants = static_cast<MasterLayerConstants*>(mapped.pData);
-        *constants = {{static_cast<float>(*out_width), static_cast<float>(*out_height)},
+        *constants = {{draw_viewport.Width, draw_viewport.Height},
                       {static_cast<float>(x), static_cast<float>(y)},
                       {static_cast<float>(width), static_cast<float>(height)},
                       opacity,
-                      0.0F};
+                      straight_alpha ? 1.0F : 0.0F};
         context->Unmap(compositor->gpu_master_constants, 0);
         ID3D11Buffer* cb = compositor->gpu_master_constants;
         context->VSSetConstantBuffers(0, 1, &cb);
@@ -1526,7 +1740,21 @@ sao_status_t compose_native_layers_gpu_locked(sao_ui_compositor_s* compositor, f
             continue;
         uint32_t layer_width = layer->bgra_width;
         uint32_t layer_height = layer->bgra_height;
-        if (is_native_gpu_layer(layer)) {
+        if (shared_frame_ready(layer)) {
+            layer_width = layer->shared_width;
+            layer_height = layer->shared_height;
+            if (!ensure_layer_gpu_surface(layer, device, layer_width, layer_height, true))
+                return gpu_failure_status(device);
+            context->OMSetRenderTargets(0, nullptr, nullptr);
+            context->ClearRenderTargetView(layer->gpu_rtv, transparent);
+            const sao_status_t convert_status = draw_surface(
+                layer->shared_import->private_srv.Get(), 0, 0, layer_width, layer_height,
+                1.0F, true, layer->gpu_rtv);
+            if (convert_status != SAO_STATUS_OK)
+                return convert_status;
+            context->OMSetRenderTargets(0, nullptr, nullptr);
+            layer->gpu_uploaded_revision = UINT64_MAX;
+        } else if (is_native_gpu_layer(layer)) {
             layer_width = layer->paint_commands != nullptr
                               ? layer->paint_width
                               : static_cast<uint32_t>(std::max(0, layer->width));
@@ -1574,7 +1802,8 @@ sao_status_t compose_native_layers_gpu_locked(sao_ui_compositor_s* compositor, f
                 layer->gpu_uploaded_revision = source_revision;
             }
         } else {
-            if (layer->bgra_pixels.empty() || layer_width == 0 || layer_height == 0)
+            if (layer->shared_bgra_cache || layer->bgra_pixels.empty() ||
+                layer_width == 0 || layer_height == 0)
                 continue;
             if (!ensure_layer_gpu_surface(layer, device, layer_width, layer_height, false))
                 return gpu_failure_status(device);
@@ -1879,6 +2108,7 @@ void refresh_mmf_source_locked(sao_ui_layer_s* layer) {
         }
     }
     layer->bgra_pixels = std::move(snapshot);
+    layer->shared_bgra_cache = false;
     layer->bgra_width = before.frame_width;
     layer->bgra_height = before.frame_height;
     layer->bgra_stride = before.frame_width * 4u;
@@ -2050,8 +2280,8 @@ void invalidate_presentation_bridge_after_device_loss(
     sao_ui_dcomp_bridge_handle_t failed_bridge = nullptr;
     try {
         {
-            compositor->presented_bridge = nullptr;
             std::lock_guard lock(compositor->mtx);
+            compositor->presented_bridge = nullptr;
             release_all_composition_visuals_locked(compositor);
 #if defined(_WIN32)
             for (const auto& layer : compositor->layers) {
@@ -2180,6 +2410,8 @@ bool advance_layer_animations_and_callbacks(sao_ui_compositor_s* comp) {
 #if defined(_WIN32)
             (void)refresh_shared_texture_locked(layer, comp->d3d11_device);
 #endif
+            if (layer->shared_handle != nullptr)
+                detach_invalid_input_layer_locked(comp, layer, &input_invocations);
             if (layer->fade_active) {
                 const float elapsed =
                     std::chrono::duration<float>(now - layer->fade_started).count();
@@ -2255,7 +2487,8 @@ bool compose_premultiplied_bgra_locked(const sao_ui_compositor_s* comp, void* d3
     *out_has_visible_alpha = false;
     for (size_t index = bounded_begin; index < bounded_end; ++index) {
         const auto& layer = comp->layers[index];
-        if (layer->composition_input_proxy || !layer->visible || layer->bgra_pixels.empty() ||
+        if (layer->composition_input_proxy || layer->shared_bgra_cache || !layer->visible ||
+            layer->bgra_pixels.empty() ||
             layer->bgra_width == 0 ||
             layer->bgra_height == 0) {
             continue;
@@ -2298,7 +2531,8 @@ bool compose_premultiplied_bgra_locked(const sao_ui_compositor_s* comp, void* d3
 
     for (size_t index = bounded_begin; index < bounded_end; ++index) {
         const auto& layer = comp->layers[index];
-        if (layer->composition_input_proxy || !layer->visible || layer->bgra_pixels.empty() ||
+        if (layer->composition_input_proxy || layer->shared_bgra_cache || !layer->visible ||
+            layer->bgra_pixels.empty() ||
             layer->bgra_width == 0 ||
             layer->bgra_height == 0 || layer->alpha <= 0.0f) {
             continue;
@@ -3176,6 +3410,7 @@ extern "C" void SAO_UI_CALL sao_ui_layer_destroy(sao_ui_layer_handle_t layer) {
             }
             comp->pending_layer_destroys.push_back(std::move(*it));
             comp->layers.erase(it);
+            comp->presented_bridge = nullptr;
         }
         if (invoke_leave)
             (void)invoke_input_callback(leave);
@@ -3404,6 +3639,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_update_bgra(sao_ui_layer_handle
                 }
             }
             active->bgra_pixels = std::move(snapshot);
+            active->shared_bgra_cache = false;
             active->paint_commands.reset();
             active->paint_width = 0;
             active->paint_height = 0;
@@ -3441,45 +3677,174 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_shared_texture(sao_ui_layer
                                                                     void* shared_handle,
                                                                     uint32_t width,
                                                                     uint32_t height) {
-    if (layer == nullptr)
-        return SAO_STATUS_ERR_HANDLE_INVALID;
-    if (shared_handle != nullptr && (width == 0 || height == 0)) {
-        return SAO_STATUS_ERR_INVALID_ARGUMENT;
-    }
-    if (shared_handle != nullptr) {
-        size_t shared_bytes = 0;
-        if (!checked_bgra_buffer_size(width, height, &shared_bytes)) {
-            return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        }
-        (void)shared_bytes;
-    }
-    sao_ui_compositor_s* comp = layer->owner;
+    const SaoUiSharedTextureSource source{
+        sizeof(SaoUiSharedTextureSource), SAO_UI_SHARED_HANDLE_LEGACY_DXGI,
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(shared_handle)),
+        width, height, 0, 0, 8, 0};
+    return sao_ui_layer_set_shared_texture_ex(layer, &source);
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_shared_texture_ex(
+    sao_ui_layer_handle_t layer, const SaoUiSharedTextureSource* source) {
     return with_active_layer_locked(
-        comp, layer,
-        [shared_handle, width, height](sao_ui_compositor_s* owner, sao_ui_layer_s* active) {
-            if (std::this_thread::get_id() != owner->render_thread) {
+        layer, [source](sao_ui_compositor_s* owner, sao_ui_layer_s* active) -> sao_status_t {
+            if (std::this_thread::get_id() != owner->render_thread)
                 return SAO_STATUS_ERR_ACCESS_DENIED;
+            if (source != nullptr && source->struct_size <
+                    offsetof(SaoUiSharedTextureSource, width)) {
+                active->shared_state.last_status = SAO_STATUS_ERR_ABI_MISMATCH;
+                active->shared_state.last_hresult = static_cast<int32_t>(0x80070057u);
+                return SAO_STATUS_ERR_ABI_MISMATCH;
             }
-            if (shared_handle != nullptr &&
-                (!valid_composition_extent(active->x, active->y, width, height) ||
-                 width > static_cast<uint32_t>(active->width) ||
-                 height > static_cast<uint32_t>(active->height))) {
+            const bool clear = source == nullptr || source->shared_handle == 0;
+            if (!clear && source->struct_size < sizeof(SaoUiSharedTextureSource)) {
+                active->shared_state.last_status = SAO_STATUS_ERR_ABI_MISMATCH;
+                active->shared_state.last_hresult = static_cast<int32_t>(0x80070057u);
+                return SAO_STATUS_ERR_ABI_MISMATCH;
+            }
+            if (!clear && active->shared_state.generation == UINT64_MAX)
+                return SAO_STATUS_ERR_INTERNAL;
+            SaoUiSharedTextureSource requested{};
+            if (!clear)
+                requested = *source;
+            size_t bytes = 0;
+            if (!clear &&
+                (requested.reserved != 0 || requested.handle_kind > SAO_UI_SHARED_HANDLE_NT ||
+                 requested.shared_handle > UINTPTR_MAX ||
+                 !checked_bgra_buffer_size(requested.width, requested.height, &bytes) ||
+                 !valid_composition_extent(active->x, active->y, requested.width, requested.height) ||
+                 requested.width > static_cast<uint32_t>(active->width) ||
+                 requested.height > static_cast<uint32_t>(active->height) ||
+                 active->d3d11_render_fn != nullptr)) {
+                active->shared_state.last_status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+                active->shared_state.last_hresult = static_cast<int32_t>(0x80070057u);
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
+            requested.struct_size = sizeof(requested);
+            requested.timeout_ms = std::min(requested.timeout_ms, 8u);
 #if defined(_WIN32)
-            release_shared_texture_objects(active);
+            OwnedNtSharedHandle nt_handle;
+            std::unique_ptr<SharedTextureImport> imported;
+            if (!clear) {
+                auto* device = static_cast<ID3D11Device*>(sao_ui_d3d11_device_ptr(owner->d3d11_device));
+                auto* context = static_cast<ID3D11DeviceContext*>(
+                    sao_ui_d3d11_device_context_ptr(owner->d3d11_device));
+                HRESULT hr = shared_device_capabilities(device, context);
+                if (hr != S_OK) {
+                    if (device != nullptr && device->GetDeviceRemovedReason() != S_OK)
+                        release_shared_texture_objects(active);
+                    return shared_result(active, hr);
+                }
+                if (requested.handle_kind == SAO_UI_SHARED_HANDLE_NT) {
+                    HANDLE duplicate = nullptr;
+                    if (!::DuplicateHandle(::GetCurrentProcess(),
+                                           reinterpret_cast<HANDLE>(static_cast<uintptr_t>(requested.shared_handle)),
+                                           ::GetCurrentProcess(), &duplicate, 0, FALSE,
+                                           DUPLICATE_SAME_ACCESS))
+                        return shared_result(active, HRESULT_FROM_WIN32(::GetLastError()));
+                    nt_handle.reset(duplicate);
+                    requested.shared_handle = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(duplicate));
+                }
+                try {
+                    hr = open_shared_texture(device, requested, &imported);
+                } catch (const std::bad_alloc&) {
+                    hr = E_OUTOFMEMORY;
+                } catch (...) {
+                    hr = E_FAIL;
+                }
+                if (hr != S_OK) {
+                    if (device->GetDeviceRemovedReason() != S_OK)
+                        release_shared_texture_objects(active);
+                    return shared_result(active, hr);
+                }
+            }
+            active->shared_import = std::move(imported);
+            active->shared_nt_handle = std::move(nt_handle);
+            release_layer_gpu_surface(active);
+#else
+            if (!clear) {
+                active->shared_state.last_status = SAO_STATUS_ERR_CAPABILITY_MISSING;
+                active->shared_state.last_hresult = 0;
+                return SAO_STATUS_ERR_CAPABILITY_MISSING;
+            }
 #endif
-            clear_bgra_cache(active);
-            active->shared_handle = shared_handle;
-            if (shared_handle != nullptr) {
+            if (active->mmf_name.empty() || active->shared_bgra_cache) {
+                clear_bgra_cache(active);
+            } else if (!clear && (active->bgra_width != requested.width ||
+                                  active->bgra_height != requested.height)) {
+                clear_bgra_cache(active);
+                reset_mmf_generation(active);
+            }
+            active->shared_handle = reinterpret_cast<void*>(static_cast<uintptr_t>(requested.shared_handle));
+            active->shared_source = requested;
+            active->shared_width = requested.width;
+            active->shared_height = requested.height;
+            active->shared_reopen_blocked = false;
+            const uint64_t generation = active->shared_state.generation;
+            active->shared_state = {};
+            active->shared_state.struct_size = sizeof(SaoUiSharedTextureState);
+            active->shared_state.configured = clear ? 0u : 1u;
+            active->shared_state.imported = clear ? 0u : 1u;
+            active->shared_state.width = requested.width;
+            active->shared_state.height = requested.height;
+            active->shared_state.generation = generation == UINT64_MAX ? generation : generation + 1u;
+            if (!clear) {
                 active->paint_commands.reset();
                 active->paint_width = active->paint_height = 0;
             }
-            active->shared_width = shared_handle == nullptr ? 0 : width;
-            active->shared_height = shared_handle == nullptr ? 0 : height;
-            mark_layer_dirty(active);
+            mark_layer_dirty(active, true);
             return SAO_STATUS_OK;
         });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_get_shared_texture_state(
+    sao_ui_layer_handle_t layer, SaoUiSharedTextureState* out_state) {
+    if (out_state == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (out_state->struct_size < sizeof(SaoUiSharedTextureState))
+        return SAO_STATUS_ERR_ABI_MISMATCH;
+    return with_active_layer_locked(layer, [out_state](sao_ui_compositor_s* owner,
+                                                       sao_ui_layer_s* active) -> sao_status_t {
+        if (std::this_thread::get_id() != owner->render_thread)
+            return SAO_STATUS_ERR_ACCESS_DENIED;
+#if defined(_WIN32)
+        if (active->shared_import != nullptr) {
+            Microsoft::WRL::ComPtr<ID3D11Device> device;
+            active->shared_import->texture->GetDevice(device.GetAddressOf());
+            if (device->GetDeviceRemovedReason() != S_OK)
+                release_shared_texture_objects(active);
+        }
+#endif
+        *out_state = active->shared_state;
+        return SAO_STATUS_OK;
+    });
+}
+
+extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_gpu_interop_available(
+    sao_ui_compositor_handle_t compositor, bool* out_available) {
+    if (out_available == nullptr)
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    *out_available = false;
+    if (compositor == nullptr)
+        return SAO_STATUS_ERR_HANDLE_INVALID;
+    if (std::this_thread::get_id() != compositor->render_thread)
+        return SAO_STATUS_ERR_ACCESS_DENIED;
+    try {
+        std::lock_guard lock(compositor->mtx);
+#if defined(_WIN32)
+        auto* device = static_cast<ID3D11Device*>(sao_ui_d3d11_device_ptr(compositor->d3d11_device));
+        auto* context = static_cast<ID3D11DeviceContext*>(
+            sao_ui_d3d11_device_context_ptr(compositor->d3d11_device));
+        *out_available = shared_device_capabilities(device, context) == S_OK;
+        if (device != nullptr && device->GetDeviceRemovedReason() != S_OK) {
+            for (const auto& layer : compositor->layers)
+                release_shared_texture_objects(layer.get());
+        }
+#endif
+        return SAO_STATUS_OK;
+    } catch (...) {
+        return SAO_STATUS_ERR_UNKNOWN;
+    }
 }
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_render_fn(sao_ui_layer_handle_t layer,
@@ -3511,6 +3876,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_layer_set_d3d11_render_fn(
         return SAO_STATUS_ERR_ACCESS_DENIED;
     return with_active_layer_locked(owner, layer,
                                     [fn, user_data](sao_ui_compositor_s*, sao_ui_layer_s* active) {
+                                        if (fn != nullptr && active->shared_handle != nullptr)
+                                            return SAO_STATUS_ERR_INVALID_ARGUMENT;
 #if defined(_WIN32)
                                         release_layer_gpu_surface(active);
 #endif
@@ -3970,6 +4337,11 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
         return callback_failed ? SAO_STATUS_ERR_UNKNOWN : SAO_STATUS_ERR_NOT_INITIALIZED;
     }
 
+    struct PresentedRevision {
+        sao_ui_layer_s* layer;
+        uint64_t revision;
+    };
+
 #if defined(_WIN32)
     bool use_native_gpu = false;
     bool idle_frame_skip = false;
@@ -4007,6 +4379,7 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
         uint32_t gpu_width = 0;
         uint32_t gpu_height = 0;
         bool gpu_has_visible_content = false;
+        std::vector<PresentedRevision> gpu_presented_revisions;
         auto compose_and_present = [&]() -> sao_status_t {
             sao_status_t gpu_status = SAO_STATUS_OK;
             {
@@ -4031,6 +4404,12 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
                         constexpr float transparent[4]{};
                         context->ClearRenderTargetView(compositor->gpu_master_rtv, transparent);
                     }
+                }
+                gpu_presented_revisions.clear();
+                if (gpu_status == SAO_STATUS_OK) {
+                    gpu_presented_revisions.reserve(compositor->layers.size());
+                    for (const auto& layer : compositor->layers)
+                        gpu_presented_revisions.push_back({layer.get(), layer->visual_revision});
                 }
             }
             if (gpu_status == SAO_STATUS_ERR_DEVICE_LOST)
@@ -4063,18 +4442,6 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
             gpu_status = sao_ui_d3d11_device_recreate(compositor->d3d11_device, &removed_reason);
             if (gpu_status == SAO_STATUS_OK) {
                 SaoDcompBridgeConfig bridge_config{};
-                // A frame actually reached this bridge — record the
-                // chain + extent that frame represents so an identical
-                // next tick can skip the whole pipeline.
-                compositor->last_present_width = gpu_width;
-                compositor->last_present_height = gpu_height;
-                compositor->presented_bridge = compositor->dcomp_bridge;
-                uint32_t extent_w = 0;
-                uint32_t extent_h = 0;
-                if (gpu_composition_extent_locked(compositor, &extent_w, &extent_h)) {
-                    compositor->presented_extent_w = extent_w;
-                    compositor->presented_extent_h = extent_h;
-                }
                 bridge_config.hwnd = sao_ui_overlay_host_hwnd(compositor->host);
                 bridge_config.d3d11_device = sao_ui_d3d11_device_ptr(compositor->d3d11_device);
                 bridge_config.alpha_mode = 1;
@@ -4102,8 +4469,23 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
                 compositor->last_present_width = gpu_width;
                 compositor->last_present_height = gpu_height;
             }
-            for (const auto& layer : compositor->layers)
-                layer->bgra_dirty = false;
+            uint32_t extent_w = 0;
+            uint32_t extent_h = 0;
+            if (gpu_composition_extent_locked(compositor, &extent_w, &extent_h)) {
+                compositor->presented_extent_w = extent_w;
+                compositor->presented_extent_h = extent_h;
+            }
+            bool frame_current = gpu_presented_revisions.size() == compositor->layers.size();
+            for (const auto& presented : gpu_presented_revisions) {
+                const auto it = find_layer_it(compositor, presented.layer);
+                if (it != compositor->layers.end() &&
+                    (*it)->visual_revision == presented.revision) {
+                    (*it)->bgra_dirty = false;
+                } else {
+                    frame_current = false;
+                }
+            }
+            compositor->presented_bridge = frame_current ? compositor->dcomp_bridge : nullptr;
         }
         if (gpu_status == SAO_STATUS_ERR_DEVICE_LOST)
             invalidate_presentation_bridge_after_device_loss(compositor);
@@ -4113,10 +4495,6 @@ sao_status_t compositor_present_impl(sao_ui_compositor_handle_t compositor) {
     }
 #endif
 
-    struct PresentedRevision {
-        sao_ui_layer_s* layer;
-        uint64_t revision;
-    };
     std::vector<uint8_t> composed_pixels;
     std::vector<PresentedRevision> presented_revisions;
     uint32_t width = 0;
@@ -4339,6 +4717,14 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_compositor_compose_snapshot_(
         bool native_visible = false;
         {
             std::lock_guard<std::mutex> lock(compositor->mtx);
+            if (std::this_thread::get_id() == compositor->render_thread) {
+                for (const auto& layer : compositor->layers) {
+                    if (layer->shared_handle != nullptr) {
+                        refresh_mmf_source_locked(layer.get());
+                        (void)refresh_shared_texture_locked(layer.get(), compositor->d3d11_device);
+                    }
+                }
+            }
             native_visible = has_visible_native_layer_locked(compositor);
         }
         if (native_visible) {
@@ -4736,9 +5122,15 @@ sao_ui_compositor_sync_host_rgn(sao_ui_compositor_handle_t compositor) {
         for (const auto& layer : compositor->layers) {
             if (!layer->visible || layer->width <= 0 || layer->height <= 0 || layer->alpha <= 0.0f)
                 continue;
+            if (layer->shared_handle != nullptr && layer->shared_state.active == 0 &&
+                layer->bgra_pixels.empty() && layer->input_rects.empty() && !layer->rect_hit)
+                continue;
             const bool gpu_visual =
                 layer->composition_input_proxy || layer->paint_commands != nullptr ||
-                layer->d3d11_render_fn != nullptr;
+                layer->d3d11_render_fn != nullptr ||
+                (layer->shared_state.active != 0 &&
+                 (!layer->input_enabled || layer->click_through || layer->input_proxy_enabled ||
+                  layer->rect_hit || !layer->input_rects.empty() || layer->bgra_pixels.empty()));
             if (!gpu_visual &&
                 (!layer->input_enabled || layer->click_through || layer->input_proxy_enabled))
                 continue;
@@ -4932,7 +5324,8 @@ sao_ui_compositor_sync_host_input_mode(sao_ui_compositor_handle_t compositor) {
         for (const auto& layer : compositor->layers) {
             if (layer->visible && layer->input_enabled && !layer->click_through &&
                 !layer->input_proxy_enabled && layer->alpha > 0.0f &&
-                (!layer->input_rects.empty() || layer->rect_hit || layer->bgra_pixels.empty() ||
+                (!layer->input_rects.empty() || layer->rect_hit ||
+                 (layer->bgra_pixels.empty() && layer->shared_handle == nullptr) ||
                  has_nonzero_bgra_alpha(layer.get()))) {
                 interactive = true;
                 if (layer->composition_input_proxy && layer->composition_slot != nullptr &&

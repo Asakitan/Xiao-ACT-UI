@@ -382,6 +382,7 @@ sao_status_t render_live_impl(const uint8_t* source_bgra, size_t source_bytes,
                 216.0F,
             };
             apply_sao_glass_details(x, y, width, height, &pixel);
+            pixel.a = 255.0F;
             write_premultiplied_pixel(output_row + static_cast<size_t>(x) * kBytesPerPixel, pixel);
         }
     }
@@ -411,10 +412,10 @@ struct sao_ui_fisheye_backdrop_s {
     uint64_t applied_revision{0};
     sao::ui::fisheye_gpu::Renderer* gpu{};
     bool gpu_bound{};
-    bool fade_target{};
-    float opacity{};
-    float fade_from{};
-    uint32_t fade_elapsed{};
+    bool reveal_target{};
+    float openness{};
+    float reveal_from{};
+    uint32_t reveal_elapsed{};
     bool theme_initialized{};
     float theme_mix{};
     float theme_from{};
@@ -460,37 +461,16 @@ sao_status_t desktop_capture_rect(sao_ui_fisheye_backdrop_s* backdrop,
     if (host_status != SAO_STATUS_OK) {
         return host_status;
     }
-    // DPI-aware: host_local_rect is in host logical pixels, host_rect origin
-    // is in desktop physical pixels. Scale the local extent up by host_dpi/96
-    // before adding to the desktop origin so DXGI capture reads the correct
-    // physical rectangle on 120/144 DPI monitors. host_dpi == 96 is a no-op.
-    const uint32_t host_dpi = sao_ui_overlay_host_current_dpi(host);
-    const uint32_t dpi = host_dpi == 0u ? 96u : host_dpi;
-    int64_t local_x = host_local_rect.x;
-    int64_t local_y = host_local_rect.y;
-    int64_t local_w = host_local_rect.width;
-    int64_t local_h = host_local_rect.height;
-    if (dpi != 96u) {
-        local_x = local_x * static_cast<int64_t>(dpi) / static_cast<int64_t>(96);
-        local_y = local_y * static_cast<int64_t>(dpi) / static_cast<int64_t>(96);
-        local_w = local_w * static_cast<int64_t>(dpi) / static_cast<int64_t>(96);
-        local_h = local_h * static_cast<int64_t>(dpi) / static_cast<int64_t>(96);
-    }
-    const int64_t desktop_x = static_cast<int64_t>(host_rect.x) + local_x;
-    const int64_t desktop_y = static_cast<int64_t>(host_rect.y) + local_y;
+    const int64_t desktop_x = static_cast<int64_t>(host_rect.x) + host_local_rect.x;
+    const int64_t desktop_y = static_cast<int64_t>(host_rect.y) + host_local_rect.y;
     if (desktop_x < std::numeric_limits<int32_t>::min() ||
         desktop_x > std::numeric_limits<int32_t>::max() ||
         desktop_y < std::numeric_limits<int32_t>::min() ||
-        desktop_y > std::numeric_limits<int32_t>::max() ||
-        local_w < 0 || local_h < 0 ||
-        local_w > std::numeric_limits<int32_t>::max() ||
-        local_h > std::numeric_limits<int32_t>::max()) {
+        desktop_y > std::numeric_limits<int32_t>::max()) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
     out_desktop_rect->x = static_cast<int32_t>(desktop_x);
     out_desktop_rect->y = static_cast<int32_t>(desktop_y);
-    out_desktop_rect->width = static_cast<int32_t>(local_w);
-    out_desktop_rect->height = static_cast<int32_t>(local_h);
     return valid_rect(*out_desktop_rect) ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT;
 }
 
@@ -588,7 +568,8 @@ bool wait_for_live_work(sao_ui_fisheye_backdrop_s* backdrop, std::stop_token sto
                backdrop->desired_mode != SAO_UI_FISHEYE_BACKDROP_MODE_LIVE ||
                (backdrop->desired_visible &&
                 backdrop->desired_mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE &&
-                backdrop->layer != nullptr && valid_rect(backdrop->desired_geometry.rect));
+                backdrop->layer != nullptr && backdrop->applied_revision == backdrop->desired_revision &&
+                valid_rect(backdrop->desired_geometry.rect));
     });
     if (!ready || stop_token.stop_requested() || backdrop->destroying ||
         !backdrop->desired_visible || backdrop->desired_mode != SAO_UI_FISHEYE_BACKDROP_MODE_LIVE) {
@@ -602,17 +583,21 @@ bool wait_for_live_work(sao_ui_fisheye_backdrop_s* backdrop, std::stop_token sto
 
 sao_status_t upload_live_if_current(sao_ui_fisheye_backdrop_s* backdrop,
                                     const BackdropGeometry& geometry, sao_ui_layer_handle_t layer,
-                                    uint64_t revision, const std::vector<uint8_t>& frame) {
+                                    uint64_t revision, std::vector<uint8_t>& frame,
+                                    uint32_t width, uint32_t height) {
     std::lock_guard lock(backdrop->mutex);
     if (backdrop->destroying || !backdrop->desired_visible ||
         backdrop->desired_mode != SAO_UI_FISHEYE_BACKDROP_MODE_LIVE ||
         backdrop->desired_revision != revision || backdrop->layer != layer ||
+        backdrop->applied_revision != revision ||
         !same_geometry(backdrop->desired_geometry, geometry)) {
         return SAO_STATUS_ERR_CANCELLED;
     }
-    const uint32_t width = static_cast<uint32_t>(geometry.rect.width);
-    const uint32_t height = static_cast<uint32_t>(geometry.rect.height);
+#if defined(_WIN32)
+    return sao::ui::fisheye_gpu::publish_live(backdrop->gpu, frame, width, height);
+#else
     return sao_ui_layer_update_bgra(layer, frame.data(), width, height, width * kBytesPerPixel);
+#endif
 }
 
 void wait_live_retry(sao_ui_fisheye_backdrop_s* backdrop, std::stop_token stop_token,
@@ -752,7 +737,8 @@ void live_worker(std::stop_token stop_token, sao_ui_fisheye_backdrop_s* backdrop
                                           frame.rotation, capture_rect, &warped);
             }
             if (status == SAO_STATUS_OK) {
-                status = upload_live_if_current(backdrop, geometry, layer, revision, warped);
+                status = upload_live_if_current(backdrop, geometry, layer, revision, warped,
+                    static_cast<uint32_t>(capture_rect.width), static_cast<uint32_t>(capture_rect.height));
             }
             if (status == SAO_STATUS_ERR_CANCELLED) {
                 continue;
@@ -780,6 +766,7 @@ void live_worker(std::stop_token stop_token, sao_ui_fisheye_backdrop_s* backdrop
     backdrop->live_available = false;
 }
 
+#if !defined(_WIN32)
 sao_status_t render_procedural_vector(const SaoUiFisheyeBackdropRect& rect,
                                       std::vector<uint8_t>* out_frame) {
     const uint32_t width = static_cast<uint32_t>(rect.width);
@@ -797,10 +784,12 @@ sao_status_t render_procedural_vector(const SaoUiFisheyeBackdropRect& rect,
     return render_procedural_impl(width, height, stride, out_frame->data(), out_frame->size(),
                                   &required);
 }
+#endif
 
 #if defined(_WIN32)
-sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGeometry& geometry,
-                              bool visible, uint64_t revision, uint32_t delta_ms) {
+sao_status_t tick_visual(sao_ui_fisheye_backdrop_s* handle, const BackdropGeometry& geometry,
+                         SaoUiFisheyeBackdropMode mode, bool visible, uint64_t revision,
+                         uint32_t delta_ms) {
     sao::ui::detail::MenuSceneFrame scene_frame{};
     const bool coordinated = sao::ui::detail::read_menu_scene(handle->compositor, scene_frame);
     const bool high_contrast = sao::ui::detail::panel_theme_high_contrast() ||
@@ -811,13 +800,15 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
     const sao_status_t theme_status = sao_ui_theme_get_active_id(&theme);
     if (theme_status != SAO_STATUS_OK) return theme_status;
     const float target_theme = theme == SAO_UI_THEME_DARK ? 1.0F : 0.0F;
-    float opacity = 0.0F;
+    float openness = 0.0F;
     float seconds = 0.0F;
     float theme_mix = target_theme;
     float theme_direction = 0.0F;
     sao_ui_layer_handle_t layer = nullptr;
     {
         std::lock_guard lock(handle->mutex);
+        if (handle->destroying || handle->desired_revision != revision)
+            return SAO_STATUS_ERR_CANCELLED;
         constexpr uint32_t theme_duration = 1000u;
         if (coordinated) {
             theme_mix = std::clamp(scene_frame.theme_progress, 0.0F, 1.0F);
@@ -832,7 +823,7 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
             handle->theme_target = target_theme;
             handle->theme_elapsed = theme_mix == target_theme ? theme_duration : 0u;
         } else {
-            if (!handle->theme_initialized || !handle->gpu_bound || handle->opacity <= 0.001F || reduced) {
+            if (!handle->theme_initialized || !handle->gpu_bound || handle->openness <= 0.0F || reduced) {
                 handle->theme_initialized = true;
                 handle->theme_mix = handle->theme_from = handle->theme_target = target_theme;
                 handle->theme_elapsed = theme_duration;
@@ -850,20 +841,25 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
             if (handle->theme_elapsed < theme_duration)
                 theme_direction = target_theme > theme_mix ? 1.0F : -1.0F;
         }
-        if (visible != handle->fade_target) {
-            handle->fade_target = visible;
-            handle->fade_from = handle->opacity;
-            handle->fade_elapsed = 0;
-            if (visible && handle->opacity <= 0.001F)
+        if (visible != handle->reveal_target) {
+            handle->reveal_target = visible;
+            handle->reveal_from = handle->openness;
+            handle->reveal_elapsed = 0;
+            if (visible && handle->openness <= 0.0F)
                 handle->visual_ms = 0;
         }
         handle->visual_ms += delta_ms;
         const uint32_t duration = visible ? 500u : 400u;
-        handle->fade_elapsed = std::min(duration, handle->fade_elapsed + delta_ms);
-        float t = reduced ? 1.0F : static_cast<float>(handle->fade_elapsed) / static_cast<float>(duration);
+        const bool waiting_for_live = visible && mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE &&
+            !sao::ui::fisheye_gpu::has_live_frame(handle->gpu);
+        if (reduced)
+            handle->reveal_elapsed = duration;
+        else if (!waiting_for_live)
+            handle->reveal_elapsed = std::min(duration, handle->reveal_elapsed + delta_ms);
+        float t = reduced ? 1.0F : static_cast<float>(handle->reveal_elapsed) / static_cast<float>(duration);
         t = t * t * (3.0F - 2.0F * t);
-        handle->opacity = handle->fade_from + ((visible ? 1.0F : 0.0F) - handle->fade_from) * t;
-        opacity = handle->opacity;
+        handle->openness = handle->reveal_from + ((visible ? 1.0F : 0.0F) - handle->reveal_from) * t;
+        openness = handle->openness;
         seconds = reduced ? 0.0F : coordinated ? scene_frame.seconds
             : static_cast<float>(handle->visual_ms) / 1000.0F;
         layer = handle->layer;
@@ -884,9 +880,16 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
         std::lock_guard lock(handle->mutex);
         handle->layer = layer;
     }
-    if (!handle->gpu) {
-        const auto status = sao::ui::fisheye_gpu::create(&handle->gpu);
-        if (status != SAO_STATUS_OK) return status;
+    {
+        std::lock_guard lock(handle->mutex);
+        if (handle->destroying || handle->desired_revision != revision)
+            return SAO_STATUS_ERR_CANCELLED;
+        if (!handle->gpu) {
+            const auto status = sao::ui::fisheye_gpu::create(&handle->gpu);
+            if (status != SAO_STATUS_OK) return status;
+            sao::ui::fisheye_gpu::set_source(handle->gpu,
+                mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE, true);
+        }
     }
     sao::ui::fisheye_gpu::Scene gpu_scene{};
     gpu_scene.high_contrast = high_contrast ? 1.0F : 0.0F;
@@ -905,8 +908,13 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
         gpu_scene.child_activity = std::clamp(scene_frame.child_activity, 0.0F, 1.0F);
         gpu_scene.fps_pressure = scene_frame.fps_pressure ? 1.0F : 0.0F;
     }
-    sao::ui::fisheye_gpu::update(handle->gpu, seconds, opacity, reduced, theme_mix, theme_direction,
-                               gpu_scene);
+    {
+        std::lock_guard lock(handle->mutex);
+        if (handle->destroying || handle->desired_revision != revision)
+            return SAO_STATUS_ERR_CANCELLED;
+        sao::ui::fisheye_gpu::update(handle->gpu, seconds, openness, reduced, theme_mix, theme_direction,
+                                   gpu_scene);
+    }
     sao_status_t status = sao_ui_layer_set_geometry(layer, geometry.rect.x, geometry.rect.y,
                                                     geometry.rect.width, geometry.rect.height);
     if (status == SAO_STATUS_OK) status = sao_ui_layer_set_alpha(layer, kBackdropOpacity);
@@ -915,20 +923,26 @@ sao_status_t tick_procedural(sao_ui_fisheye_backdrop_s* handle, const BackdropGe
         status = sao_ui_layer_set_d3d11_render_fn(layer, sao::ui::fisheye_gpu::render, handle->gpu);
         if (status == SAO_STATUS_OK) handle->gpu_bound = true;
     }
-    if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(layer, visible || opacity > 0.001F);
-    if (status == SAO_STATUS_OK && (visible || opacity > 0.001F))
+    if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(layer, visible || openness > 0.0F);
+    if (status == SAO_STATUS_OK && (visible || openness > 0.0F))
         status = sao_ui_layer_request_redraw(layer);
     {
         std::lock_guard lock(handle->mutex);
-        handle->last_status = status;
+        if (status != SAO_STATUS_OK || mode == SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL)
+            handle->last_status = status;
         if (status == SAO_STATUS_OK && handle->desired_revision == revision) {
             handle->layer_has_frame = true;
-            handle->applied_visible = visible || opacity > 0.001F;
-            handle->applied_mode = SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL;
+            handle->applied_visible = visible || openness > 0.0F;
+            handle->applied_mode = mode;
             handle->applied_geometry = geometry;
             handle->applied_revision = revision;
-            handle->live_available = false;
-            ++handle->frame_generation;
+            if (mode == SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL) {
+                handle->live_available = false;
+                ++handle->frame_generation;
+            }
+            if (!visible && openness <= 0.0F)
+                sao::ui::fisheye_gpu::set_source(handle->gpu,
+                    mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE, true);
         }
     }
     return status;
@@ -1036,6 +1050,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_fisheye_backdrop_set_mode(
         }
         handle->desired_mode = mode;
         ++handle->desired_revision;
+        sao::ui::fisheye_gpu::set_source(handle->gpu,
+            mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE, true);
         handle->live_available = false;
         handle->last_status = mode == SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL
                                   ? SAO_STATUS_OK
@@ -1079,6 +1095,9 @@ sao_ui_fisheye_backdrop_show(sao_ui_fisheye_backdrop_handle_t handle,
         if (handle->desired_visible && same_geometry(handle->desired_geometry, requested)) {
             return SAO_STATUS_OK;
         }
+        if (!same_geometry(handle->desired_geometry, requested))
+            sao::ui::fisheye_gpu::set_source(handle->gpu,
+                handle->desired_mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE, true);
         handle->desired_visible = true;
         handle->desired_geometry = requested;
         ++handle->desired_revision;
@@ -1127,11 +1146,13 @@ static sao_status_t tick_backdrop(sao_ui_fisheye_backdrop_handle_t handle, uint3
 
     BackdropGeometry geometry{};
     SaoUiFisheyeBackdropMode mode = SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL;
+#if !defined(_WIN32)
     sao_ui_layer_handle_t layer = nullptr;
-    uint64_t revision = 0;
-    bool visible = false;
     bool needs_apply = false;
     bool needs_frame = false;
+#endif
+    uint64_t revision = 0;
+    bool visible = false;
     {
         std::lock_guard lock(handle->mutex);
         if (handle->destroying) {
@@ -1142,12 +1163,14 @@ static sao_status_t tick_backdrop(sao_ui_fisheye_backdrop_handle_t handle, uint3
         geometry = handle->desired_geometry;
         mode = handle->desired_mode;
         revision = handle->desired_revision;
+#if !defined(_WIN32)
         layer = handle->layer;
         needs_apply = handle->applied_revision != revision;
         needs_frame =
             visible &&
             (!handle->layer_has_frame || !same_rect(handle->applied_geometry.rect, geometry.rect) ||
              handle->applied_mode != mode || mode == SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL);
+#endif
     }
 
     if (handle->compositor == nullptr) {
@@ -1164,16 +1187,14 @@ static sao_status_t tick_backdrop(sao_ui_fisheye_backdrop_handle_t handle, uint3
     }
 
 #if defined(_WIN32)
-    if (mode == SAO_UI_FISHEYE_BACKDROP_MODE_PROCEDURAL)
-        return tick_procedural(handle, geometry, visible, revision, delta_ms);
-    if (layer != nullptr && handle->gpu_bound) {
-        const auto status = sao_ui_layer_set_d3d11_render_fn(layer, nullptr, nullptr);
-        if (status != SAO_STATUS_OK) return status;
-        handle->gpu_bound = false;
+    const auto visual_status = tick_visual(handle, geometry, mode, visible, revision, delta_ms);
+    if (visual_status != SAO_STATUS_OK) {
+        std::lock_guard lock(handle->mutex);
+        handle->last_status = visual_status;
+        return visual_status;
     }
 #else
     (void)delta_ms;
-#endif
 
     if (layer == nullptr && visible) {
         SaoLayerConfig config{};
@@ -1278,11 +1299,14 @@ static sao_status_t tick_backdrop(sao_ui_fisheye_backdrop_handle_t handle, uint3
         }
     }
 
+#endif
     if (visible && mode == SAO_UI_FISHEYE_BACKDROP_MODE_LIVE) {
         try {
             if (!handle->worker.joinable()) {
                 {
                     std::lock_guard lock(handle->mutex);
+                    if (handle->destroying || handle->desired_revision != revision)
+                        return SAO_STATUS_ERR_CANCELLED;
                     handle->live_worker_running = true;
                     handle->live_resources_active = false;
                 }

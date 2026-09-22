@@ -74,6 +74,7 @@ struct sao_ui_overlay_host_s {
     bool activation_enabled = false;
     bool activation_sync_partial = false;
     uint32_t input_sync_state = SAO_UI_OVERLAY_INPUT_SYNCHRONIZED;
+    bool window_region_applied = false;
     bool capture_excluded = false;
     bool protection_requested = false;
     sao_ui_overlay_protection_provider_fn_t protection_provider = nullptr;
@@ -83,6 +84,10 @@ struct sao_ui_overlay_host_s {
     SaoAntiScreencapAffinityPair bound_capture_pair{};
 #endif
     std::vector<SaoOverlayHostInputRect> previous_input_rects;
+    // Effective rect set most recently written via SetWindowRgn — the
+    // current+previous union actually applied — so per-tick identical
+    // submissions skip the Win32 region transaction entirely.
+    std::vector<SaoOverlayHostInputRect> applied_input_rects;
 
     sao_ui_hit_test_fn_t hit_test_fn = nullptr;
     void* hit_test_user = nullptr;
@@ -649,18 +654,25 @@ sao_status_t map_anti_screencap_status(int32_t status) noexcept {
         // that state distinct from the platform capability-missing code.
         return SAO_STATUS_ERR_UNKNOWN;
     }
+    // Input space is the canonical sao_status_e numeric namespace (via the
+    // SaoStatus compat spellings): -5 is NOT_IMPLEMENTED, -6 UNKNOWN, -7/-8/-9
+    // remain TIMEOUT/CANCELLED/ABI_MISMATCH domain codes in the anti layer's
+    // own API and are mapped to their same-valued canonical codes.
     switch (status) {
     case 0: return SAO_STATUS_OK;
     case -1: return SAO_STATUS_ERR_INVALID_ARGUMENT;
     case -2: return SAO_STATUS_ERR_NOT_INITIALIZED;
     case -3: return SAO_STATUS_ERR_HANDLE_INVALID;
     case -4: return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
-    case -5: return SAO_STATUS_ERR_OS_CALL_FAILED;
-    case -6: return SAO_STATUS_ERR_NOT_IMPLEMENTED;
-    case -7: return SAO_STATUS_ERR_NOT_FOUND;
-    case -8: return SAO_STATUS_ERR_ACCESS_DENIED;
-    case -9: return SAO_STATUS_ERR_READ_FAULT;
-    case -10: return SAO_STATUS_ERR_UNKNOWN;
+    case -5: return SAO_STATUS_ERR_NOT_IMPLEMENTED;
+    case -6: return SAO_STATUS_ERR_UNKNOWN;
+    case -7: return SAO_STATUS_ERR_TIMEOUT;
+    case -8: return SAO_STATUS_ERR_CANCELLED;
+    case -9: return SAO_STATUS_ERR_ABI_MISMATCH;
+    case -20: return SAO_STATUS_ERR_OS_CALL_FAILED;
+    case -21: return SAO_STATUS_ERR_ACCESS_DENIED;
+    case -22: return SAO_STATUS_ERR_NOT_FOUND;
+    case -41: return SAO_STATUS_ERR_READ_FAULT;
     case SAO_ASC_APPLY_POLICY_DISABLED: return SAO_STATUS_ERR_CAPABILITY_MISSING;
     default: return SAO_STATUS_ERR_UNKNOWN;
     }
@@ -813,6 +825,15 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
             dispatch_mouse(host, message, wparam, lparam);
         }
         return 0;
+    case WM_KILLFOCUS:
+    case WM_ACTIVATEAPP:
+        if (message == WM_ACTIVATEAPP && wparam != 0)
+            break;
+        host->captured_mouse_buttons = 0;
+        dispatch_mouse(host, WM_CANCELMODE, 0, 0);
+        if (::GetCapture() == hwnd)
+            ::ReleaseCapture();
+        break;
     case WM_CANCELMODE:
         host->captured_mouse_buttons = 0;
         dispatch_mouse(host, message, wparam, lparam);
@@ -1291,11 +1312,6 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
         host->protection_provider = config->protection_provider;
         host->protection_provider_user_data = config->protection_provider_user_data;
     }
-    OwnedRegion empty(::CreateRectRgn(0, 0, 0, 0));
-    if (empty.get() == nullptr || !::SetWindowRgn(host->hwnd, empty.get(), FALSE)) {
-        return create_guard.fail(SAO_STATUS_ERR_OS_CALL_FAILED, out_handle);
-    }
-    empty.release();
     host->dc_mutation =
         config == nullptr
             ? nullptr
@@ -1732,6 +1748,35 @@ sao_status_t set_input_region_ex(sao_ui_overlay_host_handle_t handle,
     // is a pixel-exact debugging switch), so skip the host's own stored-
     // previous union when the caller opts out via the flag.
     const bool skip_prev_union = (flags & kInputRegionSkipPrevUnion) != 0u;
+    // The effective window region is current ∪ (previous unless the caller is
+    // the single temporal-union owner).  Recompute that set and compare it
+    // against what was last written: identical submissions skip the whole
+    // CreateRectRgn/GetWindowRgn/SetWindowRgn transaction instead of paying
+    // three Win32 region calls on every compositor tick.
+    std::vector<SaoOverlayHostInputRect> effective;
+    effective.reserve(current.size() + (skip_prev_union ? 0u : previous.size()));
+    for (const auto& rect : current)
+        effective.push_back(rect);
+    if (!skip_prev_union) {
+        for (const auto& rect : previous)
+            effective.push_back(rect);
+    }
+    {
+        std::lock_guard<std::mutex> lock(handle->state_mu);
+        if (handle->window_region_applied &&
+            handle->applied_input_rects.size() == effective.size() &&
+            std::equal(handle->applied_input_rects.begin(), handle->applied_input_rects.end(),
+                       effective.begin(),
+                       [](const SaoOverlayHostInputRect& a,
+                          const SaoOverlayHostInputRect& b) noexcept {
+                           return a.x == b.x && a.y == b.y && a.width == b.width &&
+                                  a.height == b.height;
+                       })) {
+            handle->previous_input_rects = std::move(current);
+            handle->input_sync_state = SAO_UI_OVERLAY_INPUT_SYNCHRONIZED;
+            return SAO_STATUS_OK;
+        }
+    }
     if (!skip_prev_union) {
         for (const auto& rect : previous) {
             if (!append_rect(region.get(), rect))
@@ -1742,7 +1787,12 @@ sao_status_t set_input_region_ex(sao_ui_overlay_host_handle_t handle,
     if (rollback_region.get() == nullptr)
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     const auto& api = win32_api();
-    if (api.get_window_rgn(handle->hwnd, rollback_region.get()) == ERROR) {
+    bool had_window_region = false;
+    {
+        std::lock_guard<std::mutex> lock(handle->state_mu);
+        had_window_region = handle->window_region_applied;
+    }
+    if (had_window_region && api.get_window_rgn(handle->hwnd, rollback_region.get()) == ERROR) {
         return SAO_STATUS_ERR_OS_CALL_FAILED;
     }
     if (!api.set_window_rgn(handle->hwnd, region.get(), TRUE)) {
@@ -1754,9 +1804,16 @@ sao_status_t set_input_region_ex(sao_ui_overlay_host_handle_t handle,
         current.empty() && (skip_prev_union || previous.empty());
     const sao_status_t passthrough_status = apply_passthrough_unlocked(handle, passthrough);
     if (passthrough_status != SAO_STATUS_OK) {
-        if (!api.set_window_rgn(handle->hwnd, rollback_region.get(), TRUE)) {
+        const bool rollback_ok = had_window_region
+                                     ? api.set_window_rgn(handle->hwnd, rollback_region.get(), TRUE)
+                                     : api.set_window_rgn(handle->hwnd, nullptr, TRUE);
+        if (!rollback_ok) {
+            {
+                std::lock_guard<std::mutex> lock(handle->state_mu);
+                handle->window_region_applied = true;
+            }
             mark_input_partial(handle);
-        } else {
+        } else if (had_window_region) {
             rollback_region.release();
         }
         return passthrough_status;
@@ -1765,7 +1822,9 @@ sao_status_t set_input_region_ex(sao_ui_overlay_host_handle_t handle,
     {
         std::lock_guard<std::mutex> lock(handle->state_mu);
         handle->previous_input_rects = std::move(current);
+        handle->applied_input_rects = std::move(effective);
         handle->input_sync_state = SAO_UI_OVERLAY_INPUT_SYNCHRONIZED;
+        handle->window_region_applied = true;
     }
     return SAO_STATUS_OK;
     } catch (...) {

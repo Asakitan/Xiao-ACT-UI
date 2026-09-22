@@ -4,6 +4,7 @@
 #include "sao/ui/widget_kit.h"
 
 #include "panel_theme_internal.h"
+#include "widget_paint_internal.h"
 #include "widget_typed_internal.h"
 
 #include <algorithm>
@@ -159,12 +160,12 @@ template <typename Callback> struct CallbackSlot {
 };
 
 
-size_t table_utf8_glyphs(const std::string& text) { size_t count = 0; for (unsigned char byte : text) if ((byte & 0xC0U) != 0x80U) ++count; return count; }
-std::string table_ellipsize(const std::string& text, int32_t width_px, float font_size_px) { const size_t max_glyphs = std::max<size_t>(1, static_cast<size_t>(width_px / std::max(5.0F, font_size_px * 0.56F))); if (table_utf8_glyphs(text) <= max_glyphs) return text; std::string result; size_t count = 0; for (size_t i = 0; i < text.size() and count + 1 < max_glyphs; ++i) { result.push_back(text[i]); if ((static_cast<unsigned char>(text[i]) & 0xC0U) != 0x80U) ++count; } return result + "…"; }
+std::string table_ellipsize(const std::string& text, int32_t width_px, float font_size_px) {
+    return sao::ui::detail::ellipsize_ui_text(text, font_size_px, static_cast<float>(width_px));
+}
 
 int32_t table_text_advance(const std::string& text, float font_size_px) {
-    return static_cast<int32_t>(table_utf8_glyphs(text)) *
-           static_cast<int32_t>(std::max(5.0F, font_size_px * 0.56F));
+    return static_cast<int32_t>(std::ceil(sao::ui::detail::measure_ui_text_width(text, font_size_px)));
 }
 
 // Thousands-grouped integer formatting for NUMBER columns ("1,234,567").

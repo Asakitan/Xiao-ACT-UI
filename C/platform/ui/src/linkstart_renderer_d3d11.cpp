@@ -75,7 +75,7 @@ struct Constants {
     float radius_mul;
     float energy;
     float flash;
-    float birth_lead;
+    float shutdown_progress;
     float startup_wave;
     float motion_mix;
     float cool_mix;
@@ -110,7 +110,7 @@ struct VisualState {
     float particle_alpha{};
     float energy{};
     float flash{};
-    float birth_lead{};
+    float shutdown_progress{-1.0F};
     float flight_span{kFlightDistance};
     float exit_progress{};
     float startup_wave{1.0F};
@@ -131,7 +131,12 @@ VisualState visual_state(const FrameState& frame) noexcept {
     VisualState state{};
     const float elapsed = std::max(0.0F, frame.elapsed_seconds);
     if (frame.outro) {
-        const float progress = saturate(elapsed / std::max(0.001F, frame.total_duration));
+        const float scene_duration = frame.reduced_motion ? frame.total_duration
+            : static_cast<float>(kOutroSceneDurationMs) / 1000.0F;
+        const float progress = saturate(elapsed / std::max(0.001F, scene_duration));
+        if (!frame.reduced_motion)
+            state.shutdown_progress = saturate((elapsed - scene_duration) /
+                (static_cast<float>(kOutroShutdownDurationMs) / 1000.0F));
         const float flight = saturate((progress - 0.08F) / 0.78F);
         state.scene_time = elapsed;
         state.background = {0.965F, 0.978F, 0.990F};
@@ -153,8 +158,10 @@ VisualState visual_state(const FrameState& frame) noexcept {
     const float color_end = frame.p1_end + (frame.scene_timeline
         ? std::min(0.12F, std::max(0.0F, frame.p2_end - frame.p2_start) * 0.06F) : 0.0F);
     const float color_duration = color_end - color_start;
-    const float blue_end = frame.scene_timeline ? frame.total_duration : frame.p3_end;
-    const float blue_duration = blue_end - frame.p3_start;
+    const float blue_end = frame.scene_timeline ? frame.p4_hold_end : frame.p3_end;
+    const float blue_settle = frame.scene_timeline
+        ? std::min(0.30F, std::max(0.0F, blue_end - frame.p3_start) * 0.20F) : 0.0F;
+    const float blue_duration = blue_end - frame.p3_start - blue_settle;
     const float blue_span = kFlightDistance;
     const bool blue = state.scene_time >= frame.p3_start;
     const float blue_transition = smoothstep((state.scene_time - (frame.p3_start - 0.30F)) / 0.80F);
@@ -750,7 +757,7 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
                        radius,
                        current.energy,
                        current.flash,
-                       current.birth_lead,
+                       current.shutdown_progress,
                        current.startup_wave,
                        current.motion_mix,
                        visual.cool_mix,
@@ -897,13 +904,23 @@ sao_status_t SAO_UI_CALL render(const SaoUiD3d11LayerRenderContext* context,
             renderer->history_outro == renderer->frame.outro &&
             renderer->history_reduced == renderer->frame.reduced_motion;
         if (!same_frame) {
+            const bool blue_flight_complete = renderer->frame.scene_timeline &&
+                !renderer->frame.outro && visual.scene_time >= renderer->frame.p4_hold_end;
             const bool continuous = renderer->history_valid && delta > 0.0F && delta < 0.50F &&
                 renderer->history_seed == renderer->frame.seed &&
                 renderer->history_outro == renderer->frame.outro &&
+                !blue_flight_complete &&
                 !renderer->frame.reduced_motion &&
                 !renderer->history_reduced;
             const float retention = lerp(0.76F, 0.88F, visual.motion_mix);
             history_weight = continuous ? std::pow(retention, delta * 60.0F) : 0.0F;
+            if (renderer->frame.scene_timeline && !renderer->frame.outro) {
+                const float settle = std::min(0.30F,
+                    std::max(0.0F, renderer->frame.p4_hold_end - renderer->frame.p3_start) * 0.20F);
+                if (settle > 0.0F)
+                    history_weight *= 1.0F - smoothstep((visual.scene_time -
+                        (renderer->frame.p4_hold_end - settle)) / settle);
+            }
             const uint32_t next = renderer->history_valid ? 1u - renderer->history_index : 0u;
             if (!upload_constants(static_cast<float>(context->width_px),
                                   static_cast<float>(context->height_px), 0.0F, 0.0F, visual.camera_z,

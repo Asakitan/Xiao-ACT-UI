@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -49,10 +50,6 @@ constexpr int MAX_TABLE_ROWS   = 200;
 constexpr int MAX_TABLE_COLS   = 16;
 constexpr int MAX_TEXT_LEN     = 4000;
 constexpr int MAX_TITLE_LEN    = 200;
-constexpr int MAX_CANVAS_OPS   = 4000;
-constexpr int MAX_CANVAS_DIM   = 4096;
-constexpr int MAX_LAYER_POS    = 32768;
-constexpr int MAX_LAYER_Z      = 10000;
 constexpr int MAX_INPUT_VAL    = 2000;
 
 // ── Token vocabularies ───────────────────────────────────────────────
@@ -82,22 +79,6 @@ const std::unordered_set<std::string> kLeafKinds = {
     "text", "kv", "bar", "badge", "divider", "spacer",
     "button", "input", "slider", "table", "canvas", "rgba_frame",
 };
-const std::unordered_set<std::string> kCanvasAnchors = {
-    "nw", "n", "ne", "w", "center", "e", "sw", "s", "se",
-};
-const std::unordered_set<std::string> kHitTests = {
-    "none", "rect", "alpha",
-};
-std::unordered_set<std::string> kCanvasColorTokens = [] {
-    std::unordered_set<std::string> s;
-    for (const auto& t : kTextStyles) s.insert(t);
-    for (const auto& t : kBarColors)  s.insert(t);
-    for (const auto& t : { "white", "black", "bg", "body", "border",
-                            "sep", "grid", "header", "transparent" }) {
-        s.insert(t);
-    }
-    return s;
-}();
 
 bool is_node_kind(const std::string& kind) {
     return kContainerKinds.count(kind) || kLeafKinds.count(kind);
@@ -230,20 +211,6 @@ int64_t ci(const json& v, int64_t def = 0) {
     return static_cast<int64_t>(std::rint(num));
 }
 
-int64_t cpos(const json& v, int64_t def = 0) {
-    int64_t n = ci(v, def);
-    if (n < -MAX_LAYER_POS) n = -MAX_LAYER_POS;
-    if (n >  MAX_LAYER_POS) n =  MAX_LAYER_POS;
-    return n;
-}
-
-int64_t cz(const json& v, int64_t def = 0) {
-    int64_t n = ci(v, def);
-    if (n < -MAX_LAYER_Z) n = -MAX_LAYER_Z;
-    if (n >  MAX_LAYER_Z) n =  MAX_LAYER_Z;
-    return n;
-}
-
 // ``_json_scalar(value)`` -- bool / None / number pass through; else
 // ``_s``-stringify with the default MAX_TEXT_LEN cap.
 json json_scalar(const json& v) {
@@ -253,42 +220,6 @@ json json_scalar(const json& v) {
         return v;
     }
     return s_clamp(v, MAX_TEXT_LEN);
-}
-
-bool is_hex_color(const std::string& text) {
-    if (text.empty() || text[0] != '#') return false;
-    size_t n = text.size();
-    if (n != 4 && n != 7) return false;
-    for (size_t i = 1; i < n; ++i) {
-        char c = text[i];
-        bool ok = (c >= '0' && c <= '9') ||
-                  (c >= 'a' && c <= 'f') ||
-                  (c >= 'A' && c <= 'F');
-        if (!ok) return false;
-    }
-    return true;
-}
-
-// ``_canvas_color(value, default)`` -- hex passthrough OR theme token
-// membership.
-std::string canvas_color(const json& v, const std::string& def = "") {
-    std::string text;
-    if (v.is_string()) text = v.get<std::string>();
-    else if (v.is_null()) return def;
-    else text = s_clamp(v, MAX_TEXT_LEN);
-    // strip
-    size_t a = 0, b = text.size();
-    while (a < b && (text[a] == ' ' || text[a] == '\t')) ++a;
-    while (b > a && (text[b-1] == ' ' || text[b-1] == '\t')) --b;
-    text = text.substr(a, b - a);
-    if (text.empty()) return def;
-    if (is_hex_color(text)) return text;
-    std::string low = text;
-    for (char& c : low) {
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
-    }
-    if (kCanvasColorTokens.count(low)) return low;
-    return def;
 }
 
 // ── Forward declarations ─────────────────────────────────────────────
@@ -397,117 +328,34 @@ json normalize_table(const json& node) {
 }
 
 json normalize_canvas(const json& node) {
-    int64_t width  = ci(node.value("width",  json(320)), 320);
-    int64_t height = ci(node.value("height", json(160)), 160);
-    if (width  < 1) width  = 1;
-    if (width  > MAX_CANVAS_DIM) width  = MAX_CANVAS_DIM;
-    if (height < 1) height = 1;
-    if (height > MAX_CANVAS_DIM) height = MAX_CANVAS_DIM;
-    json ops = json::array();
-    if (node.contains("ops") && node["ops"].is_array()) {
-        int i = 0;
-        for (const auto& op : node["ops"]) {
-            if (i >= MAX_CANVAS_OPS) break;
-            ++i;
-            if (!op.is_object()) continue;
-            std::string kind = choice(op.value("op", json()),
-                                      {"rect", "oval", "line", "text"},
-                                      "");
-            if (kind == "rect" || kind == "oval") {
-                int64_t w = ci(op.value("w", json(0)), 0);
-                int64_t h = ci(op.value("h", json(0)), 0);
-                if (w < 0) w = 0;
-                if (h < 0) h = 0;
-                int64_t width_op = ci(op.value("width", json(0)), 0);
-                if (width_op < 0) width_op = 0;
-                if (width_op > 20) width_op = 20;
-                ops.push_back({
-                    {"fill",    canvas_color(op.value("fill",    json()), "")},
-                    {"h",       h},
-                    {"op",      kind},
-                    {"outline", canvas_color(op.value("outline", json()), "")},
-                    {"w",       w},
-                    {"width",   width_op},
-                    {"x",       ci(op.value("x", json(0)), 0)},
-                    {"y",       ci(op.value("y", json(0)), 0)},
-                });
-            } else if (kind == "line") {
-                int64_t width_op = ci(op.value("width", json(1)), 1);
-                if (width_op < 1) width_op = 1;
-                if (width_op > 20) width_op = 20;
-                ops.push_back({
-                    {"fill",  canvas_color(op.value("fill", json()), "value")},
-                    {"op",    "line"},
-                    {"width", width_op},
-                    {"x1",    ci(op.value("x1", json(0)), 0)},
-                    {"x2",    ci(op.value("x2", json(0)), 0)},
-                    {"y1",    ci(op.value("y1", json(0)), 0)},
-                    {"y2",    ci(op.value("y2", json(0)), 0)},
-                });
-            } else if (kind == "text") {
-                int64_t size_op = ci(op.value("size", json(10)), 10);
-                if (size_op < 6)  size_op = 6;
-                if (size_op > 48) size_op = 48;
-                ops.push_back({
-                    {"anchor", choice(op.value("anchor", json()), kCanvasAnchors, "nw")},
-                    {"bold",   op.value("bold", false)},
-                    {"fill",   canvas_color(op.value("fill", json()), "value")},
-                    {"op",     "text"},
-                    {"size",   size_op},
-                    {"text",   s_clamp(op.value("text", json()), 200)},
-                    {"x",      ci(op.value("x", json(0)), 0)},
-                    {"y",      ci(op.value("y", json(0)), 0)},
-                });
-            }
-        }
-    }
-    json result;
-    result["bg"]        = canvas_color(node.value("bg", json()), "body");
-    result["draggable"] = node.value("draggable", false);
-    result["height"]    = height;
-    result["id"]        = s_clamp(node.value("id", json()), 120);
-    result["ops"]       = ops;
-    result["type"]      = "canvas";
-    result["width"]     = width;
-    result["x"]         = cpos(node.value("x", json(0)), 0);
-    result["y"]         = cpos(node.value("y", json(0)), 0);
-    result["z"]         = cz(node.value("z", json(0)), 0);
+    // Preserve validation inputs: the panel must reject a malformed stream as one transaction.
+    json result = node;
+    result["type"] = "canvas";
+    if (!result.contains("width")) result["width"] = 320;
+    if (!result.contains("height")) result["height"] = 160;
+    if (!result.contains("bg")) result["bg"] = node.contains("ops") ? "body" : "transparent";
+    if (!result.contains("draggable")) result["draggable"] = false;
+    if (!result.contains("id")) result["id"] = "";
+    if (!result.contains("x")) result["x"] = 0;
+    if (!result.contains("y")) result["y"] = 0;
+    if (!result.contains("z")) result["z"] = 0;
     return result;
 }
 
 json normalize_rgba_frame(const json& node) {
-    int64_t width  = ci(node.value("width",  json(320)), 320);
-    int64_t height = ci(node.value("height", json(480)), 480);
-    if (width  < 1) width  = 1;
-    if (width  > MAX_CANVAS_DIM) width  = MAX_CANVAS_DIM;
-    if (height < 1) height = 1;
-    if (height > MAX_CANVAS_DIM) height = MAX_CANVAS_DIM;
-    int64_t frame_b64_cap = width * height * 8;
-    if (frame_b64_cap < 0) frame_b64_cap = 0;
-    std::string background = "transparent";
-    if (node.contains("background") && !node["background"].is_null()) {
-        std::string raw;
-        if (node["background"].is_string()) raw = node["background"].get<std::string>();
-        else raw = s_clamp(node["background"], 40);
-        if (!raw.empty()) background = s_clamp(raw, 40);
-    }
-    json result;
-    result["background"]      = background;
-    result["diagnostic"]      = s_clamp(node.value("diagnostic", json()), 500);
-    result["draggable"]       = node.value("draggable", true);
-    result["frame_key"]       = s_clamp(node.value("frame_key", json()), 240);
-    result["frame_rgba_b64"]  = s_clamp(node.value("frame_rgba_b64", json()),
-                                        static_cast<int>(frame_b64_cap));
-    result["height"]          = height;
-    result["hit_test"]        = choice(node.value("hit_test", json()),
-                                       kHitTests, "rect");
-    result["id"]              = s_clamp(node.value("id", json()), 120);
-    result["premultiplied"]   = node.value("premultiplied", false);
-    result["type"]            = "rgba_frame";
-    result["width"]           = width;
-    result["x"]               = cpos(node.value("x", json(0)), 0);
-    result["y"]               = cpos(node.value("y", json(0)), 0);
-    result["z"]               = cz(node.value("z", json(0)), 0);
+    json result = node;
+    result["type"] = "rgba_frame";
+    if (!result.contains("width")) result["width"] = 320;
+    if (!result.contains("height")) result["height"] = 480;
+    if (!result.contains("background")) result["background"] = "transparent";
+    if (!result.contains("draggable")) result["draggable"] = true;
+    if (!result.contains("hit_test")) result["hit_test"] = "rect";
+    if (!result.contains("premultiplied")) result["premultiplied"] = false;
+    if (!result.contains("frame_rgba_b64")) result["frame_rgba_b64"] = "";
+    if (!result.contains("id")) result["id"] = "";
+    if (!result.contains("x")) result["x"] = 0;
+    if (!result.contains("y")) result["y"] = 0;
+    if (!result.contains("z")) result["z"] = 0;
     return result;
 }
 
@@ -529,13 +377,15 @@ json normalize_node(const json& node, int depth, int& budget) {
         return r;
     }
     std::string kind;
-    if (node.contains("type") && !node["type"].is_null()) {
-        if (node["type"].is_string()) kind = node["type"].get<std::string>();
-        else                          kind = s_clamp(node["type"]);
+    const char* type_key = node.contains("type") && node["type"].is_string() ? "type" :
+        (node.contains("kind") && node["kind"].is_string() ? "kind" : "type");
+    if (node.contains(type_key) && !node[type_key].is_null()) {
+        if (node[type_key].is_string()) kind = node[type_key].get<std::string>();
+        else                           kind = s_clamp(node[type_key]);
         // strip + lowercase
         size_t a = 0, b = kind.size();
-        while (a < b && (kind[a] == ' ' || kind[a] == '\t')) ++a;
-        while (b > a && (kind[b-1] == ' ' || kind[b-1] == '\t')) --b;
+        while (a < b && std::isspace(static_cast<unsigned char>(kind[a]))) ++a;
+        while (b > a && std::isspace(static_cast<unsigned char>(kind[b-1]))) --b;
         kind = kind.substr(a, b - a);
         for (char& c : kind) {
             if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
@@ -721,11 +571,7 @@ json normalize_spec_impl(const json& spec, const std::string& title_hint) {
         } else if (spec.contains("children") && spec["children"].is_array()) {
             nodes = normalize_children_arr(spec["children"], 0, budget);
         } else {
-            std::string kind_probe;
-            if (spec.contains("type") && spec["type"].is_string()) {
-                kind_probe = spec["type"].get<std::string>();
-            }
-            if (is_node_kind(kind_probe)) {
+            if (spec.contains("type") || spec.contains("kind")) {
                 json node = normalize_node(spec, 0, budget);
                 if (!node.is_null()) {
                     if (node["type"] == "panel") {
@@ -758,9 +604,9 @@ json normalize_spec_impl(const json& spec, const std::string& title_hint) {
 extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_ui_spec_normalize(
     const uint8_t* input_json_utf8, size_t input_len,
     uint8_t* out_json_utf8, size_t out_capacity,
-    size_t* out_bytes_written) {
+    size_t* out_bytes_written) try {
     if (out_bytes_written) *out_bytes_written = 0;
-    if (input_json_utf8 == nullptr && input_len != 0) {
+    if (input_json_utf8 == nullptr || input_len == 0) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
@@ -800,6 +646,10 @@ extern "C" sao_status_t SAO_ENGINE_CALL sao_engine_ui_spec_normalize(
     }
     std::memcpy(out_json_utf8, dumped.data(), dumped.size());
     return SAO_STATUS_OK;
+} catch (const json::exception&) {
+    return SAO_STATUS_ERR_INVALID_ARGUMENT;
+} catch (...) {
+    return SAO_STATUS_ERR_UNKNOWN;
 }
 
 extern "C" uint32_t SAO_ENGINE_CALL sao_engine_ui_spec_version(void) {

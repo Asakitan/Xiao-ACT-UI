@@ -1,4 +1,5 @@
 #include "entity_text_renderer_win.h"
+#include "classic_text_roles.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -247,6 +248,12 @@ class RendererContext final {
                 &layout);
             if (FAILED(result))
                 break;
+
+            if (!sao::ui::detail::apply_product_text_typography(
+                    layout.Get(), item.text, command.pixel_size)) {
+                result = E_FAIL;
+                break;
+            }
 
             const float alpha = static_cast<float>(command.color.a) / 255.0F;
             ComPtr<ID2D1SolidColorBrush> brush;

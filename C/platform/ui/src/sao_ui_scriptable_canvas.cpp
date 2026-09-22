@@ -28,6 +28,8 @@
 #include "sao/ui/widget_kit.h"
 
 #include "panel_theme_internal.h"
+#include "classic_text_roles.h"
+#include "widget_paint_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -256,14 +258,15 @@ ScriptCanvasRegistry& script_canvas_registry() {
 
 class CanvasLifecycleLease {
   public:
-    explicit CanvasLifecycleLease(sao_ui_script_canvas_handle_t canvas) noexcept : canvas_(canvas) {
+    explicit CanvasLifecycleLease(sao_ui_script_canvas_handle_t canvas) noexcept
+        : widget_(reinterpret_cast<sao_ui_widget_handle_t>(canvas)) {
         acquired_ =
-            canvas_ != nullptr && sao::ui::detail::acquire_widget_lifecycle(canvas_->widget);
+            widget_ != nullptr && sao::ui::detail::acquire_widget_lifecycle(widget_);
     }
 
     ~CanvasLifecycleLease() {
         if (acquired_)
-            sao::ui::detail::release_widget_lifecycle(canvas_->widget);
+            sao::ui::detail::release_widget_lifecycle(widget_);
     }
 
     explicit operator bool() const noexcept {
@@ -271,7 +274,7 @@ class CanvasLifecycleLease {
     }
 
   private:
-    sao_ui_script_canvas_handle_t canvas_{};
+    sao_ui_widget_handle_t widget_{};
     bool acquired_{};
 };
 
@@ -432,7 +435,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_create(
 
 extern "C" void SAO_UI_CALL sao_ui_script_canvas_destroy(sao_ui_script_canvas_handle_t canvas) {
     try {
-        if (canvas == nullptr || !sao::ui::detail::retire_widget_lifecycle(canvas->widget)) {
+        if (canvas == nullptr || !sao::ui::detail::retire_widget_lifecycle(
+            reinterpret_cast<sao_ui_widget_handle_t>(canvas))) {
             return;
         }
         uint32_t removed = 0;
@@ -1029,6 +1033,12 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
         sao_status_t status = sao_ui_paint_ctx_create_offscreen(raster, &context);
         if (status != SAO_STATUS_OK)
             return status;
+        status = sao_ui_paint_ctx_begin_frame(context);
+        if (status != SAO_STATUS_OK) {
+            sao_ui_paint_ctx_destroy(context);
+            context = nullptr;
+            return status;
+        }
 
         std::lock_guard<std::mutex> guard(canvas->mu);
         PaintState state{};
@@ -1037,6 +1047,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
         bool has_clip = false;
 
         for (const OwnedOp& owned : canvas->committed_ops) {
+            if (status != SAO_STATUS_OK)
+                break;
             const SaoUiCanvasOp& op = owned.op;
             const auto fill = with_opacity(state.fill, state.opacity);
             const auto stroke = with_opacity(state.stroke, state.opacity);
@@ -1045,7 +1057,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                 path.clear();
                 break;
             case SAO_UI_CANVAS_OP_LINE:
-                sao_ui_paint_ctx_stroke_line(context, point_x(state, static_cast<float>(op.i[0])),
+                status = sao_ui_paint_ctx_stroke_line(context, point_x(state, static_cast<float>(op.i[0])),
                                              point_y(state, static_cast<float>(op.i[1])),
                                              point_x(state, static_cast<float>(op.i[2])),
                                              point_y(state, static_cast<float>(op.i[3])),
@@ -1053,14 +1065,20 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                 path.push_back({static_cast<float>(op.i[2]), static_cast<float>(op.i[3])});
                 break;
             case SAO_UI_CANVAS_OP_RECT:
-            case SAO_UI_CANVAS_OP_ROUNDED_RECT:
-                sao_ui_paint_ctx_fill_rect(context, point_x(state, static_cast<float>(op.i[0])),
+                status = sao_ui_paint_ctx_fill_rect(context, point_x(state, static_cast<float>(op.i[0])),
                                            point_y(state, static_cast<float>(op.i[1])),
                                            static_cast<float>(op.i[2]) * state.scale_x,
                                            static_cast<float>(op.i[3]) * state.scale_y, fill);
                 break;
+            case SAO_UI_CANVAS_OP_ROUNDED_RECT:
+                status = sao::ui::detail::paint_rounded_rect(context,
+                    point_x(state, static_cast<float>(op.i[0])),
+                    point_y(state, static_cast<float>(op.i[1])),
+                    static_cast<float>(op.i[2]) * state.scale_x,
+                    static_cast<float>(op.i[3]) * state.scale_y, op.f[0], fill);
+                break;
             case SAO_UI_CANVAS_OP_OVAL:
-                sao_ui_paint_ctx_fill_ellipse(context, point_x(state, static_cast<float>(op.i[0])),
+                status = sao_ui_paint_ctx_fill_ellipse(context, point_x(state, static_cast<float>(op.i[0])),
                                               point_y(state, static_cast<float>(op.i[1])),
                                               static_cast<float>(op.i[2]) * state.scale_x,
                                               static_cast<float>(op.i[3]) * state.scale_y, fill);
@@ -1076,25 +1094,38 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                         point_y(state, static_cast<float>(owned.poly_verts[index * 2U + 1U]))));
                 }
                 if (points >= 3U)
-                    sao_ui_paint_ctx_fill_polygon(context, translated.data(), points, fill);
+                    status = sao_ui_paint_ctx_fill_polygon(context, translated.data(), points, fill);
                 break;
             }
-            case SAO_UI_CANVAS_OP_TEXT:
-                sao_ui_paint_ctx_draw_utf8(
+            case SAO_UI_CANVAS_OP_TEXT: {
+                const sao::ui::detail::ScopedTextRole text_style(
+                    sao::ui::detail::ClassicTextRole::Auto,
+                    op.i_ex[0] != 0 ? sao::ui::detail::ClassicTextWeight::Bold
+                                    : sao::ui::detail::ClassicTextWeight::Normal);
+                status = sao_ui_paint_ctx_draw_utf8(
                     context, point_x(state, static_cast<float>(op.i[0])),
                     point_y(state, static_cast<float>(op.i[1])), owned.text_utf8.c_str(),
                     static_cast<float>(op.i[2] > 0 ? op.i[2] : state.font_size), fill);
                 break;
+            }
             case SAO_UI_CANVAS_OP_BITMAP: {
                 const auto bitmap = canvas->bitmaps.find(op.i[4]);
                 if (bitmap != canvas->bitmaps.end()) {
                     const BitmapRecord& source = bitmap->second;
-                    sao_ui_paint_ctx_blit_premultiplied_bgra(
+                    status = sao_ui_paint_ctx_push_opacity(context, state.opacity);
+                    if (status != SAO_STATUS_OK)
+                        break;
+                    status = sao_ui_paint_ctx_blit_premultiplied_bgra(
                         context, source.pixels.data(), source.width, source.height, source.stride,
                         point_x(state, static_cast<float>(op.i[0])),
                         point_y(state, static_cast<float>(op.i[1])),
                         static_cast<float>(op.i[2]) * state.scale_x,
                         static_cast<float>(op.i[3]) * state.scale_y);
+                    const auto popped = sao_ui_paint_ctx_pop_opacity(context);
+                    if (status == SAO_STATUS_OK)
+                        status = popped;
+                } else {
+                    status = SAO_STATUS_ERR_NOT_FOUND;
                 }
                 break;
             }
@@ -1107,7 +1138,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                 float previous_y =
                     static_cast<float>(op.i[1]) +
                     static_cast<float>(op.i[2]) * std::sin(op.f[0] * 3.14159265F / 180.0F);
-                for (int index = 1; index <= segments; ++index) {
+                for (int index = 1; index <= segments && status == SAO_STATUS_OK; ++index) {
                     const float angle = op.f[0] + op.f[1] * static_cast<float>(index) /
                                                       static_cast<float>(segments);
                     const float current_x =
@@ -1116,7 +1147,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                     const float current_y =
                         static_cast<float>(op.i[1]) +
                         static_cast<float>(op.i[2]) * std::sin(angle * 3.14159265F / 180.0F);
-                    sao_ui_paint_ctx_stroke_line(
+                    status = sao_ui_paint_ctx_stroke_line(
                         context, point_x(state, previous_x), point_y(state, previous_y),
                         point_x(state, current_x), point_y(state, current_y), state.line_width,
                         stroke);
@@ -1130,7 +1161,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                 const int segments = 16;
                 float previous_x = static_cast<float>(op.i[0]);
                 float previous_y = static_cast<float>(op.i[1]);
-                for (int index = 1; index <= segments; ++index) {
+                for (int index = 1; index <= segments && status == SAO_STATUS_OK; ++index) {
                     const float t = static_cast<float>(index) / static_cast<float>(segments);
                     const float inverse = 1.0F - t;
                     float current_x = 0.0F;
@@ -1148,7 +1179,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                                     3.0F * inverse * inverse * t * op.i[3] +
                                     3.0F * inverse * t * t * op.i[5] + t * t * t * op.i_ex[1];
                     }
-                    sao_ui_paint_ctx_stroke_line(
+                    status = sao_ui_paint_ctx_stroke_line(
                         context, point_x(state, previous_x), point_y(state, previous_y),
                         point_x(state, current_x), point_y(state, current_y), state.line_width,
                         stroke);
@@ -1158,8 +1189,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                 break;
             }
             case SAO_UI_CANVAS_OP_STROKE_PATH:
-                for (size_t index = 1U; index < path.size(); ++index)
-                    sao_ui_paint_ctx_stroke_line(
+                for (size_t index = 1U; index < path.size() && status == SAO_STATUS_OK; ++index)
+                    status = sao_ui_paint_ctx_stroke_line(
                         context, point_x(state, path[index - 1U].first),
                         point_y(state, path[index - 1U].second), point_x(state, path[index].first),
                         point_y(state, path[index].second), state.line_width, stroke);
@@ -1173,7 +1204,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                         static_cast<int32_t>(std::lround(point_y(state, path[index].second)));
                 }
                 if (path.size() >= 3U)
-                    sao_ui_paint_ctx_fill_polygon(context, points.data(), path.size(), fill);
+                    status = sao_ui_paint_ctx_fill_polygon(context, points.data(), path.size(), fill);
                 break;
             }
             case SAO_UI_CANVAS_OP_PUSH_STATE:
@@ -1193,6 +1224,18 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                 state.scale_x *= op.f[0];
                 state.scale_y *= op.f[1];
                 break;
+            case SAO_UI_CANVAS_OP_ROTATE:
+                if (!std::isfinite(op.f[0]))
+                    status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+                else if (std::fmod(op.f[0], 360.0F) != 0.0F)
+                    status = SAO_STATUS_ERR_NOT_IMPLEMENTED;
+                break;
+            case SAO_UI_CANVAS_OP_SET_BLEND:
+                if (op.i[0] < SAO_UI_CANVAS_BLEND_NORMAL || op.i[0] > SAO_UI_CANVAS_BLEND_MASK)
+                    status = SAO_STATUS_ERR_INVALID_ARGUMENT;
+                else if (op.i[0] != SAO_UI_CANVAS_BLEND_NORMAL)
+                    status = SAO_STATUS_ERR_NOT_IMPLEMENTED;
+                break;
             case SAO_UI_CANVAS_OP_SET_STROKE:
                 state.stroke = static_cast<uint32_t>(op.i[0]);
                 break;
@@ -1210,27 +1253,37 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_rasterize(
                 break;
             case SAO_UI_CANVAS_OP_SET_CLIP:
                 if (has_clip)
-                    sao_ui_paint_ctx_pop_clip(context);
-                sao_ui_paint_ctx_push_clip(context, point_x(state, static_cast<float>(op.i[0])),
+                    status = sao_ui_paint_ctx_pop_clip(context);
+                has_clip = false;
+                if (status != SAO_STATUS_OK)
+                    break;
+                status = sao_ui_paint_ctx_push_clip(context, point_x(state, static_cast<float>(op.i[0])),
                                            point_y(state, static_cast<float>(op.i[1])),
                                            static_cast<float>(op.i[2]) * state.scale_x,
                                            static_cast<float>(op.i[3]) * state.scale_y);
-                has_clip = true;
+                has_clip = status == SAO_STATUS_OK;
                 break;
             case SAO_UI_CANVAS_OP_CLEAR_CLIP:
                 if (has_clip)
-                    sao_ui_paint_ctx_pop_clip(context);
+                    status = sao_ui_paint_ctx_pop_clip(context);
                 has_clip = false;
                 break;
             default:
+                status = SAO_STATUS_ERR_INVALID_ARGUMENT;
                 break;
             }
         }
-        if (has_clip)
-            sao_ui_paint_ctx_pop_clip(context);
+        if (has_clip) {
+            const auto popped = sao_ui_paint_ctx_pop_clip(context);
+            if (status == SAO_STATUS_OK)
+                status = popped;
+        }
+        const auto end_status = sao_ui_paint_ctx_end_frame(context);
+        if (status == SAO_STATUS_OK)
+            status = end_status;
         sao_ui_paint_ctx_destroy(context);
         context = nullptr;
-        return SAO_STATUS_OK;
+        return status;
     } catch (...) {
         sao_ui_paint_ctx_destroy(context);
         return SAO_STATUS_ERR_UNKNOWN;

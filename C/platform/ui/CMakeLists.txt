@@ -54,6 +54,7 @@ add_library(sao_platform_ui SHARED
     src/linkstart_intro.cpp
     src/linkstart_renderer_d3d11.cpp
     src/entity_shell.cpp       # production Entity root composition
+    src/plugin_tabs.cpp
 
     # ── Popup navigation, animation, and panel layout ─────────
     src/animator.cpp           # sao_theme/animator.py + utils easing

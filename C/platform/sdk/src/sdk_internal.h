@@ -98,9 +98,6 @@ struct PanelEntry {
     UiMode ui_mode = UiMode::unspecified;
     std::shared_ptr<std::mutex> native_mutation_mutex = std::make_shared<std::mutex>();
     std::unordered_set<std::string> pending_widget_ids;
-    std::vector<sao_ui_script_canvas_handle_t> canvases;
-    std::vector<sao_ui_widget_handle_t> canvas_placeholders;
-    std::vector<sao_ui_layout_node_handle_t> canvas_placeholder_nodes;
     bool cleanup_pending = false;
     bool unregistering = false;
 };

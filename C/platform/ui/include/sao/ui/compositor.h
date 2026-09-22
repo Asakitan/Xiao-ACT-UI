@@ -19,10 +19,10 @@
 //      (pet engine BGRA slots).  Render-thread only.
 //   3. `set_shared_texture_source(handle, w, h)` — GPU-shared D3D11
 //      texture; producer writes straight (non-premultiplied) RGBA,
-//      consumer premultiplies in the shader.  Any-thread setter,
+//      consumer premultiplies in the shader.  Owner-thread setter,
 //      render-thread consumer.  MMF + shared texture CAN coexist on
 //      one layer — shared texture provides color, MMF provides alpha
-//      byte for RGN scanning.
+//      byte for hit testing and explicit CPU fallback.
 //
 // ── SetWindowRgn — the click-through mechanism (§4-5 of handoff) ──
 //   `SetWindowRgn`'s **exclude** is THE only reliable cross-process
@@ -448,17 +448,57 @@ SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_mmf_source(
     sao_ui_layer_handle_t layer,
     const char* mmf_name_utf8);
 
-// Path 3: attach a GPU-shared D3D11 texture as color source.  Handle
-// is an NT shared handle (from CreateSharedHandle) or a DXGI keyed-
-// mutex handle.  See `dcomp_bridge.h` for the interop story.  The
-// texture holds STRAIGHT (non-premultiplied) RGBA; the composite
-// shader multiplies alpha through — doing premultiply upstream would
-// cost a CPU pass or extra plugin-side shader work.
-// handle == 0 → clear the source immediately on the render thread.
-// MMF source (if attached) keeps being polled purely
-// for its alpha byte, feeding _sync_host_rgn. Attach/clear is render-thread-
-// affine because it may release cached D3D11 objects; update_bgra remains
-// thread-safe.
+enum sao_ui_shared_handle_kind_e : uint32_t {
+    SAO_UI_SHARED_HANDLE_LEGACY_DXGI = 0,
+    SAO_UI_SHARED_HANDLE_NT = 1,
+};
+
+struct SaoUiSharedTextureSource {
+    uint32_t struct_size;
+    uint32_t handle_kind;
+    uint64_t shared_handle;
+    uint32_t width;
+    uint32_t height;
+    uint64_t acquire_key;
+    uint64_t release_key;
+    uint32_t timeout_ms;
+    uint32_t reserved;
+};
+
+struct SaoUiSharedTextureState {
+    uint32_t struct_size;
+    uint32_t configured;
+    uint32_t imported;
+    uint32_t active;
+    sao_status_t last_status;
+    int32_t last_hresult;
+    uint32_t width;
+    uint32_t height;
+    uint64_t generation;
+    uint64_t acquired_frames;
+};
+
+// Straight-alpha RGBA8/BGRA8 UNORM only; one mip, slice and sample.
+// Owner-thread-only; failed replacement preserves the committed source and frame.
+// NT handles must already belong to this process; a private duplicate is retained.
+// Legacy handles are never closed; their producer must keep the resource alive.
+// Plain legacy sharing is supported without a mutex; producer synchronization remains external.
+// NULL or handle zero clears regardless of dimensions; timeout is clamped to 8ms.
+// Irregular input uses MMF alpha or optional GPU alpha readback; missing alpha yields no hit.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_shared_texture_ex(
+    sao_ui_layer_handle_t layer, const SaoUiSharedTextureSource* source);
+
+// Owner-thread-only; active retains a successful current-generation copy on timeout.
+// Replacement, clear and invalidation advance generation and reset acquired_frames.
+// Abandonment requires a newly published source; device recovery retries import once.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_get_shared_texture_state(
+    sao_ui_layer_handle_t layer, SaoUiSharedTextureState* out_state);
+
+// Owner-thread-only; availability is device capability, not proof of a particular import.
+SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_compositor_gpu_interop_available(
+    sao_ui_compositor_handle_t compositor, bool* out_available);
+
+// Legacy DXGI wrapper: acquire/release key 0, timeout 8ms; zero clears.
 SAO_UI_API sao_status_t SAO_UI_CALL sao_ui_layer_set_shared_texture(
     sao_ui_layer_handle_t layer,
     void* shared_handle,     // HANDLE
