@@ -19,6 +19,8 @@ add_library(sao_platform_core STATIC
     src/thread.cpp
     src/event.cpp
     src/error.cpp
+    # Shared pp_diag channel: plaintext in Debug, ECIES-encrypted elsewhere.
+    src/diag_log.cpp
     # Game-agnostic engine detection and IL2CPP runtime probing.
     src/engine_detector.cpp
     src/il2cpp_probe.cpp
@@ -26,6 +28,9 @@ add_library(sao_platform_core STATIC
     src/perf_probe.cpp
 )
 add_library(sao::core ALIAS sao_platform_core)
+
+target_compile_definitions(sao_platform_core PRIVATE
+    "$<$<CONFIG:Debug>:SAO_RT_IO_ACTUAL_DEBUG=1>")
 
 target_include_directories(sao_platform_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -46,6 +51,8 @@ if (WIN32)
         user32
         advapi32
         bcrypt
+        # DPAPI (CryptProtectData) for the SAO3 data envelope.
+        crypt32
     )
 endif()
 

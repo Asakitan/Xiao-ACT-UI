@@ -38,7 +38,8 @@ any game/plugin logic runs.
 - `status.h` — the canonical `sao_status_t` enum.
 - `logging.h` — level-based logger with a single install-able callback.
 - `config.h` — typed get/set over a JSON-backed store.
-- `crypto.h` — SHA/HMAC/AES-GCM/random.
+- `crypto.h` — SHA/HMAC/AES-GCM/random, DPAPI (`LOCAL_MACHINE`) protect/unprotect,
+  and the SAO3 data envelope (`sao_core_sao3_*`, machine-bound config payloads).
 - `memory.h` — read-only remote-process memory.
 - `process.h` — open/enumerate/find process + module enumeration.
 - `window.h` — screen info + HWND lookup + geometry helpers.

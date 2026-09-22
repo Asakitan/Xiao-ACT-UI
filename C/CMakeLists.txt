@@ -261,15 +261,18 @@ option(SAO_BUILD_LEGACY_CORE "Build legacy sao_core compat target (required by s
 option(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL
     "Enable the launcher-side plugin runtime auto-installer" OFF)
 set(SAO_PLUGINS_RUNTIME_MANIFEST "" CACHE FILEPATH
-    "Reserved until canonical plugin runtime provider wiring exists")
+    "Reserved path; production installs use plugins.runtime_manifest in "
+    "the provider config")
 mark_as_advanced(SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL)
 mark_as_advanced(SAO_PLUGINS_RUNTIME_MANIFEST)
 
 if (SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL)
     message(FATAL_ERROR
-        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL=ON is reserved: canonical end-to-end "
-        "plugin runtime provider wiring is not implemented; "
-        "SAO_PLUGINS_RUNTIME_MANIFEST does not enable it.")
+        "SAO_PLUGINS_ENABLE_RUNTIME_AUTOINSTALL=ON is reserved: canonical "
+        "runtime installation goes through plugins.runtime_manifest in the "
+        "provider config and the launcher-side sao::runtime_installer "
+        "link; this switch and SAO_PLUGINS_RUNTIME_MANIFEST do not "
+        "participate in that wiring.")
 endif()
 
 if (SAO_BUILD_PLATFORM)

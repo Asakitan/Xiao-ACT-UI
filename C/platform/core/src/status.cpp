@@ -16,6 +16,7 @@ extern "C" const char* SAO_CORE_CALL sao_status_str(sao_status_t status) {
         case SAO_STATUS_ERR_CANCELLED:         return "cancelled";
         case SAO_STATUS_ERR_ABI_MISMATCH:      return "abi_mismatch";
         case SAO_STATUS_ERR_CAPABILITY_MISSING: return "capability_missing";
+        case SAO_STATUS_ERR_INTERNAL:          return "internal";
         case SAO_STATUS_ERR_OS_CALL_FAILED:    return "os_call_failed";
         case SAO_STATUS_ERR_ACCESS_DENIED:     return "access_denied";
         case SAO_STATUS_ERR_NOT_FOUND:         return "not_found";
@@ -32,6 +33,13 @@ extern "C" const char* SAO_CORE_CALL sao_status_str(sao_status_t status) {
         case SAO_STATUS_ERR_SURFACE_INVALID:   return "surface_invalid";
         case SAO_STATUS_ERR_SCRIPT_LOAD:       return "script_load";
         case SAO_STATUS_ERR_SCRIPT_RUNTIME:    return "script_runtime";
+        case SAO_STATUS_ERR_LICENSE_INVALID:        return "license_invalid";
+        case SAO_STATUS_ERR_LICENSE_EXPIRED:        return "license_expired";
+        case SAO_STATUS_ERR_LICENSE_HWID_MISMATCH:  return "license_hwid_mismatch";
+        case SAO_STATUS_ERR_SHELL_TAMPERED:         return "shell_tampered";
+        case SAO_STATUS_ERR_PLATFORM_INIT_FAIL:     return "platform_init_fail";
+        case SAO_STATUS_ERR_PLUGIN_LOAD_FAIL:       return "plugin_load_fail";
+        case SAO_STATUS_ERR_UI_ONLINE_FAIL:         return "ui_online_fail";
         default:                               return "unknown";
     }
 }

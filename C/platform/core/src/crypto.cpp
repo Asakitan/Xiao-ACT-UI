@@ -3,7 +3,10 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <bcrypt.h>
+#include <dpapi.h>
+#include <wincrypt.h>
 
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -349,4 +352,234 @@ extern "C" sao_status_t SAO_CORE_CALL sao_core_random_bytes(
     (void)byte_count;
     return SAO_STATUS_ERR_NOT_IMPLEMENTED;
 #endif
+}
+
+extern "C" sao_status_t SAO_CORE_CALL sao_core_dpapi_protect(
+    const uint8_t* plaintext, size_t plaintext_size,
+    uint8_t* out, size_t capacity, size_t* out_size) {
+    if (out_size != nullptr) *out_size = 0;
+    if (plaintext == nullptr && plaintext_size > 0) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+#ifdef _WIN32
+    DATA_BLOB in_blob{};
+    DATA_BLOB out_blob{};
+    in_blob.cbData = static_cast<DWORD>(plaintext_size);
+    in_blob.pbData = const_cast<BYTE*>(plaintext);
+    if (!::CryptProtectData(&in_blob, nullptr, nullptr, nullptr, nullptr,
+                            CRYPTPROTECT_LOCAL_MACHINE, &out_blob)) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+    const size_t needed = static_cast<size_t>(out_blob.cbData);
+    if (out_size != nullptr) *out_size = needed;
+    sao_status_t result = SAO_STATUS_OK;
+    if (out == nullptr) {
+        result = capacity == 0 ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } else if (capacity < needed) {
+        result = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    } else {
+        std::memcpy(out, out_blob.pbData, needed);
+    }
+    ::LocalFree(out_blob.pbData);
+    return result;
+#else
+    (void)out;
+    (void)capacity;
+    return SAO_STATUS_ERR_CAPABILITY_MISSING;
+#endif
+}
+
+extern "C" sao_status_t SAO_CORE_CALL sao_core_dpapi_unprotect(
+    const uint8_t* ciphertext, size_t ciphertext_size,
+    uint8_t* out, size_t capacity, size_t* out_size) {
+    if (out_size != nullptr) *out_size = 0;
+    if (ciphertext == nullptr && ciphertext_size > 0) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+#ifdef _WIN32
+    DATA_BLOB in_blob{};
+    DATA_BLOB out_blob{};
+    in_blob.cbData = static_cast<DWORD>(ciphertext_size);
+    in_blob.pbData = const_cast<BYTE*>(ciphertext);
+    if (!::CryptUnprotectData(&in_blob, nullptr, nullptr, nullptr, nullptr,
+                              CRYPTPROTECT_LOCAL_MACHINE, &out_blob)) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+    const size_t needed = static_cast<size_t>(out_blob.cbData);
+    if (out_size != nullptr) *out_size = needed;
+    sao_status_t result = SAO_STATUS_OK;
+    if (out == nullptr) {
+        result = capacity == 0 ? SAO_STATUS_OK : SAO_STATUS_ERR_INVALID_ARGUMENT;
+    } else if (capacity < needed) {
+        result = SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    } else {
+        std::memcpy(out, out_blob.pbData, needed);
+    }
+    ::LocalFree(out_blob.pbData);
+    return result;
+#else
+    (void)out;
+    (void)capacity;
+    return SAO_STATUS_ERR_CAPABILITY_MISSING;
+#endif
+}
+
+namespace {
+
+constexpr uint8_t kSao3Magic[4] = {'S', 'A', 'O', '3'};
+constexpr uint32_t kSao3Version = 1;
+
+inline void sao3_write_le_u32(uint8_t* buffer, uint32_t value) {
+    buffer[0] = static_cast<uint8_t>(value & 0xFFu);
+    buffer[1] = static_cast<uint8_t>((value >> 8) & 0xFFu);
+    buffer[2] = static_cast<uint8_t>((value >> 16) & 0xFFu);
+    buffer[3] = static_cast<uint8_t>((value >> 24) & 0xFFu);
+}
+
+inline uint32_t sao3_read_le_u32(const uint8_t* buffer) {
+    return static_cast<uint32_t>(buffer[0]) |
+           (static_cast<uint32_t>(buffer[1]) << 8) |
+           (static_cast<uint32_t>(buffer[2]) << 16) |
+           (static_cast<uint32_t>(buffer[3]) << 24);
+}
+
+}  // namespace
+
+// Wipes a key material buffer on scope exit, covering early returns.
+struct ScopedKeyWipe {
+    uint8_t* data;
+    size_t size;
+    ~ScopedKeyWipe() {
+        volatile uint8_t* wipe = data;
+        for (size_t i = 0; i < size; ++i) wipe[i] = 0;
+    }
+};
+
+extern "C" bool SAO_CORE_CALL sao_core_sao3_is_envelope(
+    const uint8_t* data, size_t data_size) {
+    if (data == nullptr || data_size < 4u) return false;
+    return std::memcmp(data, kSao3Magic, 4) == 0;
+}
+
+extern "C" sao_status_t SAO_CORE_CALL sao_core_sao3_envelope_encode(
+    const uint8_t* plaintext, size_t plaintext_size,
+    uint8_t* out, size_t out_capacity, size_t* out_size) {
+    if (out_size != nullptr) *out_size = 0;
+    if (plaintext == nullptr && plaintext_size > 0) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+#ifdef _WIN32
+    if (plaintext_size > 0xFFFFFFFFu) {
+        // pt_size on the wire is a little-endian u32.
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    uint8_t data_key[32];
+    ScopedKeyWipe data_key_wipe{data_key, sizeof(data_key)};
+    sao_status_t rs = sao_core_random_bytes(data_key, sizeof(data_key));
+    if (rs != SAO_STATUS_OK) return rs;
+
+    size_t dpapi_size = 0;
+    sao_status_t ps = sao_core_dpapi_protect(
+        data_key, sizeof(data_key), nullptr, 0, &dpapi_size);
+    if (ps != SAO_STATUS_OK) return ps;
+    if (dpapi_size == 0 || dpapi_size > 0x10000u) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+    std::vector<uint8_t> dpapi_blob(dpapi_size);
+    ps = sao_core_dpapi_protect(data_key, sizeof(data_key),
+                                dpapi_blob.data(), dpapi_blob.size(),
+                                &dpapi_size);
+    if (ps != SAO_STATUS_OK) return ps;
+    dpapi_blob.resize(dpapi_size);
+
+    uint8_t nonce[12];
+    rs = sao_core_random_bytes(nonce, sizeof(nonce));
+    if (rs != SAO_STATUS_OK) return rs;
+
+    uint8_t tag[16] = {0};
+    std::vector<uint8_t> ct(plaintext_size);
+    const sao_status_t es = sao_core_aes_gcm_encrypt(
+        data_key, nonce, nullptr, 0,
+        plaintext, plaintext_size,
+        ct.empty() ? nullptr : ct.data(), tag);
+    if (es != SAO_STATUS_OK) return es;
+
+    const size_t needed = 4u + 4u + 4u + dpapi_size + 12u + 16u + 4u +
+                          plaintext_size;
+    if (out_size != nullptr) *out_size = needed;
+    if (out == nullptr || out_capacity < needed) {
+        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    }
+    uint8_t* p = out;
+    std::memcpy(p, kSao3Magic, 4); p += 4;
+    sao3_write_le_u32(p, kSao3Version); p += 4;
+    sao3_write_le_u32(p, static_cast<uint32_t>(dpapi_size)); p += 4;
+    std::memcpy(p, dpapi_blob.data(), dpapi_size); p += dpapi_size;
+    std::memcpy(p, nonce, 12); p += 12;
+    std::memcpy(p, tag, 16); p += 16;
+    sao3_write_le_u32(p, static_cast<uint32_t>(plaintext_size)); p += 4;
+    if (plaintext_size > 0) std::memcpy(p, ct.data(), plaintext_size);
+    return SAO_STATUS_OK;
+#else
+    (void)out;
+    (void)out_capacity;
+    return SAO_STATUS_ERR_CAPABILITY_MISSING;
+#endif
+}
+
+extern "C" sao_status_t SAO_CORE_CALL sao_core_sao3_envelope_decode(
+    const uint8_t* envelope, size_t envelope_size,
+    uint8_t* pt_out, size_t pt_capacity, size_t* bytes_written) {
+    if (bytes_written != nullptr) *bytes_written = 0;
+    if (envelope == nullptr) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    if (!sao_core_sao3_is_envelope(envelope, envelope_size) ||
+        envelope_size < 16u) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    if (sao3_read_le_u32(envelope + 4) != kSao3Version) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const uint32_t blob_len = sao3_read_le_u32(envelope + 8);
+    if (blob_len > 0x10000u ||
+        envelope_size < 12u + blob_len + 32u) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const uint8_t* dpapi_blob = envelope + 12;
+    size_t key_size = 0;
+    sao_status_t us = sao_core_dpapi_unprotect(
+        dpapi_blob, blob_len, nullptr, 0, &key_size);
+    if (us != SAO_STATUS_OK || key_size != 32u) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+    uint8_t data_key[32];
+    ScopedKeyWipe data_key_wipe{data_key, sizeof(data_key)};
+    us = sao_core_dpapi_unprotect(dpapi_blob, blob_len,
+                                  data_key, sizeof(data_key), &key_size);
+    if (us != SAO_STATUS_OK || key_size != 32u) {
+        return SAO_STATUS_ERR_OS_CALL_FAILED;
+    }
+
+    const uint8_t* rest = envelope + 12 + blob_len;
+    const size_t rest_len = envelope_size - 12 - blob_len;
+    // rest_len >= 32 was verified above.
+    const uint8_t* nonce = rest;
+    const uint8_t* tag = rest + 12;
+    const uint32_t pt_size = sao3_read_le_u32(rest + 28);
+    // Subtraction form avoids u32 wraparound in `32u + pt_size`.
+    if (pt_size > rest_len - 32u) {
+        return SAO_STATUS_ERR_INVALID_ARGUMENT;
+    }
+    const uint8_t* ct = rest + 32;
+
+    if (bytes_written != nullptr) *bytes_written = pt_size;
+    if (pt_out == nullptr || pt_capacity < pt_size) {
+        return SAO_STATUS_ERR_BUFFER_TOO_SMALL;
+    }
+    const sao_status_t ds = sao_core_aes_gcm_decrypt(
+        data_key, nonce, nullptr, 0, ct, pt_size, tag, pt_out);
+    if (ds != SAO_STATUS_OK) {
+        if (bytes_written != nullptr) *bytes_written = 0;
+        return ds;
+    }
+    return SAO_STATUS_OK;
 }

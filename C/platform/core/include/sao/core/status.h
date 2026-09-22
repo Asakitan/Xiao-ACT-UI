@@ -18,6 +18,16 @@ extern "C" {
 
 typedef int32_t sao_status_t;
 
+// init_pipeline.h keeps legacy SAO_STATUS_* macro spellings for TUs that want
+// to stay dependency-free.  When such a TU also includes this header after
+// init_pipeline.h, the macros would textually replace the canonical enum
+// members below (identical values, but the names collide).  Releasing the
+// macro binding here rebinds the identifier to the enum constant — the value
+// stays the same, so downstream code is unaffected either way.
+#ifdef SAO_STATUS_OK
+#    undef SAO_STATUS_OK
+#endif
+
 // clang-format off
 enum sao_status_e : int32_t {
     SAO_STATUS_OK                       =    0,
@@ -40,6 +50,10 @@ enum sao_status_e : int32_t {
     // written here — requires <capability>".  The stub itself must not
     // pretend a fake success; audit-friendly gating only.
     SAO_STATUS_ERR_CAPABILITY_MISSING   =  -10,
+    // Catch-all internal failure.  Pinned at -11 (not -2) so launcher
+    // call sites can never confuse it with ERR_NOT_INITIALIZED, and so
+    // the historical SAO_STATUS_INTERNAL alias stays unambiguous.
+    SAO_STATUS_ERR_INTERNAL             =  -11,
 
     // ── OS ─────────────────────────────────────────────────────────
     SAO_STATUS_ERR_OS_CALL_FAILED       =  -20,   // see sao_core_last_os_error()
@@ -68,6 +82,18 @@ enum sao_status_e : int32_t {
     // ── scripting ──────────────────────────────────────────────────
     SAO_STATUS_ERR_SCRIPT_LOAD          = -120,
     SAO_STATUS_ERR_SCRIPT_RUNTIME       = -121,
+
+    // ── launcher / boot pipeline ───────────────────────────────────
+    // Codes returned across the sao/launcher/init_pipeline.h C ABI.
+    // -140s free of the UI block (-100/-101 above), which the legacy
+    // launcher header used to collide with via -100/-101/-102.
+    SAO_STATUS_ERR_LICENSE_INVALID         = -140,
+    SAO_STATUS_ERR_LICENSE_EXPIRED         = -141,
+    SAO_STATUS_ERR_LICENSE_HWID_MISMATCH   = -142,
+    SAO_STATUS_ERR_SHELL_TAMPERED          = -200,
+    SAO_STATUS_ERR_PLATFORM_INIT_FAIL      = -300,
+    SAO_STATUS_ERR_PLUGIN_LOAD_FAIL        = -400,
+    SAO_STATUS_ERR_UI_ONLINE_FAIL          = -500,
 };
 // clang-format on
 
