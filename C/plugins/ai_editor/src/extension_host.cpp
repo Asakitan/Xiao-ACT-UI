@@ -21,6 +21,10 @@
 #include "plugin_contributions.h"
 
 namespace sao::ai_editor::native {
+namespace extapi {
+void retire_language_owner(std::string_view extension_id, uint64_t generation);
+void retire_extension_owner(std::string_view extension_id, uint64_t generation);
+}
 namespace {
 
 constexpr std::size_t kMaximumTreeChildren = 500;
@@ -1555,6 +1559,7 @@ void ExtensionHost::mark_runtime_dead_locked(std::string_view error_code, std::s
             continue;
         }
         record.runtime_state_known = false;
+        extapi::retire_language_owner(id, 0);
         record.operation = ExtensionOperation::quarantined;
         record.runtime_error_code = error_code;
         record.runtime_error = error;
@@ -1563,12 +1568,30 @@ void ExtensionHost::mark_runtime_dead_locked(std::string_view error_code, std::s
 
 void ExtensionHost::retire_runtime(const std::shared_ptr<NodeRuntime>& runtime,
                                    std::string_view error_code, std::string_view error) {
+    std::string detailed_error(error);
+    if (runtime) {
+        const std::string tail = runtime->stderr_tail();
+        if (!tail.empty()) {
+            detailed_error += ": ";
+            detailed_error += tail.substr(0, 4096);
+        }
+    }
     bool current_runtime = false;
+    std::vector<std::pair<std::string, uint64_t>> retiring_owners;
     {
         std::unique_lock<std::shared_mutex> runtime_guard(runtime_mutex_);
         std::lock_guard<std::mutex> guard(mutex_);
         if (node_runtime_ == runtime) {
-            mark_runtime_dead_locked(error_code, error);
+            retiring_owners.reserve(extensions_.size());
+            for (const auto& [id, record] : extensions_) {
+                const uint64_t generation =
+                    (record.operation == ExtensionOperation::deactivating ||
+                     record.operation == ExtensionOperation::unregistering)
+                        ? record.retiring_generation
+                        : record.operation_generation;
+                retiring_owners.emplace_back(id, generation);
+            }
+            mark_runtime_dead_locked(error_code, detailed_error);
             node_runtime_.reset();
             runtime_retiring_ = true;
             current_runtime = true;
@@ -1580,6 +1603,8 @@ void ExtensionHost::retire_runtime(const std::shared_ptr<NodeRuntime>& runtime,
         } catch (...) {
         }
     }
+    for (const auto& [id, generation] : retiring_owners)
+        extapi::retire_extension_owner(id, generation);
     if (current_runtime) {
         std::unique_lock<std::shared_mutex> runtime_guard(runtime_mutex_);
         runtime_retiring_ = false;
@@ -2743,6 +2768,7 @@ int32_t ExtensionHost::unregister_extension(std::string_view extension_id, Json&
             return SAO_AI_EDITOR_OK;
         }
         runtime_generation = found->second.operation_generation;
+        found->second.retiring_generation = runtime_generation;
         found->second.operation = ExtensionOperation::unregistering;
         if (!advance_extension_generation(found->second, next_extension_generation_,
                                           operation_generation)) {
@@ -3142,6 +3168,7 @@ int32_t ExtensionHost::activate(std::string_view extension_id, uint32_t timeout_
                 found->second.runtime_error = failure_message;
             }
         }
+        extapi::retire_language_owner(id, operation_generation);
         out = result.is_object() ? std::move(result) : Json::object();
         out["ok"] = false;
         out["available"] = !unknown;
@@ -3220,6 +3247,7 @@ int32_t ExtensionHost::deactivate(std::string_view extension_id, Json& out) {
             return SAO_AI_EDITOR_OK;
         }
         runtime_generation = found->second.operation_generation;
+        found->second.retiring_generation = runtime_generation;
         found->second.operation = ExtensionOperation::deactivating;
         if (!advance_extension_generation(found->second, next_extension_generation_,
                                           operation_generation)) {
@@ -3371,12 +3399,27 @@ int32_t ExtensionHost::deactivate(std::string_view extension_id, Json& out) {
         found->second.activation_result = Json::object();
         found->second.operation = ExtensionOperation::idle;
     }
+    extapi::retire_language_owner(id, runtime_generation);
     out = Json{{"ok", true},
                {"available", true},
                {"applied", true},
                {"extensionId", id},
                {"runtimeState", "inactive"}};
     return SAO_AI_EDITOR_OK;
+}
+
+bool ExtensionHost::generation_current(std::string_view extension_id, uint64_t generation) const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const auto found = extensions_.find(std::string(extension_id));
+    if (found == extensions_.end() || generation == 0) return false;
+    if ((found->second.operation == ExtensionOperation::deactivating ||
+         found->second.operation == ExtensionOperation::unregistering) &&
+        found->second.retiring_generation == generation)
+        return true;
+    return found->second.operation_generation == generation &&
+           (found->second.operation == ExtensionOperation::activating ||
+            (found->second.operation == ExtensionOperation::idle && found->second.activated &&
+             found->second.runtime_state_known));
 }
 
 int32_t ExtensionHost::execute_command(std::string_view command_id, const Json& args,
@@ -3391,6 +3434,14 @@ int32_t ExtensionHost::execute_command(std::string_view command_id, const Json& 
             native_handler = native->second.handler;
         }
         node = node_runtime_;
+    }
+    if (command_id == "sao.internal.extapi.event") {
+        if (!node || !node->alive()) return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+        if (!args.is_array() || args.size() != 1 || !args[0].is_object())
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        const int32_t status = node->notify("sao.extapi.event", args[0]);
+        out = Json{{"accepted", status == SAO_AI_EDITOR_OK}};
+        return status;
     }
     if (native_handler && !tree_method.has_value()) {
         CallbackGuard callback_guard(callback_active_);
@@ -3995,8 +4046,17 @@ int32_t ExtensionHost::execute_command(std::string_view command_id, const Json& 
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     Json params{{"command", std::string(command_id)}, {"arguments", args}};
+    const bool language_callback = command_id == "sao.internal.extapi.invoke" &&
+        args.size() == 1 && args[0].is_object() && args[0].value("invoke", std::string{}) == "languages";
+    const std::string owner = language_callback ? args[0].value("extensionId", std::string{}) : std::string{};
+    const uint64_t generation = language_callback ? args[0].value("generation", uint64_t{}) : 0;
+    if (language_callback && !generation_current(owner, generation)) return SAO_AI_EDITOR_ERR_NOT_FOUND;
     const int32_t status =
         node->request("commands.execute", params, timeout_ms == 0 ? 15000 : timeout_ms, out);
+    if (language_callback && !generation_current(owner, generation)) {
+        out = Json{{"message", "language provider generation retired"}};
+        return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    }
     if (activation_outcome_unknown(status)) {
         retire_runtime(node, "HOST_EXITED",
                        "extension host stopped after an indeterminate command callback");
@@ -4217,11 +4277,14 @@ Json ExtensionHost::snapshot() {
                     {"error", "extension inventory snapshot failed"}};
     }
     std::string entry_script;
+    std::shared_ptr<NodeRuntime> node;
     {
         std::lock_guard<std::mutex> guard(mutex_);
         entry_script = boot_options_.entry_script;
+        node = node_runtime_;
     }
     inventory["entryScript"] = std::move(entry_script);
+    inventory["nodeStderrTail"] = node ? node->stderr_tail() : std::string{};
     return inventory;
 }
 

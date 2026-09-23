@@ -1,6 +1,7 @@
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #include "plugin_internal.h"
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/plugin_context_lifetime_internal.h"
 #include "sao/plugins/loader/plugin_deps.h"
 
 #include <windows.h>
@@ -886,7 +887,8 @@ sao_plugins_lifecycle_unload(plugin_handle_t plugin) {
             host_adapter_unloaded = plugin->host_adapter_unloaded;
             dependency_session = plugin->dependency_session;
             if (plugin_context_event_is_current_thread(context) ||
-                plugin_context_platform_is_current_thread(context)) {
+                plugin_context_platform_is_current_thread(context) ||
+                plugin_context_runtime_busy(context)) {
                 return SAO_PLUGINS_ERR_BUSY;
             }
             previous_state = plugin->state;

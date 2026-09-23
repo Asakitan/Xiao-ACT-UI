@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -296,6 +297,7 @@ class NativeRuntime final {
     std::mutex event_mutex_;
     std::condition_variable event_ready_;
     std::deque<std::string> events_;
+    std::size_t queued_event_bytes_ = 0;
     uint64_t dropped_events_ = 0;
     bool stopping_ = false;
 

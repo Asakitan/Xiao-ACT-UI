@@ -313,6 +313,11 @@ bool NodeRuntime::alive() const noexcept {
     return WaitForSingleObject(process_, 0) == WAIT_TIMEOUT;
 }
 
+std::string NodeRuntime::stderr_tail() const {
+    std::lock_guard<std::mutex> guard(state_mutex_);
+    return stderr_tail_;
+}
+
 int32_t NodeRuntime::request(std::string_view method, const Json& params,
                              uint32_t timeout_ms, Json& result) {
     std::shared_lock<std::shared_mutex> lifecycle_guard(lifecycle_mutex_);
@@ -656,12 +661,24 @@ void NodeRuntime::handle_request_from_node(Json message) {
     const std::string method = message.value("method", std::string{});
     const Json params = message.value("params", Json::object());
     Json result;
-    const int32_t status = runtime->dispatch_extension_call(method, params,
-                                                             result);
+    int32_t status = SAO_AI_EDITOR_ERR_PROTOCOL;
+    try {
+        status = runtime->dispatch_extension_call(method, params, result);
+    } catch (const std::exception& error) {
+        result = Json{{"message", error.what()}};
+    } catch (...) {
+        result = Json{{"message", "extension request dispatch failed"}};
+    }
     if (status != SAO_AI_EDITOR_OK) {
+        std::string error_message = "call failed";
+        if (result.is_object()) {
+            const auto found = result.find("message");
+            if (found != result.end() && found->is_string() &&
+                !found->get_ref<const std::string&>().empty())
+                error_message = found->get<std::string>();
+        }
         response["error"] = Json{{"code", -32000},
-                                  {"message", result.value("message",
-                                                            "call failed")},
+                                  {"message", std::move(error_message)},
                                   {"data", Json{{"status", status}}}};
     } else {
         response["result"] = std::move(result);

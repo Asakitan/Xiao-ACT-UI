@@ -63,7 +63,9 @@ The compatibility facade dynamically maps legacy `window.pywebview.api.METHOD(..
 
 - configuration/settings: `load_config`, `save_config`, mode/provider/model and editor theme/language/settings calls. When no persisted user theme exists, `load_config` must return `theme:"light"` and `color_theme:""`; a saved `dark` choice must round-trip unchanged;
 - workspace/editor: list/open/save/search/tree/decorations, editor selection/options/visible-range reporting, and command palette actions;
-- terminal/tasks: task listing/execution/status/cancel plus `execute_command` where a native implementation exists;
+- terminal/tasks/debug: ConPTY shell terminals and extension pseudoterminals; task provider
+	fetch/resolve/execution/cancellation and lifecycle events; debug configuration/descriptor/tracker
+	providers plus executable, server, named-pipe and inline DAP transports;
 - chat/providers: controls, conversation/history, provider status/model list, send/cancel/stream events, and workflow operations;
 - extensions/MCP: only the ordinary extension and MCP management calls implemented by the native runtime;
 - window controls and embedded webview panel lifecycle: `win_minimize`, `win_maximize`, `win_close`, file dialogs, and `webview_*` calls when the host owns those surfaces.
@@ -81,15 +83,47 @@ mouse input, focus, device-generation rebind, and teardown remain on the one
 compositor/`hRender` owner thread.
 
 `src/workbench_native_adapter.cpp` implements the native dispatch for configuration,
-file/editor services, chat/history/providers, agents/workflows, terminal/tasks,
+file/editor services, chat/history/providers, agents/workflows, terminal/tasks/debug,
 diagnostics, extensions and embedded webview requests. The composition host drains
 its document-bound replies and events. These are implemented adapters, not a
 bootstrap-only host; backend-dependent methods still report explicit failures when
 the backend is absent. Unknown methods receive a structured `SAO_METHOD_UNAVAILABLE`
-reply. Complete interactive acceptance of these families is still pending; neither
-the frontend's presence nor an adapter branch proves a successful live workflow.
+reply. Extension execution is owned by `extension_process_runtime.cpp`: process trees
+are job-contained, cwd stays within the workspace, ConPTY and DAP traffic use bounded
+queues/frames, and extension generation retirement closes all sessions. A local real
+extension fixture has completed terminal input/output/dispose, TaskProvider fetch plus
+ShellExecution lifecycle, and DAP initialize/launch/evaluate/disconnect in one host
+generation with clean deactivation. Arbitrary marketplace adapters, long-running
+background problem matchers and cross-machine shell matrices remain separate coverage.
 
-## Extension inventory and tree contract
+## Editor and extension wiring (session 79)
+
+Language providers now connect the native registry to Node callbacks with
+generation ownership. Diagnostics and document/configuration/folder events have
+concrete consumers; direct Node notifications coexist with the existing drain
+for other clients, rather than destructively polling that drain twice.
+Workbench completion, hover, definition and formatting carry unsaved content and
+reject stale results. Missing providers remain explicit capability failures.
+Versionless workbench snapshots use a separate bounded cache; they do not replace
+authoritative `workspace.openTextDocument` buffers or establish full shared editor
+document-lifecycle parity. Native extapi remains single-bound-runtime, not an
+isolated multi-runtime service. Failed activation retires generation-owned state.
+
+Opened files retain workspace/absolute identity. Saves serialize per originating
+tab and compare expected content before atomic publication. Production and
+standalone native byte APIs share a 1 MiB binary helper with workspace containment,
+byte validation and identity checks; text APIs retain UTF-8 validation.
+Post-publication verification failure does not guarantee rollback.
+
+Settings/hotkeys/workshop/plugins/process/license requests run on the compositor
+owner through the existing launcher SDK binding; memory uses its existing panel
+provider. Worker entry for those seven names rejects owner-thread violations
+without SDK invocation or child-IPC fallback. This adds no second panel owner.
+The original language-service evidence remains tracked in session 79. Session 82 adds
+the terminal/task/debug lifecycle described above without changing the public AI Editor
+C ABI; Node-to-native methods and process/DAP handles stay private.
+
+## Extension inventory and tree ownership
 
 The extension host validates a canonical extension root, `package.json`, and `main`
 entry before registration. A pinned manifest read is limited to 1 MiB and rejects
@@ -142,7 +176,7 @@ cycle/visit limits, and a workspace-pinned random `CREATE_NEW` sibling followed 
 atomic publication. They are registered as mutating native tools, require ask/plan
 confirmation, and never accept an arbitrary output directory from the model.
 
-## Execution note
+## Historical execution evidence (before session 79)
 
 Debug `sao_platform_ui`, the opaque AI Editor DLL target, and the production launcher
 were built in the complete Debug tree. RelWithDebInfo and Hardened release acceptance

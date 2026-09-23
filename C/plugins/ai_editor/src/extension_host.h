@@ -51,6 +51,7 @@ struct ExtensionRecord {
     ExtensionOperation operation = ExtensionOperation::idle;
     uint64_t generation = 0;
     uint64_t operation_generation = 0;
+    uint64_t retiring_generation = 0;
     uint64_t inventory_index = 0;
 
     Json to_json(bool node_alive) const;
@@ -89,6 +90,7 @@ class ExtensionHost final {
                                    uint64_t owner);
     int32_t post_webview_message(const Json& params, Json& out);
     Json snapshot();
+    bool generation_current(std::string_view extension_id, uint64_t generation) const;
 
   private:
     void deactivate_all();

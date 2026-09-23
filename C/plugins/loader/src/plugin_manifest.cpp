@@ -24,6 +24,9 @@ using json = nlohmann::ordered_json;
 
 class bounded_manifest_json_sax final : public json::json_sax_t {
   public:
+        explicit bounded_manifest_json_sax(bool allow_embedded_null = false) noexcept
+                : allow_embedded_null_(allow_embedded_null) {}
+
     bool null() override {
         return consume_node();
     }
@@ -75,7 +78,8 @@ class bounded_manifest_json_sax final : public json::json_sax_t {
     }
 
     bool consume_string(const string_t& value) noexcept {
-        if (value.find('\0') != string_t::npos || value.size() > kMaximumManifestStringBytes ||
+        if ((!allow_embedded_null_ && value.find('\0') != string_t::npos) ||
+            value.size() > kMaximumManifestStringBytes ||
             string_bytes_ > kMaximumManifestAggregateStringBytes ||
             value.size() > kMaximumManifestAggregateStringBytes - string_bytes_) {
             return false;
@@ -100,6 +104,7 @@ class bounded_manifest_json_sax final : public json::json_sax_t {
     size_t depth_ = 0;
     size_t nodes_ = 0;
     size_t string_bytes_ = 0;
+    bool allow_embedded_null_ = false;
 };
 
 std::wstring normalized_final_path(HANDLE handle) {
@@ -500,6 +505,76 @@ int32_t populate_manifest(const json& root, plugin_manifest& output) {
 }
 
 } // namespace
+
+manifest_locale_resolver::manifest_locale_resolver(std::string_view locales_json,
+                                                   std::string_view locale) noexcept {
+    if (locale.empty() || locales_json.empty() || locales_json.size() > kMaximumManifestRawBytes)
+        return;
+    try {
+        const auto normalize = [](std::string_view value) {
+            const auto first = value.find_first_not_of(" \t\r\n");
+            if (first == std::string_view::npos)
+                return std::string{};
+            const auto last = value.find_last_not_of(" \t\r\n");
+            std::string result(value.substr(first, last - first + 1));
+            for (auto& ch : result) {
+                if (ch >= 'A' && ch <= 'Z')
+                    ch = static_cast<char>(ch + ('a' - 'A'));
+                else if (ch == '_')
+                    ch = '-';
+            }
+            return result;
+        };
+        const auto requested = normalize(locale);
+        if (requested.empty())
+            return;
+        bounded_manifest_json_sax sax(true);
+        if (!json::sax_parse(locales_json.begin(), locales_json.end(), &sax))
+            return;
+        const auto locales = json::parse(locales_json.begin(), locales_json.end(), nullptr, false);
+        if (!locales.is_object())
+            return;
+        const auto language = requested.substr(0, requested.find('-'));
+        for (const auto& [key, section] : locales.items()) {
+            if (!section.is_object())
+                continue;
+            const auto normalized = normalize(key);
+            if (normalized == requested && exact_.is_null())
+                exact_ = section;
+            else if (language != requested && normalized == language && language_.is_null())
+                language_ = section;
+        }
+    } catch (...) {
+        exact_ = nullptr;
+        language_ = nullptr;
+    }
+}
+
+std::string manifest_locale_resolver::text(std::initializer_list<std::string_view> path,
+                                          std::string_view fallback, size_t maximum_bytes) const {
+    for (const auto* section : {&exact_, &language_}) {
+        const json* value = section;
+        for (const auto key : path) {
+            if (!value->is_object()) {
+                value = nullptr;
+                break;
+            }
+            const auto found = value->find(std::string(key));
+            if (found == value->end()) {
+                value = nullptr;
+                break;
+            }
+            value = &*found;
+        }
+        if (value != nullptr && value->is_string()) {
+            const auto& result = value->get_ref<const std::string&>();
+            if (!result.empty() && result.size() <= maximum_bytes &&
+                result.find('\0') == std::string::npos)
+                return result;
+        }
+    }
+    return std::string(fallback);
+}
 
 int32_t resolve_contained_existing_path(const std::filesystem::path& root,
                                         const std::filesystem::path& candidate,

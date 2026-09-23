@@ -1039,8 +1039,16 @@ std::string file_language(std::string_view path) {
         return "javascript";
     if (extension == "ts" || extension == "tsx")
         return "typescript";
-    if (extension == "py")
+    if (extension == "py" || extension == "pyi" || extension == "pyw")
         return "python";
+    if (extension == "lua")
+        return "lua";
+    if (extension == "emma")
+        return "emma";
+    if (extension == "as")
+        return "angelscript";
+    if (extension == "cs")
+        return "csharp";
     if (extension == "json")
         return "json";
     if (extension == "md")
@@ -1120,12 +1128,13 @@ bool text_position_offset(const std::wstring& text, const json& position, size_t
         return false;
     size_t offset = 0;
     for (int64_t current_line = 0; current_line < line; ++current_line) {
-        const size_t newline = text.find(L'\n', offset);
+        const size_t newline = text.find_first_of(L"\r\n", offset);
         if (newline == std::wstring::npos)
             return false;
         offset = newline + 1;
+        if (text[newline] == L'\r' && offset < text.size() && text[offset] == L'\n') ++offset;
     }
-    const size_t line_end = text.find(L'\n', offset);
+    const size_t line_end = text.find_first_of(L"\r\n", offset);
     const size_t available = (line_end == std::wstring::npos ? text.size() : line_end) - offset;
     if (static_cast<uint64_t>(character) > available)
         return false;
@@ -2722,10 +2731,35 @@ NativeAdapterCompletion handle_workspace_method(NativeAdapter& adapter, const Ad
         return successful_completion(
             job, {{"ok", true},
                   {"path", relative},
+                  {"absolute_path", sao::ai_editor::native::wide_to_utf8(path.native())},
                   {"uri", workspace_file_uri(path)},
                   {"name", sao::ai_editor::native::wide_to_utf8(path.filename().native())},
                   {"content", std::move(content)},
                   {"language", file_language(relative)}});
+    }
+    if (job.method == "save_workspace_file") {
+        if (!count(2, 3) || !job.args[0].is_string() || !job.args[1].is_string() ||
+            (job.args.size() == 3 && !job.args[2].is_string()))
+            return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                     "File path, content and optional saved content are required.");
+        std::filesystem::path path;
+        if (!resolve_workspace_path(adapter, job.args[0].get_ref<const std::string&>(), true, path))
+            return failed_completion(job, "SAO_WORKSPACE_BOUNDARY",
+                                     "Save target is outside the active workspace.");
+        const auto& content = job.args[1].get_ref<const std::string&>();
+        const int32_t status = job.args.size() == 3
+            ? sao::ai_editor::native::write_text_atomic_bounded_if_unchanged(
+                  adapter.workspace_root, path, job.args[2].get_ref<const std::string&>(), content)
+            : write_workspace_text_cas(adapter, path, content);
+        if (status != SAO_AI_EDITOR_OK)
+            return failed_completion(job, transport_error_code(status),
+                                     "Workspace file save failed; the file may have changed on disk.");
+        return successful_completion(
+            job, {{"ok", true}, {"path", relative_workspace_path(adapter, path)},
+                  {"absolute_path", sao::ai_editor::native::wide_to_utf8(path.native())},
+                  {"uri", workspace_file_uri(path)},
+                  {"name", sao::ai_editor::native::wide_to_utf8(path.filename().native())},
+                  {"language", file_language(relative_workspace_path(adapter, path))}});
     }
     if (job.method == "create_workspace_file" || job.method == "create_workspace_directory") {
         if (!count(1, 1) || !job.args[0].is_string())
@@ -3771,17 +3805,16 @@ NativeAdapterCompletion handle_runtime_alias_method(NativeAdapter& adapter, cons
                   {"retainContextWhenHidden", options.value("retainContextWhenHidden", false)}});
     }
     if (job.method == "open_native_panel") {
-        // Opens a launcher-owned native tool panel.  Names are restricted to
-        // the documented launcher surface.  The in-process SDK binding
-        // (sao_sdk_platform_open_panel) is tried first — it covers the
-        // launcher table (settings/hotkeys/workshop/plugins/process/memory/
-        // license).  When no callback is bound (NOT_INITIALIZED), the name is
-        // outside that table (NOT_FOUND, e.g. "gpu-hunt"), or the SDK channel
-        // reports a failure, the request falls back to the host IPC channel
-        // carrying the {"type":"open-tool","name":...} frame.
+        // Launcher-owned panels are intercepted by the compositor owner.
+        // Worker dispatch must not invoke their UI callbacks or retry via child IPC.
         if (!count(1, 1) || !job.args[0].is_string())
             return failed_completion(job, "SAO_INVALID_ARGUMENT", "Panel name is required.");
         const std::string panel_name = job.args[0].get<std::string>();
+        if (panel_name == "settings" || panel_name == "hotkeys" || panel_name == "workshop" ||
+            panel_name == "plugins" || panel_name == "process" || panel_name == "memory" ||
+            panel_name == "license")
+            return failed_completion(job, "SAO_OWNER_THREAD_REQUIRED",
+                                     "Launcher panels require the compositor owner thread.");
         static const std::unordered_set<std::string> kLauncherPanels = {
             "settings", "hotkeys", "workshop", "plugins",
             "process", "memory", "license", "gpu-hunt"};
@@ -4158,6 +4191,27 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
                 }
             }
         }
+        const char* extension_command =
+            debug ? "sao.internal.debug.configurations" : "sao.internal.tasks.fetch";
+        RpcReply extension_definitions = call_backend(
+            adapter, "extensions.execute_command",
+            {{"command", extension_command},
+             {"arguments", debug ? json::array({"", nullptr}) : json::array({nullptr})},
+             {"timeoutMs", 15000U}});
+        if (extension_definitions.ok) {
+            json extension_items = debug && extension_definitions.result.is_object()
+                                       ? extension_definitions.result.value(
+                                             "configurations", json::array())
+                                       : extension_definitions.result;
+            if (extension_items.is_array()) {
+                for (json item : extension_items) {
+                    if (!item.is_object() || definitions.size() >= 512)
+                        continue;
+                    item["_saoExtension"] = true;
+                    definitions.push_back(std::move(item));
+                }
+            }
+        }
         if (debug)
             adapter.debug_configurations = definitions;
         else
@@ -4169,10 +4223,18 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
                 continue;
             const std::string label =
                 string_member_or(definition, debug ? "name" : "label",
-                                 (debug ? "Debug " : "Task ") + std::to_string(index + 1));
-            const std::string type = string_member_or(definition, "type");
-            const std::string command = string_member_or(definition, debug ? "program" : "command",
-                                                         string_member_or(definition, "process"));
+                    string_member_or(definition, "name",
+                        (debug ? "Debug " : "Task ") + std::to_string(index + 1)));
+            const json declared = definition.value("definition", json::object());
+            const std::string type = string_member_or(
+                definition, "type", declared.is_object()
+                    ? string_member_or(declared, "type") : std::string{});
+            const json execution = definition.value("execution", json::object());
+            const std::string command = string_member_or(
+                definition, debug ? "program" : "command",
+                string_member_or(definition, "process", execution.is_object()
+                    ? string_member_or(execution, "command",
+                        string_member_or(execution, "commandLine")) : std::string{}));
             rows.push_back({{"index", index},
                             {"label", label},
                             {"type", type},
@@ -4201,6 +4263,24 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
             return failed_completion(job, "SAO_PROCESS_NOT_FOUND",
                                      "Process definition was not found.");
         const json& definition = definitions[static_cast<size_t>(requested)];
+        if (definition.value("_saoExtension", false)) {
+            json forwarded = definition;
+            forwarded.erase("_saoExtension");
+            RpcReply extension_start = call_backend(
+                adapter, "extensions.execute_command",
+                {{"command", debug ? "sao.internal.debug.start"
+                                    : "sao.internal.tasks.execute"},
+                 {"arguments", debug ? json::array({nullptr, forwarded, json::object()})
+                                     : json::array({forwarded})},
+                 {"timeoutMs", debug ? 30000U : 15000U}});
+            if (!extension_start.ok)
+                return rpc_completion(job, std::move(extension_start));
+            {
+                std::lock_guard lock(adapter.mutex);
+                request_event_poll_locked(adapter, kEventPollLifetime);
+            }
+            return successful_completion(job, std::move(extension_start.result));
+        }
         const std::string command = string_member_or(definition, debug ? "program" : "command",
                                                      string_member_or(definition, "process"));
         const std::string name =
@@ -4263,9 +4343,21 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
                                      "Process execution id is required.");
         const std::string id = job.args[0].get<std::string>();
         const auto found = adapter.processes.find(id);
-        if (found == adapter.processes.end())
-            return failed_completion(job, "SAO_PROCESS_NOT_FOUND",
-                                     "Process execution was not found.");
+        if (found == adapter.processes.end()) {
+            const bool debug = job.method == "debug_session_status" ||
+                               job.method == "stop_debug";
+            const bool stop = job.method == "cancel_task" || job.method == "stop_debug";
+            RpcReply extension_process = call_backend(
+                adapter,
+                debug ? (stop ? "vscode.debug.stopSession"
+                              : "vscode.debug.sessionStatus")
+                      : (stop ? "vscode.tasks.terminateTask"
+                              : "vscode.tasks.executionStatus"),
+                {{debug ? "sessionId" : "executionId", id}});
+            if (!extension_process.ok)
+                return rpc_completion(job, std::move(extension_process));
+            return successful_completion(job, std::move(extension_process.result));
+        }
         ManagedProcess& process = *found->second;
         if (job.method == "cancel_task" || job.method == "stop_debug") {
             if (process.running && process.job != nullptr)
@@ -4282,6 +4374,15 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
         for (const auto& [id, process] : adapter.processes)
             if (process->kind == "debug")
                 sessions.push_back(managed_process_snapshot(*process));
+        RpcReply extension_sessions =
+            call_backend(adapter, "vscode.debug.listSessions", json::object());
+        if (extension_sessions.ok && extension_sessions.result.is_object()) {
+            const json values = extension_sessions.result.value("sessions", json::array());
+            if (values.is_array())
+                for (const json& value : values)
+                    if (value.is_object() && sessions.size() < 128)
+                        sessions.push_back(value);
+        }
         return successful_completion(job, {{"sessions", std::move(sessions)}});
     }
     if (job.method == "evaluate_debug_console") {
@@ -4294,13 +4395,18 @@ NativeAdapterCompletion handle_process_method(NativeAdapter& adapter, const Adap
                 process->document_token == job.document_token &&
                 process->document_generation == job.document_generation)
                 target = process.get();
-        if (target == nullptr || target->stdin_write == nullptr)
-            return failed_completion(job, "SAO_DEBUG_SESSION_NOT_FOUND",
-                                     "No running debug session accepts input.");
         std::string input = job.args[0].get<std::string>();
         if (input.size() > kMaximumConsoleInputBytes)
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Debug console input exceeds 64 KiB.");
+        if (target == nullptr || target->stdin_write == nullptr) {
+            RpcReply evaluated = call_backend(
+                adapter, "extensions.execute_command",
+                {{"command", "sao.internal.debug.evaluate"},
+                 {"arguments", json::array({input})}, {"timeoutMs", 15000U}});
+            if (!evaluated.ok) return rpc_completion(job, std::move(evaluated));
+            return successful_completion(job, std::move(evaluated.result));
+        }
         input.append("\r\n");
         {
             std::lock_guard lock(target->input_mutex);
@@ -4429,6 +4535,147 @@ NativeAdapterCompletion handle_compatibility_method(NativeAdapter& adapter, cons
         if (!count(1, 1) || !job.args[0].is_object())
             return failed_completion(job, "SAO_INVALID_ARGUMENT",
                                      "Language provider payload is invalid.");
+        const json& payload = job.args[0];
+        const std::string kind = string_member_or(payload, "kind");
+        const std::map<std::string, std::pair<std::string, std::string>> supported{
+            {"completion", {"completion", "items"}},
+            {"hover", {"hover", "hovers"}},
+            {"definition", {"definition", "definitions"}},
+            {"formatting", {"documentFormatting", "edits"}}};
+        const auto route = supported.find(kind);
+        if (route != supported.end()) {
+            if (!valid_string_member(payload, "uri") ||
+                !valid_string_member(payload, "language") ||
+                !valid_string_member(payload, "content"))
+                return failed_completion(job, "SAO_INVALID_ARGUMENT",
+                                         "Language request requires a document and language.");
+            std::string uri = payload["uri"].get<std::string>();
+            const bool untitled = uri.rfind("untitled:", 0) == 0;
+            if (!untitled) {
+                std::filesystem::path path;
+                if (!resolve_workspace_path(adapter, uri, false, path))
+                    return failed_completion(job, "SAO_WORKSPACE_BOUNDARY",
+                                             "Language document is outside the active workspace.");
+                uri = workspace_file_uri(path);
+            }
+            const auto& content = payload["content"].get_ref<const std::string&>();
+            const std::wstring document_text = sao::ai_editor::native::utf8_to_wide(content);
+            size_t offset = 0;
+            if (!sao::ai_editor::native::valid_utf8(content) ||
+                !text_position_offset(document_text,
+                                      payload.value("position", json(nullptr)), &offset))
+                return failed_completion(job, "SAO_INVALID_ARGUMENT", "Document position is invalid.");
+            json context = payload;
+            context.erase("content");
+            json params{{"kind", route->second.first}, {"uri", uri},
+                        {"scheme", untitled ? "untitled" : "file"},
+                        {"languageId", payload["language"]},
+                        {"position", payload["position"]}, {"context", std::move(context)},
+                        {"document", {{"uri", uri}, {"languageId", payload["language"]},
+                                      {"content", content},
+                                      {"isDirty", payload.value("dirty", false)}}}};
+            if (kind == "formatting") {
+                const json options = payload.value("options", json::object());
+                if (!options.is_object())
+                    return failed_completion(job, "SAO_INVALID_ARGUMENT", "Formatter options are invalid.");
+                params["options"] = options;
+            }
+            if (valid_string_member(payload, "providerId") &&
+                !payload["providerId"].get_ref<const std::string&>().empty())
+                params["providerId"] = payload["providerId"];
+            RpcReply reply = call_backend(adapter, "vscode.languages.invoke", params);
+            if (!reply.ok)
+                return rpc_completion(job, std::move(reply));
+            if (!reply.result.is_object() || !reply.result.contains("results") ||
+                !reply.result["results"].is_array())
+                return failed_completion(job, "SAO_BACKEND_PROTOCOL_ERROR",
+                                         "Language provider response is invalid.");
+            json items = json::array();
+            json errors = json::array();
+            bool available = false;
+            bool incomplete = false;
+            for (const auto& entry : reply.result["results"]) {
+                if (!entry.is_object() || string_member_or(entry, "status") != "ok") {
+                    errors.push_back({{"providerId", string_member_or(entry, "providerId")},
+                                      {"error", string_member_or(entry, "message", "Provider invocation failed.")}});
+                    continue;
+                }
+                json value = entry.value("result", json(nullptr));
+                if (kind == "completion" && value.is_object() && value.contains("items")) {
+                    if (!value["items"].is_array() ||
+                        (value.contains("isIncomplete") && !value["isIncomplete"].is_boolean())) {
+                        errors.push_back({{"providerId", string_member_or(entry, "providerId")},
+                                          {"error", "Completion provider returned an invalid completion list."}});
+                        continue;
+                    }
+                    incomplete = incomplete || value.value("isIncomplete", false);
+                    json completions = value["items"];
+                    value = std::move(completions);
+                }
+                if (value.is_null()) {
+                    available = true;
+                    continue;
+                }
+                if (!value.is_array()) {
+                    if (kind == "formatting" || kind == "completion" || !value.is_object()) {
+                        errors.push_back({{"providerId", string_member_or(entry, "providerId")},
+                                          {"error", "Language provider returned an invalid result."}});
+                        continue;
+                    }
+                    value = json::array({value});
+                }
+                bool valid = true;
+                for (const auto& item : value) {
+                    if (!item.is_object()) { valid = false; break; }
+                    if (kind == "completion" && !valid_string_member(item, "label") &&
+                        (!item.contains("label") || !item["label"].is_object() ||
+                         !valid_string_member(item["label"], "label"))) {
+                        valid = false;
+                        break;
+                    }
+                    if (kind == "hover" && (!item.contains("contents") || !item["contents"].is_array())) {
+                        valid = false;
+                        break;
+                    }
+                    if (kind == "definition") {
+                        const bool link = valid_string_member(item, "targetUri");
+                        const auto range = item.find(link ? "targetSelectionRange" : "range");
+                        if ((!link && !valid_string_member(item, "uri")) || range == item.end() ||
+                            !range->is_object() || !range->contains("start") || !range->contains("end")) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                    if (kind == "formatting") {
+                        const auto range = item.find("range");
+                        size_t start = 0, end = 0;
+                        if (!valid_string_member(item, "newText") || range == item.end() || !range->is_object() ||
+                            !text_position_offset(document_text, range->value("start", json(nullptr)), &start) ||
+                            !text_position_offset(document_text, range->value("end", json(nullptr)), &end) || start > end) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+                if (!valid) {
+                    errors.push_back({{"providerId", string_member_or(entry, "providerId")},
+                                      {"error", "Language provider returned malformed items."}});
+                    continue;
+                }
+                available = true;
+                for (const auto& item : value) items.push_back(item);
+                // A valid empty edit list also means this formatter is finished.
+                if (kind == "formatting")
+                    break;
+            }
+            return successful_completion(
+                job, {{"ok", available}, {"available", available}, {"applied", false},
+                      {"requestId", payload.value("requestId", json(nullptr))},
+                      {route->second.second, std::move(items)}, {"isIncomplete", incomplete},
+                      {"providerErrors", std::move(errors)},
+                      {"errorCode", available ? "" : "LANGUAGE_PROVIDER_UNAVAILABLE"},
+                      {"error", available ? "" : "No matching language provider completed the request."}});
+        }
         return successful_completion(
             job, {{"ok", false},
                   {"available", false},
@@ -4436,9 +4683,8 @@ NativeAdapterCompletion handle_compatibility_method(NativeAdapter& adapter, cons
                   {"requestId", job.args[0].value("requestId", json(nullptr))},
                   {"items", json::array()},
                   {"providerErrors", json::array()},
-                  {"skipped", true},
                   {"errorCode", "LANGUAGE_PROVIDER_UNAVAILABLE"},
-                  {"error", "No extension language provider callback is registered."}});
+                  {"error", "This language feature is not connected to the native provider API."}});
     }
     if (job.method == "list_extension_settings") {
         if (!count(0, 0))

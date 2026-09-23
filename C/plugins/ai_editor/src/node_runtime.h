@@ -51,6 +51,7 @@ public:
     int32_t request(std::string_view method, const Json& params,
                     uint32_t timeout_ms, Json& result);
     int32_t notify(std::string_view method, const Json& params);
+    std::string stderr_tail() const;
     void set_native_runtime(NativeRuntime* runtime) noexcept {
         native_runtime_.store(runtime, std::memory_order_release);
     }

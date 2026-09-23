@@ -1443,6 +1443,27 @@ sao_status_t handle_message(const std::shared_ptr<HostState>& state,
     const auto args_it = message.find("args");
     if (args_it == message.end() || !args_it->is_array() || args_it->size() > 64u)
         return invalid_arguments();
+    if (method == "open_native_panel") {
+        if (args_it->size() != 1 || !(*args_it)[0].is_string())
+            return invalid_arguments();
+        const auto& name = (*args_it)[0].get_ref<const std::string&>();
+        if (name == "settings" || name == "hotkeys" || name == "workshop" || name == "plugins" ||
+            name == "process" || name == "memory" || name == "license") {
+            const int32_t status = name == "memory"
+                ? sao::ai_editor::native::MemoryViewerProvider::open_panel()
+                : static_cast<int32_t>(sao_sdk_platform_open_panel(name.c_str()));
+            if (status != SAO_SDK_OK)
+                return post_json(*state, error_reply(
+                    state->handshake_challenge, id, "SAO_PANEL_OPEN_FAILED",
+                    "Launcher panel open failed with status " + std::to_string(status) + "."));
+            return post_json(*state, {{"channel", kChannel},
+                                      {"kind", "reply"},
+                                      {"id", id},
+                                      {"challenge", state->handshake_challenge},
+                                      {"ok", true},
+                                      {"result", {{"ok", true}, {"name", name}, {"via", "sdk"}}}});
+        }
+    }
     if (method == "native_panel_snapshot" || method == "native_panel_action") {
         if (!state->panel_snapshot || !state->panel_action)
             return post_json(*state,

@@ -15,8 +15,10 @@
 const path = require('path');
 const fs = require('fs');
 const Module = require('module');
+const { pathToFileURL, fileURLToPath } = require('url');
 const process_ = require('process');
 const { AsyncLocalStorage } = require('async_hooks');
+const installExecutionApis = require('./extension_execution_shim.js');
 
 const stdin = process_.stdin;
 const stdout = process_.stdout;
@@ -48,6 +50,21 @@ const state = {
     treeViews: new Map(),
     treeProviderEpochs: new Map(),
     treeProviderTombstones: new Map(),
+    terminals: new Map(),
+    terminalAliases: new Map(),
+    activeTerminalId: undefined,
+    taskProviders: new Map(),
+    taskExecutions: new Map(),
+    debugProviders: new Map(),
+    debugPreparations: new Map(),
+    debugSessions: new Map(),
+    activeDebugSessionId: undefined,
+    breakpoints: new Map(),
+    processRoutes: new Map(),
+    earlyProcessEvents: new Map(),
+    earlyProcessEventBytes: 0,
+    nextSurfaceId: 1,
+    surfacesInitialized: false,
 };
 
 const kMaximumFrameBytes = 8 * 1024 * 1024;
@@ -70,6 +87,11 @@ const kMaximumWebviewStringBytes = 1024 * 1024;
 const kMaximumWebviewNodes = 16384;
 const kMaximumWebviewDepth = 64;
 const kMaximumWebviewRegistrations = 256;
+const kMaximumSurfacePayloadBytes = 1024 * 1024;
+const kMaximumSurfaceRegistrations = 512;
+const kMaximumProcessEventBytes = 1024 * 1024;
+const kMaximumEarlyProcessEventBytes = 16 * 1024 * 1024;
+const kMaximumPendingHostRequests = 512;
 const treeErrorMarker = Symbol('sao.treeError');
 
 function boundedJsonSnapshot(value, maximumBytes = kMaximumWebviewMessageBytes) {
@@ -214,6 +236,14 @@ function callHost(method, params) {
         return Promise.reject(state.transportCloseError ||
             transportError(`host transport closed while calling ${method}`));
     }
+    if (state.pending.size >= kMaximumPendingHostRequests) {
+        return Promise.reject(transportError(
+            `host request limit reached while calling ${method}`, -6));
+    }
+    if (!Number.isSafeInteger(state.nextId) || state.nextId <= 0 ||
+        state.nextId >= Number.MAX_SAFE_INTEGER) {
+        return Promise.reject(transportError('host request identifiers are exhausted', -6));
+    }
     const id = state.nextId++;
     return new Promise((resolve, reject) => {
         state.pending.set(id, { resolve, reject });
@@ -246,6 +276,9 @@ function runWithActivation(scope, callback) {
 
 function requireActivationScope(apiName) {
     const scope = activationStorage.getStore();
+    if (scope && scope.hostOwned === true && scope.phase === 'active') {
+        return scope;
+    }
     if (!scope || !scope.extensionId ||
         !Number.isSafeInteger(scope.generation) || scope.generation <= 0 ||
         (scope.phase !== 'active' && scope.phase !== 'committed')) {
@@ -392,29 +425,22 @@ const disposable = (dispose) => {
 
 const Uri = {
     file(fsPath) {
-        const p = String(fsPath || '').replace(/\\/g, '/');
-        return {
-            scheme: 'file',
-            path: p.startsWith('/') ? p : '/' + p,
-            fsPath: fsPath,
-            toString() { return `file://${this.path}`; },
-        };
+        return Uri.parse(pathToFileURL(path.resolve(String(fsPath))).href);
     },
     parse(value) {
         const raw = String(value || '');
-        const schemeSep = raw.indexOf(':');
-        const scheme = schemeSep < 0 ? 'unknown' : raw.slice(0, schemeSep);
-        const rest = schemeSep < 0 ? raw : raw.slice(schemeSep + 1);
-        const p = rest.startsWith('//') ? rest.slice(2) : rest;
-        const parts = p.split('/');
-        const authority = parts.shift() || '';
-        const pathOnly = '/' + parts.join('/');
+        const parsed = new URL(raw);
+        const scheme = parsed.protocol.slice(0, -1);
+        const pathOnly = decodeURIComponent(parsed.pathname);
         return {
             scheme,
-            authority,
+            authority: parsed.host,
             path: pathOnly,
-            fsPath: pathOnly,
-            toString() { return `${scheme}://${authority}${pathOnly}`; },
+            fsPath: scheme === 'file' ? fileURLToPath(parsed) : pathOnly,
+            query: parsed.search.slice(1),
+            fragment: parsed.hash.slice(1),
+            toString() { return parsed.href; },
+            toJSON() { return parsed.href; },
         };
     },
 };
@@ -423,14 +449,21 @@ const EventEmitter = (function () {
     return class {
         constructor() { this._listeners = new Map(); }
         get event() {
-            return (listener) => {
-                this._listeners.set(listener, activationStorage.getStore());
-                return disposable(() => this._listeners.delete(listener));
+            return (listener, thisArgs, disposables) => {
+                if (typeof listener !== 'function') throw new TypeError('Expected event listener');
+                const callback = value => listener.call(thisArgs, value);
+                this._listeners.set(callback, activationStorage.getStore());
+                const subscription = disposable(() => this._listeners.delete(callback));
+                if (disposables) disposables.push(subscription);
+                return subscription;
             };
         }
         fire(value) {
             for (const [listener, scope] of Array.from(this._listeners)) {
-                try { runWithActivation(scope, () => listener(value)); }
+                try {
+                    Promise.resolve(runWithActivation(scope, () => listener(value)))
+                        .catch(() => undefined);
+                }
                 catch (e) { /* noop */ }
             }
         }
@@ -451,19 +484,340 @@ const neverCancellationToken = Object.freeze({
     onCancellationRequested() { return neverCancellationDisposable; },
 });
 
+function activationScopeCurrent(scope) {
+    if (scope && scope.hostOwned === true && scope.phase === 'active') {
+        return true;
+    }
+    if (!scope || !scope.extensionId ||
+        !Number.isSafeInteger(scope.generation) || scope.generation <= 0 ||
+        (scope.phase !== 'active' && scope.phase !== 'committed')) {
+        return false;
+    }
+    if (scope.phase === 'active') return true;
+    const extension = state.extensions.get(scope.extensionId);
+    return Boolean(extension && extension.generation === scope.generation &&
+        extension.activation === scope);
+}
+
+function requireCurrentGeneration(scope, operation) {
+    if (!activationScopeCurrent(scope)) {
+        throw new Error(`${operation || 'extension callback'} belongs to a retired generation`);
+    }
+}
+
+function allocateSurfaceId(prefix, scope) {
+    if (!Number.isSafeInteger(state.nextSurfaceId) ||
+        state.nextSurfaceId <= 0 || state.nextSurfaceId >= Number.MAX_SAFE_INTEGER) {
+        throw new Error('Extension surface identifiers are exhausted');
+    }
+    const owner = scope && scope.extensionId
+        ? String(scope.extensionId).replace(/[^A-Za-z0-9_.-]/g, '_') : 'host';
+    return `${prefix}-${owner}-${scope && scope.generation || 0}-${state.nextSurfaceId++}`;
+}
+
+function surfaceOwner(scope, prefix) {
+    return {
+        extensionId: scope.extensionId,
+        generation: scope.generation,
+        registrationId: allocateSurfaceId(prefix, scope),
+    };
+}
+
+function boundedSurfaceSnapshot(value, label, maximumBytes =
+    kMaximumSurfacePayloadBytes) {
+    const snapshot = boundedJsonSnapshot(value, maximumBytes);
+    if (!snapshot.ok) {
+        throw new Error(`${label || 'Extension API payload'} exceeds the transport budget`);
+    }
+    return snapshot.value;
+}
+
+function reportAsyncFailure(prefix, error) {
+    const message = error && error.message ? error.message : String(error);
+    process_.stderr.write(`[shim] ${prefix}: ${message}\n`);
+}
+
+function callHostObserved(method, params, prefix) {
+    return callHost(method, params).catch(error => {
+        reportAsyncFailure(prefix || `${method} failed`, error);
+        throw error;
+    });
+}
+
+function eventDataBuffer(payload, maximumBytes = kMaximumProcessEventBytes) {
+    const data = payload && payload.data;
+    let buffer;
+    if (Buffer.isBuffer(data)) buffer = data;
+    else if (data instanceof Uint8Array) buffer = Buffer.from(data);
+    else if (Array.isArray(data) && data.every(byte =>
+        Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+        buffer = Buffer.from(data);
+    } else if (typeof data === 'string') {
+        buffer = Buffer.from(data, payload.encoding === 'base64' ? 'base64' : 'utf8');
+    } else if (data === undefined || data === null) buffer = Buffer.alloc(0);
+    else buffer = Buffer.from(JSON.stringify(data), 'utf8');
+    if (buffer.length > maximumBytes) {
+        throw new Error('Process event data exceeds the transport budget');
+    }
+    return buffer;
+}
+
+function processEventId(payload) {
+    const snapshot = payload && payload.snapshot &&
+        typeof payload.snapshot === 'object' ? payload.snapshot : {};
+    return String(payload && (payload.id || payload.processId ||
+        payload.terminalId || payload.executionId || payload.transportId ||
+        payload.sessionId) || snapshot.id || snapshot.processId ||
+        snapshot.terminalId || snapshot.executionId || snapshot.transportId ||
+        snapshot.sessionId || '');
+}
+
+function registerProcessRoute(id, route) {
+    const key = String(id || '');
+    if (!key || typeof route !== 'function') {
+        throw new Error('A process route requires an id and callback');
+    }
+    state.processRoutes.set(key, route);
+    const queued = state.earlyProcessEvents.get(key);
+    state.earlyProcessEvents.delete(key);
+    if (queued) {
+        for (const event of queued) {
+            state.earlyProcessEventBytes = Math.max(0,
+                state.earlyProcessEventBytes - event.bytes);
+            route(event.payload);
+        }
+    }
+    return () => {
+        if (state.processRoutes.get(key) === route) state.processRoutes.delete(key);
+    };
+}
+
+function queueEarlyProcessEvent(payload) {
+    const id = processEventId(payload);
+    if (!id) return;
+    let bytes;
+    try { bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8'); }
+    catch (_) { return; }
+    if (bytes > kMaximumFrameBytes || bytes > kMaximumEarlyProcessEventBytes) return;
+    const evictOldest = excludedId => {
+        let oldest;
+        for (const candidate of state.earlyProcessEvents.keys()) {
+            if (candidate !== excludedId) {
+                oldest = candidate;
+                break;
+            }
+        }
+        if (oldest === undefined) return false;
+        const removed = state.earlyProcessEvents.get(oldest) || [];
+        state.earlyProcessEvents.delete(oldest);
+        for (const event of removed) {
+            state.earlyProcessEventBytes = Math.max(0,
+                state.earlyProcessEventBytes - event.bytes);
+        }
+        return true;
+    };
+    if (!state.earlyProcessEvents.has(id) &&
+        state.earlyProcessEvents.size >= 128) {
+        evictOldest(id);
+    }
+    const events = state.earlyProcessEvents.get(id) || [];
+    if (events.length >= 32) return;
+    while (state.earlyProcessEventBytes + bytes >
+           kMaximumEarlyProcessEventBytes) {
+        if (!evictOldest(id)) return;
+    }
+    events.push({ payload, bytes });
+    state.earlyProcessEventBytes += bytes;
+    state.earlyProcessEvents.set(id, events);
+}
+
+class Position {
+    constructor(line, character) {
+        if (!Number.isInteger(line) || line < 0 || !Number.isInteger(character) || character < 0)
+            throw new TypeError('Invalid position');
+        this.line = line;
+        this.character = character;
+        Object.freeze(this);
+    }
+    compareTo(other) { return this.line - other.line || this.character - other.character; }
+    isBefore(other) { return this.compareTo(other) < 0; }
+    isBeforeOrEqual(other) { return this.compareTo(other) <= 0; }
+    isAfter(other) { return this.compareTo(other) > 0; }
+    isAfterOrEqual(other) { return this.compareTo(other) >= 0; }
+    isEqual(other) { return this.compareTo(other) === 0; }
+    with(line = this.line, character = this.character) {
+        if (typeof line === 'object') return new Position(line.line ?? this.line, line.character ?? this.character);
+        return new Position(line, character);
+    }
+    translate(line = 0, character = 0) {
+        if (typeof line === 'object') return this.translate(line.lineDelta || 0, line.characterDelta || 0);
+        return new Position(this.line + line, this.character + character);
+    }
+}
+const asPosition = value => new Position(value.line, value.character);
+class Range {
+    constructor(start, end, endLine, endCharacter) {
+        if (typeof start === 'number') {
+            start = new Position(start, end);
+            end = new Position(endLine, endCharacter);
+        } else { start = asPosition(start); end = asPosition(end); }
+        this.start = start.isBeforeOrEqual(end) ? start : end;
+        this.end = start.isBeforeOrEqual(end) ? end : start;
+    }
+    get isEmpty() { return this.start.isEqual(this.end); }
+    get isSingleLine() { return this.start.line === this.end.line; }
+    contains(value) {
+        return value.start ? this.contains(value.start) && this.contains(value.end)
+            : this.start.isBeforeOrEqual(value) && this.end.isAfterOrEqual(value);
+    }
+    isEqual(value) { return this.start.isEqual(value.start) && this.end.isEqual(value.end); }
+    with(start = this.start, end = this.end) {
+        if (start.start || start.end) return new Range(start.start || this.start, start.end || this.end);
+        return new Range(start, end);
+    }
+    intersection(other) {
+        const start = this.start.isAfter(other.start) ? this.start : other.start;
+        const end = this.end.isBefore(other.end) ? this.end : other.end;
+        return start.isAfter(end) ? undefined : new Range(start, end);
+    }
+    union(other) {
+        return new Range(this.start.isBefore(other.start) ? this.start : other.start,
+            this.end.isAfter(other.end) ? this.end : other.end);
+    }
+}
+class TextEdit {
+    constructor(range, newText) { this.range = range; this.newText = newText; }
+    static replace(range, text) { return new TextEdit(range, text); }
+    static insert(position, text) { return new TextEdit(new Range(position, position), text); }
+    static delete(range) { return new TextEdit(range, ''); }
+}
+class WorkspaceEdit {
+    constructor() { this._entries = new Map(); }
+    set(uri, edits) { this._entries.set(uri.toString(), [uri, edits.slice()]); }
+    get(uri) { return this._entries.get(uri.toString())?.[1].slice() || []; }
+    has(uri) { return this._entries.has(uri.toString()); }
+    get size() { return this._entries.size; }
+    entries() { return Array.from(this._entries.values(), ([uri, edits]) => [uri, edits.slice()]); }
+    replace(uri, range, text) { this.set(uri, [...this.get(uri), TextEdit.replace(range, text)]); }
+    insert(uri, position, text) { this.replace(uri, new Range(position, position), text); }
+    delete(uri, range) { this.replace(uri, range, ''); }
+}
+
+const documents = new Map();
+const providerDocuments = new Map();
+let workspaceInitialized = false;
+const documentEvents = Object.fromEntries(['open', 'close', 'change', 'save', 'config', 'folders']
+    .map(name => [name, new EventEmitter()]));
+
+function updateDocument(snapshot, tracked = true) {
+    const uri = Uri.parse(snapshot.uri);
+    const key = uri.toString();
+    const store = tracked ? documents : providerDocuments;
+    let document = store.get(key);
+    const version = tracked ? snapshot.version : (document?.version || 0) +
+        (!document || snapshot.content !== document.getText() || snapshot.languageId !== document.languageId ? 1 : 0);
+    snapshot = { ...snapshot, dirty: snapshot.dirty ?? snapshot.isDirty ?? false,
+        untitled: snapshot.untitled ?? uri.scheme === 'untitled',
+        version: Number.isSafeInteger(version) ? version : document?.version || 1 };
+    if (!document || document.isClosed) {
+        document = {
+            uri, _snapshot: snapshot, _lines: [], _offsets: [],
+            get fileName() { return this._snapshot.fsPath || this.uri.fsPath; },
+            get languageId() { return this._snapshot.languageId || guessLanguage(this.fileName); },
+            get version() { return this._snapshot.version; },
+            get isDirty() { return this._snapshot.dirty === true; },
+            get isUntitled() { return this._snapshot.untitled === true; },
+            get isClosed() { return this._snapshot.isClosed === true; },
+            get eol() { return this._snapshot.content.includes('\r\n') ? 2 : 1; },
+            get lineCount() { return this._lines.length; },
+            getText(range) {
+                return range ? this._snapshot.content.slice(this.offsetAt(range.start), this.offsetAt(range.end))
+                    : this._snapshot.content;
+            },
+            validatePosition(position) {
+                const line = Math.max(0, Math.min(position.line, this.lineCount - 1));
+                return new Position(line, position.line >= this.lineCount ? this._lines[line].length
+                    : Math.max(0, Math.min(position.character, this._lines[line].length)));
+            },
+            validateRange(range) { return new Range(this.validatePosition(range.start), this.validatePosition(range.end)); },
+            offsetAt(position) {
+                const p = this.validatePosition(position);
+                return this._offsets[p.line] + p.character;
+            },
+            positionAt(offset) {
+                offset = Math.max(0, Math.min(Math.floor(offset), this._snapshot.content.length));
+                let low = 0, high = this._offsets.length;
+                while (low + 1 < high) {
+                    const mid = (low + high) >>> 1;
+                    if (this._offsets[mid] > offset) high = mid; else low = mid;
+                }
+                return new Position(low, Math.min(offset - this._offsets[low], this._lines[low].length));
+            },
+            lineAt(value) {
+                const line = typeof value === 'number' ? value : this.validatePosition(value).line;
+                if (!Number.isInteger(line) || line < 0 || line >= this.lineCount) throw new RangeError('Invalid line');
+                const text = this._lines[line];
+                const first = text.search(/\S/);
+                return Object.freeze({ lineNumber: line, text, range: new Range(line, 0, line, text.length),
+                    rangeIncludingLineBreak: line + 1 < this.lineCount ? new Range(line, 0, line + 1, 0)
+                        : new Range(line, 0, line, text.length),
+                    firstNonWhitespaceCharacterIndex: first < 0 ? text.length : first,
+                    isEmptyOrWhitespace: first < 0 });
+            },
+            getWordRangeAtPosition(position, regex = /[\p{L}\p{N}_]+/u) {
+                const p = this.validatePosition(position);
+                const matcher = new RegExp(regex.source, regex.flags.replace(/[gy]/g, '') + 'g');
+                for (const match of this._lines[p.line].matchAll(matcher)) {
+                    if (!match[0].length) return undefined;
+                    if (match.index <= p.character && p.character <= match.index + match[0].length)
+                        return new Range(p.line, match.index, p.line, match.index + match[0].length);
+                }
+                return undefined;
+            },
+            async save() {
+                if (this.isClosed || this.isUntitled) return false;
+                try {
+                    const result = await callHost('vscode.workspace.saveTextDocument',
+                        { uri: key, version: this.version, expectedContent: this.getText() });
+                    if (result.document) updateDocument(result.document);
+                    return result.ok === true;
+                } catch (_) { return false; }
+            },
+        };
+        if (!tracked && store.size >= 512) store.delete(store.keys().next().value);
+        store.set(key, document);
+    }
+    if (snapshot.version < document.version) return document;
+    document._snapshot = Object.assign({}, snapshot);
+    const text = snapshot.content || '';
+    document._snapshot.content = text;
+    document._lines = text.split(/\r\n|\r|\n/);
+    document._offsets = [0];
+    for (const match of text.matchAll(/\r\n|\r|\n/g)) document._offsets.push(match.index + match[0].length);
+    return document;
+}
+
 const workspace = {
     workspaceFolders: [],
+    get textDocuments() { return Array.from(documents.values()).filter(doc => !doc.isClosed); },
     async openTextDocument(uri) {
-        const target = typeof uri === 'string' ? uri : (uri && uri.fsPath) || '';
-        const result = await callHost('vscode.workspace.readTextDocument', { path: target });
-        return {
-            uri: Uri.file(target),
-            fileName: target,
-            languageId: guessLanguage(target),
-            version: 1,
-            getText() { return result.content || ''; },
-            lineCount: (result.content || '').split('\n').length,
-        };
+        const params = typeof uri === 'string' ? { path: uri }
+            : uri && uri.scheme ? { uri: uri.toString() }
+            : { untitled: true, content: uri?.content || '', languageId: uri?.language || 'plaintext' };
+        return updateDocument(await callHost('vscode.workspace.openTextDocument', params));
+    },
+    async applyEdit(edit) {
+        if (!(edit instanceof WorkspaceEdit)) throw new TypeError('Expected WorkspaceEdit');
+        const documentEdits = [];
+        for (const [uri, edits] of edit.entries()) {
+            const document = await this.openTextDocument(uri);
+            documentEdits.push({ uri: document.uri.toString(), version: document.version, edits });
+        }
+        try {
+            const result = await callHost('vscode.workspace.applyEdit', { documentEdits });
+            for (const document of result.documents || []) updateDocument(document);
+            return result.applied === true;
+        } catch (_) { return false; }
     },
     async findFiles(pattern, exclude, maxResults) {
         const list = await callHost('vscode.workspace.findFiles', {
@@ -494,23 +848,26 @@ const workspace = {
             },
         };
     },
-    onDidChangeConfiguration: new EventEmitter().event,
-    onDidChangeWorkspaceFolders: new EventEmitter().event,
-    onDidOpenTextDocument: new EventEmitter().event,
-    onDidCloseTextDocument: new EventEmitter().event,
-    onDidSaveTextDocument: new EventEmitter().event,
+    onDidChangeConfiguration: documentEvents.config.event,
+    onDidChangeWorkspaceFolders: documentEvents.folders.event,
+    onDidOpenTextDocument: documentEvents.open.event,
+    onDidCloseTextDocument: documentEvents.close.event,
+    onDidChangeTextDocument: documentEvents.change.event,
+    onDidSaveTextDocument: documentEvents.save.event,
     fs: {
         async readFile(uri) {
             const p = typeof uri === 'string' ? uri : (uri && uri.fsPath) || '';
-            const result = await callHost('vscode.workspace.readTextDocument', { path: p });
-            return Buffer.from(result.content || '', 'utf8');
+            const result = await callHost('vscode.workspace.fs.readFile', { path: p });
+            if (!Array.isArray(result) || result.length > 1024 * 1024 ||
+                result.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255))
+                throw new Error('Invalid file byte response');
+            return Uint8Array.from(result);
         },
         async writeFile(uri, content) {
             const p = typeof uri === 'string' ? uri : (uri && uri.fsPath) || '';
-            const text = Buffer.isBuffer(content)
-                ? content.toString('utf8')
-                : String(content || '');
-            await callHost('vscode.workspace.writeTextDocument', { path: p, content: text });
+            if (!(content instanceof Uint8Array)) throw new TypeError('Expected Uint8Array');
+            if (content.byteLength > 1024 * 1024) throw new Error('File exceeds the transport budget');
+            await callHost('vscode.workspace.fs.writeFile', { path: p, content: Array.from(content) });
         },
     },
 };
@@ -1855,9 +2212,475 @@ async function treeInventoryRequest() {
     });
 }
 
+// ----- terminals ----------------------------------------------------------
+
+const terminalEvents = {
+    open: new EventEmitter(),
+    close: new EventEmitter(),
+    active: new EventEmitter(),
+    data: new EventEmitter(),
+    dimensions: new EventEmitter(),
+    state: new EventEmitter(),
+};
+
+function terminalUri(value) {
+    if (!value) return undefined;
+    if (typeof value === 'string') return value;
+    if (typeof value.toString === 'function') return value.toString();
+    return String(value.fsPath || value.path || '');
+}
+
+function terminalIcon(value) {
+    if (!value) return undefined;
+    if (typeof value === 'string') return value;
+    if (value.id) {
+        return { id: String(value.id), color: value.color && value.color.id
+            ? String(value.color.id) : undefined };
+    }
+    if (value.light || value.dark) {
+        return { light: terminalUri(value.light), dark: terminalUri(value.dark) };
+    }
+    return terminalUri(value);
+}
+
+function terminalDimensions(value) {
+    if (!value || typeof value !== 'object') return undefined;
+    const columns = Number(value.columns);
+    const rows = Number(value.rows);
+    if (!Number.isSafeInteger(columns) || columns <= 0 || columns > 10000 ||
+        !Number.isSafeInteger(rows) || rows <= 0 || rows > 10000) {
+        return undefined;
+    }
+    return Object.freeze({ columns, rows });
+}
+
+function normalizeTerminalCreation(first, shellPath, shellArgs) {
+    let source;
+    if (first && typeof first === 'object' && !Array.isArray(first)) {
+        source = first;
+    } else {
+        source = { name: first, shellPath, shellArgs };
+    }
+    const pty = source.pty;
+    if (pty !== undefined && (!pty || typeof pty.open !== 'function' ||
+        typeof pty.close !== 'function')) {
+        throw new TypeError('ExtensionTerminalOptions.pty requires open() and close()');
+    }
+    const name = String(source.name || (pty ? 'Extension Terminal' : 'Terminal'));
+    if (!name || name.includes('\0') || Buffer.byteLength(name, 'utf8') > 256) {
+        throw new TypeError('Terminal name is invalid');
+    }
+    const options = { name };
+    if (!pty) {
+        if (source.shellPath !== undefined) options.shellPath = String(source.shellPath);
+        if (source.shellArgs !== undefined) {
+            if (typeof source.shellArgs === 'string') options.shellArgs = source.shellArgs;
+            else if (Array.isArray(source.shellArgs)) {
+                options.shellArgs = source.shellArgs.map(value => String(value));
+            } else throw new TypeError('Terminal shellArgs must be a string or array');
+        }
+        if (source.cwd !== undefined) options.cwd = terminalUri(source.cwd);
+        if (source.env !== undefined) options.env = source.env;
+        if (source.strictEnv !== undefined) options.strictEnv = source.strictEnv === true;
+        if (source.message !== undefined) options.message = String(source.message);
+        if (source.hideFromUser !== undefined) options.hideFromUser = source.hideFromUser === true;
+    }
+    if (source.iconPath !== undefined) options.iconPath = terminalIcon(source.iconPath);
+    if (source.color !== undefined) {
+        options.color = source.color && source.color.id
+            ? { id: String(source.color.id) } : String(source.color);
+    }
+    if (source.location !== undefined) options.location = source.location;
+    if (source.isTransient !== undefined) options.isTransient = source.isTransient === true;
+    return {
+        pty,
+        options: boundedSurfaceSnapshot(options, 'Terminal options'),
+        creationOptions: source,
+    };
+}
+
+function terminalRecordById(value) {
+    const id = String(value || '');
+    return state.terminals.get(id) ||
+        state.terminals.get(state.terminalAliases.get(id));
+}
+
+function setActiveTerminal(record) {
+    const previous = terminalRecordById(state.activeTerminalId);
+    const nextId = record && !record.closed ? record.id : undefined;
+    if (state.activeTerminalId === nextId) return;
+    state.activeTerminalId = nextId;
+    if (previous && previous !== record) previous.active = false;
+    if (record) record.active = true;
+    terminalEvents.active.fire(record ? record.terminal : undefined);
+}
+
+function callPseudoterminal(record, method, ...args) {
+    if (!record.pty || typeof record.pty[method] !== 'function') return;
+    try {
+        return runWithActivation(record.scope,
+            () => record.pty[method](...args));
+    } catch (error) {
+        reportAsyncFailure(`pseudoterminal ${method} failed`, error);
+        return undefined;
+    }
+}
+
+function bindPseudoterminal(record) {
+    const pty = record.pty;
+    if (!pty) return;
+    const subscribe = (event, listener) => {
+        if (typeof event !== 'function') return;
+        try {
+            const value = event(listener);
+            if (value && typeof value.dispose === 'function') {
+                record.ptySubscriptions.push(value);
+            }
+        } catch (error) {
+            reportAsyncFailure('pseudoterminal event subscription failed', error);
+        }
+    };
+    subscribe(pty.onDidWrite, data => {
+        if (record.closed) return;
+        const text = String(data === undefined ? '' : data);
+        if (Buffer.byteLength(text, 'utf8') > kMaximumProcessEventBytes) {
+            reportAsyncFailure('pseudoterminal output rejected',
+                new Error('Pseudoterminal output exceeds the transport budget'));
+            return;
+        }
+        callHostObserved('vscode.window.sendTerminalText', {
+            ...record.owner,
+            terminalId: record.hostId,
+            id: record.hostId,
+            text,
+            addNewLine: false,
+            stream: 'stdout',
+            direction: 'output',
+            fromPty: true,
+        }, 'pseudoterminal output delivery failed').catch(() => undefined);
+    });
+    subscribe(pty.onDidClose, exitCode => {
+        if (record.closed || record.disposing) return;
+        record.requestedExitCode = Number.isInteger(exitCode) ? exitCode : undefined;
+        record.terminal.dispose();
+    });
+    subscribe(pty.onDidChangeName, name => {
+        const text = String(name || '');
+        if (!text || Buffer.byteLength(text, 'utf8') > 256) return;
+        record.name = text;
+        callHostObserved('vscode.window.sendTerminalText', {
+            ...record.owner, terminalId: record.hostId, id: record.hostId,
+            op: 'name', name: text, fromPty: true,
+        }, 'pseudoterminal name update failed').catch(() => undefined);
+    });
+    subscribe(pty.onDidOverrideDimensions, dimensions => {
+        const value = terminalDimensions(dimensions);
+        if (!value || record.closed) return;
+        record.dimensions = value;
+        terminalEvents.dimensions.fire({ terminal: record.terminal, dimensions: value });
+    });
+}
+
+function markTerminalOpen(record, snapshot = {}) {
+    if (record.closed) return;
+    if (snapshot.name) record.name = String(snapshot.name);
+    const dimensions = terminalDimensions(snapshot.dimensions || snapshot);
+    if (dimensions) record.dimensions = dimensions;
+    if (Number.isSafeInteger(snapshot.processId)) {
+        record.processIdValue = snapshot.processId;
+        record.resolveProcessId(snapshot.processId);
+        record.processIdSettled = true;
+    }
+    if (!record.opened) {
+        record.opened = true;
+        if (!record.processIdSettled && record.pty) {
+            record.resolveProcessId(undefined);
+            record.processIdSettled = true;
+        }
+        callPseudoterminal(record, 'open', record.dimensions);
+        terminalEvents.open.fire(record.terminal);
+    }
+    if (snapshot.active === true) setActiveTerminal(record);
+    if (snapshot.state && typeof snapshot.state === 'object') {
+        record.state = Object.assign({}, record.state, snapshot.state);
+        terminalEvents.state.fire({ terminal: record.terminal, state: record.state });
+    }
+}
+
+function finalizeTerminal(record, exitStatus) {
+    if (!record || record.closed) return;
+    record.closed = true;
+    record.active = false;
+    if (!record.processIdSettled) {
+        record.resolveProcessId(undefined);
+        record.processIdSettled = true;
+    }
+    if (exitStatus) record.exitStatus = exitStatus;
+    for (const subscription of record.ptySubscriptions.splice(0)) {
+        try { subscription.dispose(); } catch (_) { /* best effort */ }
+    }
+    callPseudoterminal(record, 'close');
+    state.terminals.delete(record.id);
+    for (const [alias, id] of Array.from(state.terminalAliases)) {
+        if (id === record.id) state.terminalAliases.delete(alias);
+    }
+    if (state.activeTerminalId === record.id ||
+        state.activeTerminalId === record.hostId) setActiveTerminal(undefined);
+    terminalEvents.close.fire(record.terminal);
+}
+
+class Terminal {
+    constructor(record) {
+        this._record = record;
+        this.processId = record.processId;
+        this.creationOptions = record.creationOptions;
+    }
+    get id() { return this._record.id; }
+    get name() { return this._record.name; }
+    get exitStatus() { return this._record.exitStatus; }
+    get state() { return Object.freeze(Object.assign({}, this._record.state)); }
+    sendText(text, shouldExecute = true) {
+        if (this._record.closed) return;
+        const value = String(text === undefined ? '' : text);
+        if (Buffer.byteLength(value, 'utf8') > kMaximumProcessEventBytes) {
+            throw new Error('Terminal input exceeds the transport budget');
+        }
+        callHostObserved('vscode.window.sendTerminalText', {
+            ...this._record.owner,
+            terminalId: this._record.hostId,
+            id: this._record.hostId,
+            text: value,
+            addNewLine: shouldExecute !== false,
+            direction: 'input',
+        }, 'terminal input failed').catch(() => undefined);
+    }
+    show(preserveFocus = false) {
+        if (this._record.closed) return;
+        callHostObserved('vscode.window.showTerminal', {
+            ...this._record.owner,
+            terminalId: this._record.hostId,
+            id: this._record.hostId,
+            preserveFocus: preserveFocus === true,
+        }, 'terminal show failed').then(result => {
+            if (!this._record.closed && result && result.active !== false) {
+                setActiveTerminal(this._record);
+            }
+        }).catch(() => undefined);
+    }
+    hide() {
+        if (this._record.closed) return;
+        callHostObserved('vscode.window.hideTerminal', {
+            ...this._record.owner,
+            terminalId: this._record.hostId,
+            id: this._record.hostId,
+        }, 'terminal hide failed').then(() => {
+            if (state.activeTerminalId === this._record.id) {
+                setActiveTerminal(undefined);
+            }
+        }).catch(() => undefined);
+    }
+    dispose() {
+        const record = this._record;
+        if (record.closed || record.disposing) return this[disposalBarrier];
+        record.disposing = true;
+        const barrier = callHost('vscode.window.disposeTerminal', {
+            ...record.owner,
+            terminalId: record.hostId,
+            id: record.hostId,
+            exitCode: record.requestedExitCode,
+        }).catch(error => {
+            reportAsyncFailure('terminal disposal failed', error);
+        }).finally(() => {
+            finalizeTerminal(record, record.exitStatus || {
+                code: record.requestedExitCode,
+                reason: 4,
+            });
+        });
+        this[disposalBarrier] = barrier;
+        return barrier;
+    }
+}
+
+function newTerminalRecord(id, name, creationOptions, pty, scope, owner) {
+    let resolveProcessId;
+    const processId = new Promise(resolve => { resolveProcessId = resolve; });
+    const record = {
+        id,
+        hostId: id,
+        name,
+        creationOptions,
+        pty,
+        scope,
+        owner: owner || {},
+        processId,
+        resolveProcessId,
+        processIdSettled: false,
+        processIdValue: undefined,
+        opened: false,
+        closed: false,
+        disposing: false,
+        active: false,
+        state: { isInteractedWith: false },
+        dimensions: undefined,
+        exitStatus: undefined,
+        lastSequence: -1,
+        ptySubscriptions: [],
+    };
+    record.terminal = new Terminal(record);
+    state.terminals.set(id, record);
+    bindPseudoterminal(record);
+    return record;
+}
+
+function createTerminalApi(first, shellPath, shellArgs) {
+    const scope = requireActivationScope('createTerminal');
+    if (state.terminals.size >= kMaximumSurfaceRegistrations) {
+        throw new Error('Terminal limit reached');
+    }
+    const normalized = normalizeTerminalCreation(first, shellPath, shellArgs);
+    const owner = surfaceOwner(scope, 'terminal');
+    const id = owner.registrationId;
+    const record = newTerminalRecord(id, normalized.options.name,
+        normalized.creationOptions, normalized.pty, scope, owner);
+    trackActivationDisposable(record.terminal);
+    const ready = observeRegistration(scope,
+        callHost('vscode.window.createTerminal', {
+            ...owner,
+            terminalId: id,
+            id,
+            kind: normalized.pty ? 'extension' : 'shell',
+            options: normalized.options,
+        }).then(result => {
+            requireCurrentGeneration(scope, 'Terminal creation');
+            if (record.closed) return record.terminal;
+            const snapshot = result && (result.terminal || result.snapshot || result);
+            const hostId = String(snapshot && (snapshot.terminalId || snapshot.id) || id);
+            record.hostId = hostId;
+            state.terminalAliases.set(hostId, id);
+            markTerminalOpen(record, snapshot || {});
+            return record.terminal;
+        }).catch(error => {
+            finalizeTerminal(record, { code: undefined, reason: 4 });
+            throw error;
+        }));
+    record.ready = ready;
+    record.terminal.ready = ready;
+    return record.terminal;
+}
+
+function reviveTerminal(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return undefined;
+    const id = String(snapshot.terminalId || snapshot.id || '');
+    if (!id) return undefined;
+    let record = terminalRecordById(id);
+    if (!record) {
+        const options = boundedSurfaceSnapshot(snapshot.creationOptions || {
+            name: snapshot.name || 'Terminal',
+        }, 'Terminal snapshot');
+        const owner = snapshot.extensionId && Number.isSafeInteger(snapshot.generation)
+            ? { extensionId: String(snapshot.extensionId),
+                generation: snapshot.generation }
+            : {};
+        record = newTerminalRecord(id, String(snapshot.name || 'Terminal'),
+            options, undefined, undefined, owner);
+        record.hostId = id;
+        state.terminalAliases.set(id, id);
+    }
+    markTerminalOpen(record, snapshot);
+    return record.terminal;
+}
+
+function handleTerminalProcessEvent(payload) {
+    const snapshot = payload.snapshot && typeof payload.snapshot === 'object'
+        ? payload.snapshot : {};
+    const id = processEventId(payload);
+    const op = String(payload.op || '');
+    let record = terminalRecordById(id);
+    if (!record && op !== 'exit' && op !== 'close' && Object.keys(snapshot).length) {
+        reviveTerminal(Object.assign({}, snapshot, { terminalId: id }));
+        record = terminalRecordById(id);
+    }
+    if (!record) return op === 'exit' || op === 'close';
+    if (Number.isSafeInteger(payload.sequence)) {
+        if (payload.sequence <= record.lastSequence) return true;
+        record.lastSequence = payload.sequence;
+    }
+    if (op === 'open') {
+        markTerminalOpen(record, snapshot);
+    } else if (op === 'data') {
+        const data = eventDataBuffer(payload).toString('utf8');
+        if (record.pty && (payload.stream === 'stdin' ||
+            payload.direction === 'input')) {
+            callPseudoterminal(record, 'handleInput', data);
+        } else {
+            terminalEvents.data.fire({ terminal: record.terminal, data });
+        }
+        if (!record.state.isInteractedWith) {
+            record.state = Object.assign({}, record.state, { isInteractedWith: true });
+            terminalEvents.state.fire({ terminal: record.terminal, state: record.state });
+        }
+    } else if (op === 'dimensions') {
+        const dimensions = terminalDimensions(payload.dimensions || snapshot.dimensions || snapshot);
+        if (dimensions) {
+            record.dimensions = dimensions;
+            callPseudoterminal(record, 'setDimensions', dimensions);
+            terminalEvents.dimensions.fire({ terminal: record.terminal, dimensions });
+        }
+    } else if (op === 'exit' || op === 'close') {
+        const code = Number.isInteger(payload.code) ? payload.code
+            : Number.isInteger(payload.exitCode) ? payload.exitCode
+                : Number.isInteger(snapshot.exitCode) ? snapshot.exitCode : undefined;
+        const reason = Number.isInteger(payload.reason) ? payload.reason
+            : Number.isInteger(snapshot.reason) ? snapshot.reason : 2;
+        const disposing = record.disposing;
+        finalizeTerminal(record, { code, reason });
+        if (!disposing && !snapshot.executionId) {
+            callHostObserved('vscode.window.disposeTerminal', {
+                ...record.owner, terminalId: record.hostId, id: record.hostId,
+            }, 'terminal exit cleanup failed').catch(() => undefined);
+        }
+    }
+    return true;
+}
+
+function hydrateTerminals(result) {
+    const rows = Array.isArray(result) ? result
+        : result && Array.isArray(result.terminals) ? result.terminals : [];
+    for (const row of rows.slice(0, kMaximumSurfaceRegistrations)) reviveTerminal(row);
+    const activeId = result && (result.activeTerminalId || result.activeId);
+    if (activeId) setActiveTerminal(terminalRecordById(activeId));
+}
+
+const executionApis = installExecutionApis({
+    state, EventEmitter, disposable, disposalBarrier, requireActivationScope,
+    activationScopeCurrent, runWithActivation, runWithDeadline, surfaceOwner,
+    observeRegistration,
+    boundedSurfaceSnapshot, callHost, callHostObserved, reportAsyncFailure,
+    neverCancellationToken, registerProcessRoute, queueEarlyProcessEvent,
+    processEventId, terminalRecordById, newTerminalRecord, reviveTerminal,
+    finalizeTerminal, markTerminalOpen, terminalEvents, Uri, createTerminalApi,
+    hydrateTerminals, handleTerminalProcessEvent,
+});
+
 const window = {
     activeTextEditor: undefined,
     visibleTextEditors: [],
+    get terminals() {
+        return Array.from(state.terminals.values())
+            .filter(record => !record.closed)
+            .map(record => record.terminal);
+    },
+    get activeTerminal() {
+        return terminalRecordById(state.activeTerminalId)?.terminal;
+    },
+    createTerminal: createTerminalApi,
+    onDidOpenTerminal: terminalEvents.open.event,
+    onDidCloseTerminal: terminalEvents.close.event,
+    onDidChangeActiveTerminal: terminalEvents.active.event,
+    onDidWriteTerminalData: terminalEvents.data.event,
+    onDidChangeTerminalDimensions: terminalEvents.dimensions.event,
+    onDidChangeTerminalState: terminalEvents.state.event,
+    registerTerminalProfileProvider: executionApis.registerTerminalProfileProvider,
     async showInformationMessage(message, ...actions) {
         await callHost('vscode.window.showInformationMessage', { message, actions });
         return undefined;
@@ -2033,6 +2856,7 @@ const commands = {
         return Promise.resolve(Array.from(state.commands.keys()));
     },
     async executeCommand(commandId, ...args) {
+        if (languageCommandKinds[commandId]) return executeLanguageCommand(commandId, args);
         // Try local dispatch first, then host bounce.
         const registration = state.commandRegistrations.get(commandId);
         if (registration && registration.active &&
@@ -2051,25 +2875,279 @@ const commands = {
     },
 };
 
+const languageProviders = new Map();
+const languageCommandKinds = {
+    'vscode.executeCodeLensProvider': 'codelens',
+    'vscode.executeDefinitionProvider': 'definition',
+    'vscode.executeHoverProvider': 'hover',
+    'vscode.executeCompletionItemProvider': 'completion',
+    'vscode.executeFormatDocumentProvider': 'documentFormatting',
+};
+const diagnosticCollections = new Map();
+const diagnosticsChanged = new EventEmitter();
+let nextLanguageRegistration = 1;
+
+function languageOwner(scope) {
+    if (nextLanguageRegistration >= Number.MAX_SAFE_INTEGER) throw new Error('Registration ids exhausted');
+    return { extensionId: scope.extensionId, generation: scope.generation,
+        registrationId: `lang-${scope.generation}-${nextLanguageRegistration++}` };
+}
+
+function observeRegistration(scope, promise) {
+    if (scope.phase === 'active') scope.pendingRegistrations.push(promise);
+    promise.catch(reportDisposalFailure);
+    return promise;
+}
+
+function wireSnapshot(value) {
+    const json = JSON.stringify(value, (_key, item) => item instanceof RegExp
+        ? { pattern: item.source, flags: item.flags } : item);
+    const snapshot = boundedJsonSnapshot(json === undefined ? null : JSON.parse(json), 1024 * 1024);
+    if (!snapshot.ok) throw new Error('Language payload exceeds the transport budget');
+    return snapshot.value;
+}
+
+function registerLanguageProvider(kind, method, selector, provider, metadata = {}) {
+    const scope = requireActivationScope(method);
+    if (!provider || typeof provider[method] !== 'function') throw new TypeError(`Missing ${method}`);
+    if (languageProviders.size >= 512) throw new Error('Language registration limit reached');
+    const owner = languageOwner(scope);
+    owner.providerId = owner.registrationId;
+    const record = { owner, scope, kind, method, provider, selector: wireSnapshot(selector), active: true,
+        cancellations: new Set(), subscription: undefined };
+    languageProviders.set(owner.providerId, record);
+    const ready = observeRegistration(scope, callHost('vscode.languages.registerProvider',
+        { ...owner, kind, selector: record.selector, metadata }).catch(error => {
+        record.active = false;
+        languageProviders.delete(owner.providerId);
+        throw error;
+    }));
+    const value = disposable(() => {
+        record.active = false;
+        for (const cancel of record.cancellations) cancel();
+        record.subscription?.dispose();
+        languageProviders.delete(owner.providerId);
+        return value[disposalBarrier] = ready.then(() => callHost('vscode.languages.unregisterProvider', owner), () => undefined);
+    });
+    value.ready = ready;
+    record.ready = ready;
+    if (kind === 'codelens' && typeof provider.onDidChangeCodeLenses === 'function') {
+        record.subscription = provider.onDidChangeCodeLenses(() => {
+            if (record.active) observeRegistration(scope, ready.then(() => record.active
+                ? callHost('vscode.languages.providerChanged', owner) : undefined));
+        });
+        trackActivationDisposable(record.subscription);
+    }
+    return value;
+}
+
+function selectorMatches(selector, document) {
+    if (Array.isArray(selector)) return selector.some(item => selectorMatches(item, document));
+    if (typeof selector === 'string') return selector === '*' || selector === document.languageId;
+    if (!selector || typeof selector !== 'object') return false;
+    if (selector.language && selector.language !== '*' && selector.language !== document.languageId) return false;
+    if (selector.scheme && selector.scheme !== '*' && selector.scheme !== document.uri.scheme) return false;
+    if (selector.notebookType) return false;
+    if (selector.pattern) {
+        const pattern = typeof selector.pattern === 'string' ? selector.pattern : selector.pattern.pattern;
+        if (typeof pattern !== 'string' || pattern.length > 4096) return false;
+        let file = document.uri.path;
+        const base = selector.pattern.baseUri || selector.pattern.base;
+        if (base) {
+            const basePath = typeof base === 'string' && base.startsWith('file:') ? Uri.parse(base).fsPath
+                : typeof base === 'string' ? base : base.fsPath;
+            if (!basePath) return false;
+            file = path.relative(basePath, document.uri.fsPath).replace(/\\/g, '/');
+            if (file === '..' || file.startsWith('../') || path.isAbsolute(file)) return false;
+        }
+        let expression = '';
+        let braces = 0;
+        for (let i = 0; i < pattern.length; ++i) {
+            const c = pattern[i];
+            if (c === '*' && pattern[i + 1] === '*') {
+                ++i;
+                if (pattern[i + 1] === '/') { ++i; expression += '(?:.*/)?'; }
+                else expression += '.*';
+            } else if (c === '*') expression += '[^/]*';
+            else if (c === '?') expression += '[^/]';
+            else if (c === '{') { if (++braces > 8) return false; expression += '(?:'; }
+            else if (c === '}') { if (--braces < 0) return false; expression += ')'; }
+            else if (c === ',' && braces > 0) expression += '|';
+            else if (c === '[') {
+                const end = pattern.indexOf(']', i + 1);
+                if (end < 0) return false;
+                const chars = pattern.slice(i + 1, end);
+                if (!chars || chars.includes('/') || chars.includes('\\')) return false;
+                expression += '[' + (chars[0] === '!' ? '^' + chars.slice(1) : chars) + ']';
+                i = end;
+            }
+            else expression += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+        if (braces !== 0) return false;
+        try { return new RegExp(`^${expression}$`).test(file); } catch (_) { return false; }
+    }
+    return true;
+}
+
+async function invokeLanguageProvider(request) {
+    const record = languageProviders.get(request.providerId);
+    const current = () => record && record.active &&
+        record.owner.extensionId === request.extensionId && record.owner.generation === request.generation &&
+        ['active', 'committed'].includes(record.scope.phase);
+    if (!current()) throw new Error('Stale language provider generation');
+    const supplied = request.document;
+    const document = supplied && typeof supplied.content === 'string'
+        ? updateDocument(supplied, Number.isSafeInteger(supplied.version)) : await workspace.openTextDocument(Uri.parse(
+            typeof request.uri === 'string' ? request.uri : request.uri?.uri || request.uri?.toString()));
+    if (!current()) throw new Error('Stale language provider generation');
+    if (!selectorMatches(record.selector, document)) return { result: null };
+    const cancellation = new EventEmitter();
+    let cancelled = false;
+    const cancel = () => { if (!cancelled) { cancelled = true; cancellation.fire(undefined); } };
+    const token = { get isCancellationRequested() { return cancelled; }, onCancellationRequested: cancellation.event };
+    record.cancellations.add(cancel);
+    let args;
+    switch (record.kind) {
+        case 'codelens': args = [document, token]; break;
+        case 'documentFormatting': args = [document, request.options || request.context || {}, token]; break;
+        case 'completion': args = [document, asPosition(request.position), token,
+            { triggerKind: 0, ...(request.context || {}) }]; break;
+        default: args = [document, asPosition(request.position), token];
+    }
+    try {
+        const result = await runWithDeadline(() => runWithActivation(record.scope,
+            () => record.provider[record.method](...args)), Date.now() + 10000, 'Language provider timed out');
+        if (!current()) throw new Error('Language provider disposed during callback');
+        return { result: wireSnapshot(result) };
+    } catch (error) {
+        cancel();
+        throw error;
+    } finally {
+        cancellation.dispose();
+        record.cancellations.delete(cancel);
+    }
+}
+
+async function executeLanguageCommand(command, args) {
+    const kind = languageCommandKinds[command];
+    const document = await workspace.openTextDocument(args[0]);
+    const items = [];
+    let incomplete = false;
+    for (const record of Array.from(languageProviders.values())) {
+        if (!record.active || record.kind !== kind || !selectorMatches(record.selector, document)) continue;
+        await record.ready;
+        const response = await invokeLanguageProvider({ ...record.owner, document: document._snapshot,
+            uri: document.uri.toString(), position: args[1], options: args[1],
+            context: { triggerKind: args[2] === undefined ? 0 : 1, triggerCharacter: args[2] } });
+        const result = reviveLanguageValue(response.result);
+        if (result === null || result === undefined) continue;
+        if (kind === 'documentFormatting') return result;
+        if (kind === 'completion' && !Array.isArray(result)) {
+            incomplete ||= result.isIncomplete === true;
+            items.push(...(result.items || []));
+        } else items.push(...(Array.isArray(result) ? result : [result]));
+    }
+    return kind === 'completion' ? new vscodeModule.CompletionList(items, incomplete) : items;
+}
+
+function createDiagnosticCollection(name) {
+    const scope = requireActivationScope('createDiagnosticCollection');
+    const owner = languageOwner(scope);
+    name = name === undefined ? owner.registrationId : String(name);
+    if (!name || Buffer.byteLength(name, 'utf8') > 256) throw new TypeError('Invalid diagnostic collection name');
+    if (diagnosticCollections.size >= 512) throw new Error('Diagnostic collection limit reached');
+    const entries = new Map();
+    let disposed = false;
+    let tail = Promise.resolve();
+    const enqueue = (method, params) => {
+        tail = observeRegistration(scope, tail.catch(() => undefined).then(() => callHost(method,
+            { ...owner, collection: name, ...params })));
+        return tail;
+    };
+    const check = () => { if (disposed) throw new Error('Diagnostic collection is disposed'); };
+    const collection = {
+        name,
+        set(uri, diagnostics) {
+            check();
+            if (uri === undefined) { this.clear(); return; }
+            const merged = new Map();
+            for (const [target, values] of Array.isArray(uri) ? uri : [[uri, diagnostics]]) {
+                const key = target.toString();
+                if (values === undefined) merged.set(key, undefined);
+                else {
+                    if (!Array.isArray(values)) throw new TypeError('Expected diagnostics array');
+                    merged.set(key, [...(merged.get(key) || []), ...values]);
+                }
+            }
+            const candidate = new Map(entries);
+            const updates = [];
+            for (const [key, values] of merged) {
+                const copy = values === undefined ? undefined : wireSnapshot(values);
+                if (copy === undefined || !copy.length) candidate.delete(key); else candidate.set(key, copy);
+                updates.push({ uri: key, diagnostics: copy || [] });
+            }
+            wireSnapshot(Array.from(candidate));
+            const payload = wireSnapshot(updates);
+            entries.clear();
+            for (const [key, values] of candidate) entries.set(key, values);
+            enqueue('vscode.languages.setDiagnostics', { updates: payload });
+        },
+        delete(uri) { this.set(uri, undefined); },
+        clear() { check(); entries.clear(); enqueue('vscode.languages.setDiagnostics', {}); },
+        get(uri) { check(); const found = entries.get(uri.toString()); return found && reviveLanguageValue(wireSnapshot(found)); },
+        has(uri) { check(); return entries.has(uri.toString()); },
+        forEach(callback, thisArg) {
+            check();
+            for (const [key] of entries) { const uri = Uri.parse(key); callback.call(thisArg, uri, this.get(uri), this); }
+        },
+        *[Symbol.iterator]() { check(); for (const [key] of entries) { const uri = Uri.parse(key); yield [uri, this.get(uri)]; } },
+        dispose() {
+            if (disposed) return collection[disposalBarrier];
+            disposed = true;
+            entries.clear();
+            diagnosticCollections.delete(owner.registrationId);
+            return collection[disposalBarrier] = enqueue('vscode.languages.disposeDiagnostics', {});
+        },
+    };
+    diagnosticCollections.set(owner.registrationId, collection);
+    enqueue('vscode.languages.setDiagnostics', {});
+    return trackActivationDisposable(collection);
+}
+
+function reviveLanguageValue(value) {
+    if (Array.isArray(value)) return value.map(reviveLanguageValue);
+    if (!value || typeof value !== 'object') return value;
+    if (Number.isInteger(value.line) && Number.isInteger(value.character)) return asPosition(value);
+    if (value.start && value.end && Number.isInteger(value.start.line)) return new Range(value.start, value.end);
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+        ['uri', 'targetUri'].includes(key) && typeof item === 'string' ? Uri.parse(item) : reviveLanguageValue(item)]));
+}
+
 const languages = {
     async getLanguages() {
         return callHost('vscode.languages.getLanguages', {});
     },
-    registerCodeLensProvider() { return disposable(); },
-    registerDefinitionProvider() { return disposable(); },
-    registerHoverProvider() { return disposable(); },
-    registerCompletionItemProvider() { return disposable(); },
-    registerDocumentFormattingEditProvider() { return disposable(); },
-    setLanguageConfiguration() { return disposable(); },
-    createDiagnosticCollection(name) {
-        return {
-            name,
-            set(_uri, _diagnostics) { /* not surfaced */ },
-            delete(_uri) { /* not surfaced */ },
-            clear() { /* not surfaced */ },
-            dispose() { /* not surfaced */ },
-        };
+    registerCodeLensProvider(selector, provider) { return registerLanguageProvider('codelens', 'provideCodeLenses', selector, provider); },
+    registerDefinitionProvider(selector, provider) { return registerLanguageProvider('definition', 'provideDefinition', selector, provider); },
+    registerHoverProvider(selector, provider) { return registerLanguageProvider('hover', 'provideHover', selector, provider); },
+    registerCompletionItemProvider(selector, provider, ...triggerCharacters) {
+        return registerLanguageProvider('completion', 'provideCompletionItems', selector, provider, { triggerCharacters });
     },
+    registerDocumentFormattingEditProvider(selector, provider) {
+        return registerLanguageProvider('documentFormatting', 'provideDocumentFormattingEdits', selector, provider);
+    },
+    setLanguageConfiguration(language, configuration) {
+        const scope = requireActivationScope('setLanguageConfiguration');
+        const owner = { ...languageOwner(scope), language };
+        const ready = observeRegistration(scope, callHost('vscode.languages.setLanguageConfiguration',
+            { ...owner, configuration: wireSnapshot(configuration) }));
+        const value = disposable(() => value[disposalBarrier] = ready.then(() =>
+            callHost('vscode.languages.disposeLanguageConfiguration', owner), () => undefined));
+        value.ready = ready;
+        return value;
+    },
+    createDiagnosticCollection,
+    onDidChangeDiagnostics: diagnosticsChanged.event,
 };
 
 const env = {
@@ -2099,6 +3177,10 @@ function guessLanguage(fileName) {
         case '.py': return 'python';
         case '.go': return 'go';
         case '.rs': return 'rust';
+        case '.c': return 'c';
+        case '.lua': return 'lua';
+        case '.emma': return 'emma';
+        case '.as': return 'angelscript';
         case '.cpp': case '.cc': case '.h': case '.hpp': return 'cpp';
         case '.cs': return 'csharp';
         case '.json': return 'json';
@@ -2113,6 +3195,28 @@ const vscodeModule = {
     version: '1.90.0',
     Uri,
     EventEmitter,
+    Position, Range, TextEdit, WorkspaceEdit,
+    EndOfLine: { LF: 1, CRLF: 2 },
+    DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
+    DiagnosticTag: { Unnecessary: 1, Deprecated: 2 },
+    CompletionTriggerKind: { Invoke: 0, TriggerCharacter: 1, TriggerForIncompleteCompletions: 2 },
+    CompletionItemKind: Object.fromEntries(['Text', 'Method', 'Function', 'Constructor', 'Field', 'Variable',
+        'Class', 'Interface', 'Module', 'Property', 'Unit', 'Value', 'Enum', 'Keyword', 'Snippet', 'Color',
+        'File', 'Reference', 'Folder', 'EnumMember', 'Constant', 'Struct', 'Event', 'Operator', 'TypeParameter',
+        'User', 'Issue'].map((name, index) => [name, index])),
+    Diagnostic: class { constructor(range, message, severity = 0) { Object.assign(this, { range, message, severity }); } },
+    DiagnosticRelatedInformation: class { constructor(location, message) { Object.assign(this, { location, message }); } },
+    Location: class { constructor(uri, range) { this.uri = uri; this.range = range instanceof Position ? new Range(range, range) : range; } },
+    Hover: class { constructor(contents, range) { this.contents = Array.isArray(contents) ? contents : [contents]; this.range = range; } },
+    CodeLens: class { constructor(range, command) { Object.assign(this, { range, command }); } get isResolved() { return !!this.command; } },
+    CompletionItem: class { constructor(label, kind) { Object.assign(this, { label, kind }); } },
+    CompletionList: class { constructor(items = [], isIncomplete = false) { Object.assign(this, { items, isIncomplete }); } },
+    MarkdownString: class {
+        constructor(value = '', supportThemeIcons = false) { Object.assign(this, { value, supportThemeIcons }); }
+        appendText(value) { this.value += String(value).replace(/[\\`*_{}[\]()<>#+.!~-]/g, '\\$&'); return this; }
+        appendMarkdown(value) { this.value += value; return this; }
+        appendCodeblock(value, language = '') { this.value += `\n\n\`\`\`${language}\n${value}\n\`\`\`\n\n`; return this; }
+    },
     TreeItem: class {
         constructor(label, collapsibleState = 0) {
             this.label = label;
@@ -2162,7 +3266,28 @@ const vscodeModule = {
     window,
     commands,
     languages,
+    tasks: executionApis.tasks,
+    debug: executionApis.debug,
     env,
+    Task: executionApis.Task,
+    TaskExecution: executionApis.TaskExecution,
+    ProcessExecution: executionApis.ProcessExecution,
+    ShellExecution: executionApis.ShellExecution,
+    CustomExecution: executionApis.CustomExecution,
+    TaskScope: executionApis.TaskScope,
+    TaskGroup: executionApis.TaskGroup,
+    TaskRevealKind: executionApis.TaskRevealKind,
+    TaskPanelKind: executionApis.TaskPanelKind,
+    DebugSession: executionApis.DebugSession,
+    DebugAdapterExecutable: executionApis.DebugAdapterExecutable,
+    DebugAdapterServer: executionApis.DebugAdapterServer,
+    DebugAdapterNamedPipeServer: executionApis.DebugAdapterNamedPipeServer,
+    DebugAdapterInlineImplementation: executionApis.DebugAdapterInlineImplementation,
+    SourceBreakpoint: executionApis.SourceBreakpoint,
+    FunctionBreakpoint: executionApis.FunctionBreakpoint,
+    DataBreakpoint: executionApis.DataBreakpoint,
+    DebugConfigurationProviderTriggerKind:
+        executionApis.DebugConfigurationProviderTriggerKind,
     ExtensionContext: class { constructor() { this.subscriptions = []; } },
     ExtensionMode: { Development: 1, Production: 2, Test: 3 },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
@@ -2184,14 +3309,54 @@ require.cache['vscode'] = { id: 'vscode', filename: 'vscode', loaded: true, expo
 
 state.handlers.set('host.initialize', async (_params) => {
     state.initialized = true;
+    await executionApis.initialize();
     return {
         protocolVersion: 'sao-ai-editor/1',
         serverInfo: { name: 'sao-extension-host-shim', version: '1.0' },
         capabilities: {
             extensions: { activate: true, deactivate: true, treeDataProvider: true },
             commands: { execute: true },
+            terminals: { shell: true, pseudoterminal: true, conpty: true },
+            tasks: { providers: true, execution: true, lifecycle: true },
+            debug: { providers: true, dap: true, lifecycle: true },
         },
     };
+});
+state.handlers.set('host.initialized', () => null);
+
+state.handlers.set('sao.extapi.event', event => {
+    const payload = event.payload || {};
+    if (executionApis.handleEvent(event.kind, payload)) {
+        return { handled: true };
+    }
+    if (event.kind === 'document') {
+        const key = Uri.parse(payload.uri).toString();
+        const previous = documents.get(key);
+        const previousVersion = previous?.version;
+        const previousDirty = previous?.isDirty;
+        if (payload.document && payload.document.version < previousVersion) return;
+        const document = payload.document ? updateDocument(payload.document) : previous;
+        if (!document) return;
+        if (payload.op === 'close') {
+            document._snapshot.isClosed = true;
+            documents.delete(key);
+            providerDocuments.delete(key);
+            documentEvents.close.fire(document);
+        } else if (payload.op === 'open' && !previous) documentEvents.open.fire(document);
+        else if (payload.op === 'change' && (previousVersion === undefined || document.version > previousVersion || previousDirty !== document.isDirty))
+            documentEvents.change.fire({ document, contentChanges: reviveLanguageValue(payload.changes || []) });
+        else if (payload.op === 'save') documentEvents.save.fire(document);
+    } else if (event.kind === 'configChanged') {
+        documentEvents.config.fire({ affectsConfiguration(section) {
+            return !payload.section || section === payload.section || section.startsWith(payload.section + '.') || payload.section.startsWith(section + '.');
+        } });
+    } else if (event.kind === 'diagnostics') {
+        diagnosticsChanged.fire({ uris: (payload.uris || []).map(uri => Uri.parse(uri)) });
+    } else if (event.kind === 'workspaceFolders' && Array.isArray(payload.folders)) {
+        workspace.workspaceFolders = payload.folders.map(folder => ({ ...folder, uri: Uri.parse(folder.uri) }));
+        documentEvents.folders.fire({ added: (payload.added || []).map(folder => ({ ...folder, uri: Uri.parse(folder.uri) })),
+            removed: (payload.removed || []).map(folder => ({ ...folder, uri: Uri.parse(folder.uri) })) });
+    }
 });
 
 state.handlers.set('host.activate', async (params) => {
@@ -2233,6 +3398,7 @@ state.handlers.set('host.activate', async (params) => {
     const activation = {
         phase: 'active',
         journal: [],
+        pendingRegistrations: [],
         seen: new WeakSet(),
         extensionId,
         generation,
@@ -2261,6 +3427,13 @@ state.handlers.set('host.activate', async (params) => {
     let activated;
     try {
         activated = await activationStorage.run(activation, async () => {
+            if (!workspaceInitialized) {
+                const snapshot = await callHost('vscode.workspace.documents', { includeContent: true });
+                for (const document of snapshot.documents || []) updateDocument(document);
+                const folders = await callHost('vscode.workspace.workspaceFolders', {});
+                workspace.workspaceFolders = folders.map(folder => ({ ...folder, uri: Uri.parse(folder.uri) }));
+                workspaceInitialized = true;
+            }
             let mod;
             try {
                 // Clear cache so hot-reload works.
@@ -2279,6 +3452,8 @@ state.handlers.set('host.activate', async (params) => {
             if (mod && typeof mod.activate === 'function') {
                 activationResult = await Promise.resolve(mod.activate(context));
             }
+            while (activation.pendingRegistrations.length)
+                await Promise.all(activation.pendingRegistrations.splice(0));
             return { mod, activationResult };
         });
     } catch (error) {
@@ -2367,6 +3542,60 @@ state.handlers.set('host.shutdown', async () => {
 state.handlers.set('commands.execute', async (params) => {
     const commandId = String(params.command || '');
     const args = Array.isArray(params.arguments) ? params.arguments : [];
+    if (commandId === 'sao.internal.extapi.invoke') {
+        if (args[0]?.invoke === 'languages') return invokeLanguageProvider(args[0]);
+        return executionApis.invoke(args[0]);
+    }
+    if (commandId === 'sao.internal.extapi.event') return state.handlers.get('sao.extapi.event')(args[0] || {});
+    if (commandId === 'sao.internal.tasks.fetch') {
+        const items = await executionApis.tasks.fetchTasks(args[0] || undefined);
+        return items.map(task => ({ ...task, execution: task.execution,
+            _providerKey: task._providerKey }));
+    }
+    if (commandId === 'sao.internal.tasks.execute') {
+        const execution = await executionApis.tasks.executeTask(args[0]);
+        return { executionId: execution.id };
+    }
+    if (commandId === 'sao.internal.tasks.terminate') {
+        const execution = state.taskExecutions.get(String(args[0] || ''))?.execution;
+        if (!execution) return false;
+        await execution.terminate();
+        return true;
+    }
+    if (commandId === 'sao.internal.debug.start') {
+        const started = await executionApis.debug.startDebugging(
+            args[0], args[1] || {}, undefined, args[2] || {});
+        const session = executionApis.debug.activeDebugSession;
+        return { started, sessionId: session?.id, name: session?.name,
+            type: session?.type, running: started === true,
+            configuration: session?.configuration };
+    }
+    if (commandId === 'sao.internal.debug.configurations') {
+        return { configurations: await executionApis.provideDebugConfigurations(
+            args[0] ? String(args[0]) : '', args[1] || null) };
+    }
+    if (commandId === 'sao.internal.debug.stop') {
+        const session = args[0]
+            ? state.debugSessions.get(String(args[0]))?.session : undefined;
+        return executionApis.debug.stopDebugging(session);
+    }
+    if (commandId === 'sao.internal.debug.sessions') {
+        return Array.from(state.debugSessions.values()).map(record => ({
+            sessionId: record.id, name: record.session.name,
+            type: record.session.type, running: record.active,
+            configuration: record.configuration,
+        }));
+    }
+    if (commandId === 'sao.internal.debug.evaluate') {
+        const record = args[1]
+            ? state.debugSessions.get(String(args[1]))
+            : state.debugSessions.get(state.activeDebugSessionId);
+        if (!record) throw new Error('No active debug session');
+        return record.session.customRequest('evaluate', {
+            expression: String(args[0] || ''), context: 'repl',
+            frameId: Number.isInteger(args[2]) ? args[2] : undefined,
+        });
+    }
     const registration = state.commandRegistrations.get(commandId);
     if (!registration || !registration.active ||
         typeof registration.handler !== 'function') {

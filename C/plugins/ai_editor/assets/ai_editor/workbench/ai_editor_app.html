@@ -8560,6 +8560,9 @@ en:{
   undo:'Undo',redo:'Redo',cut:'Cut',copy:'Copy',paste:'Paste',find:'Find',replace:'Replace',select_all:'Select All',select_word:'Select Word',
   cmd_palette:'Command Palette',toggle_sidebar:'Toggle Sidebar',toggle_editor:'Toggle Editor',toggle_chat:'Toggle Chat Panel',toggle_theme:'Toggle Theme',
   confirm_close_dirty:'Discard unsaved changes?',
+  file_open_failed:'Failed to open file',file_save_failed:'Failed to save file',
+  file_saved:'Saved: $1',file_auto_saved:'Auto saved: $1',file_save_target:'Save As target path',
+  file_save_busy:'A save is already in progress',file_no_document:'No active text document',
   run_and_debug:'Run and Debug',debug_sessions:'Sessions',start_debugging:'Start Debugging',
   no_debug_configs:'No debug configurations available',no_debug_sessions:'No debug sessions yet.',
   run_task_title:'Run Task',no_tasks_found:'No tasks found (no installed extension registers a task provider)',
@@ -8806,6 +8809,9 @@ zh:{
   undo:'撤销',redo:'重做',cut:'剪切',copy:'复制',paste:'粘贴',find:'查找',replace:'替换',select_all:'全选',select_word:'选择单词',
   cmd_palette:'命令面板',toggle_sidebar:'切换侧栏',toggle_editor:'切换编辑器',toggle_chat:'切换聊天面板',toggle_theme:'切换主题',
   confirm_close_dirty:'未保存的更改将丢失，确定关闭？',
+  file_open_failed:'打开文件失败',file_save_failed:'保存文件失败',
+  file_saved:'已保存：$1',file_auto_saved:'已自动保存：$1',file_save_target:'另存为目标路径',
+  file_save_busy:'正在保存此文件',file_no_document:'没有活动的文本文档',
   run_and_debug:'运行和调试',debug_sessions:'会话',start_debugging:'开始调试',
   no_debug_configs:'没有可用的调试配置',no_debug_sessions:'还没有调试会话。',
   run_task_title:'运行任务',no_tasks_found:'未找到任务（没有已安装扩展注册任务提供者）',
@@ -15144,7 +15150,7 @@ function hideEditorArea(){
 // ── Editor state ──
 let editorLang='plaintext', editorDirty=false, editorFileName='untitled';
 const BUILTIN_LANGUAGE_IDS=['plaintext','python','javascript','typescript','json','html','css','markdown',
-  'yaml','xml','sql','shell','lua','c','cpp','csharp','java','go','rust','toml'];
+  'yaml','xml','sql','shell','lua','emma','angelscript','c','cpp','csharp','java','go','rust','toml'];
 let LANGUAGES=[...BUILTIN_LANGUAGE_IDS];
 let LANGUAGE_META=Object.create(null),LANGUAGE_BY_EXT=Object.create(null),LANGUAGE_BY_FILENAME=Object.create(null);
 let EXTENSION_EDITOR_THEMES=[],EXTENSION_ICON_THEME=null,currentFileIconTheme='';
@@ -15154,7 +15160,7 @@ const BUILTIN_LANGUAGE_EXTS={
   py:'python',pyi:'python',pyw:'python',js:'javascript',mjs:'javascript',cjs:'javascript',
   ts:'typescript',tsx:'typescript',json:'json',html:'html',htm:'html',css:'css',scss:'css',sass:'css',
   md:'markdown',markdown:'markdown',yml:'yaml',yaml:'yaml',xml:'xml',sql:'sql',sh:'shell',
-  bash:'shell',ps1:'shell',bat:'shell',cmd:'shell',lua:'lua',c:'c',cc:'cpp',cpp:'cpp',
+  bash:'shell',ps1:'shell',bat:'shell',cmd:'shell',lua:'lua',emma:'emma',as:'angelscript',c:'c',cc:'cpp',cpp:'cpp',
   cxx:'cpp',h:'cpp',hpp:'cpp',cs:'csharp',java:'java',go:'go',rs:'rust',toml:'toml'
 };
 const BUILTIN_LANGUAGE_COMMENTS={
@@ -15162,7 +15168,8 @@ const BUILTIN_LANGUAGE_COMMENTS={
   typescript:{lineComment:'//',blockComment:['/*','*/']},json:{lineComment:'//',blockComment:['/*','*/']},
   html:{blockComment:['<!--','-->']},css:{blockComment:['/*','*/']},markdown:{blockComment:['<!--','-->']},
   yaml:{lineComment:'#'},xml:{blockComment:['<!--','-->']},sql:{lineComment:'--'},shell:{lineComment:'#'},
-  lua:{lineComment:'--',blockComment:['--[[',']]']},c:{lineComment:'//',blockComment:['/*','*/']},
+  lua:{lineComment:'--',blockComment:['--[[',']]']},emma:{lineComment:'--'},
+  angelscript:{lineComment:'//',blockComment:['/*','*/']},c:{lineComment:'//',blockComment:['/*','*/']},
   cpp:{lineComment:'//',blockComment:['/*','*/']},csharp:{lineComment:'//',blockComment:['/*','*/']},
   java:{lineComment:'//',blockComment:['/*','*/']},go:{lineComment:'//',blockComment:['/*','*/']},
   rust:{lineComment:'//',blockComment:['/*','*/']},toml:{lineComment:'#'}
@@ -15959,7 +15966,7 @@ function normalizeLanguageExt(ext){
 }
 function languageDisplayName(lang){
   const meta=LANGUAGE_META[lang]||{};
-  return meta.name||String(lang||'plaintext').replace(/[-_]/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+  return meta.name||({csharp:'C#',angelscript:'AngelScript',emma:'Emma',lua:'Lua',python:'Python'})[lang]||String(lang||'plaintext').replace(/[-_]/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
 }
 function languageSearchText(lang){
   const meta=LANGUAGE_META[lang]||{};
@@ -16803,6 +16810,7 @@ function applyEditorLanguages(rows){
   BUILTIN_LANGUAGE_IDS.forEach(id=>{byId[id]={id,name:languageDisplayName(id),aliases:[],extensions:[],filenames:[],source:'builtin'}});
   Object.entries(BUILTIN_LANGUAGE_EXTS).forEach(([ext,id])=>{byExt[normalizeLanguageExt(ext)]=id});
   (Array.isArray(rows)?rows:[]).forEach(row=>{
+    if(typeof row==='string')row={id:row};
     if(!row||!row.id)return;
     const id=String(row.id);
     const current=byId[id]||{id,aliases:[],extensions:[],filenames:[],source:'extension'};
@@ -17260,7 +17268,7 @@ function editorProviderPayload(kind,extra){
     kind,uri,filePath,workspacePath:tab.workspacePath||'',name:tab.name||editorFileName||'untitled',
     requestKey:'editor:'+String(kind||'')+':'+tabKey,
     language:editorLang,content:value,contentLength:budget.contentLength,lineCount:budget.lineCount,
-    largeFile:budget.largeFile,dirty:editorDirty,offset,position:editorPositionFromOffset(value,offset)
+    largeFile:budget.largeFile,dirty:isTextTabDirty(tab),offset,position:editorPositionFromOffset(value,offset)
   },extra||{});
 }
 let _editorSurfaceState=null,_editorSurfaceStateTimer=null,_editorSurfaceStateSeq=0;
@@ -18358,8 +18366,14 @@ async function editorRequestLanguageProvider(kind,payload,options){
   };
   if(!quiet)setStatus('running',{kind,label,message:label+'...',detail:'Running '+label.toLowerCase()+' providers'});
   const _providerT0=performance.now();
-  const res=await call('editor_language_provider',payload||editorProviderPayload(kind));
+  const requestPayload=payload||editorProviderPayload(kind),sourceTab=activeEditorTab();
+  const sourcePath=sourceTab&&sourceTab.filePath,sourceWorkspacePath=sourceTab&&sourceTab.workspacePath;
+  const guarded=['completion','hover','definition','formatting'].includes(kind);
+  const res=await call('editor_language_provider',requestPayload);
   recordAiEditorPerfSample('languageProvider',performance.now()-_providerT0);
+  if(guarded&&(activeEditorTab()!==sourceTab||sourceTab?.filePath!==sourcePath||sourceTab?.workspacePath!==sourceWorkspacePath||
+    ed.value!==requestPayload.content||editorLang!==requestPayload.language||
+    (kind!=='formatting'&&ed.selectionStart!==requestPayload.offset)))return {ok:false,cancelled:true,reason:'superseded'};
   if(typeof opts.isCurrent==='function'&&!opts.isCurrent())return res;
   if(quiet)return res;
   if(editorProviderResultCancelled(res)){
@@ -19928,18 +19942,28 @@ function editorInsertCompletionCommitCharacter(ch){
 function editorApplyTextEditsToValue(value,edits){
   if(!Array.isArray(edits)||!edits.length)return false;
   value=String(value||'');
-  const ops=[];
-  edits.forEach(edit=>{
-    if(!edit||typeof edit!=='object')return;
+  const ops=[],lines=value.split(/\r\n|\r|\n/),offsets=[0];
+  for(const match of value.matchAll(/\r\n|\r|\n/g))offsets.push(match.index+match[0].length);
+  const validPosition=p=>p&&Number.isInteger(p.line)&&p.line>=0&&p.line<lines.length&&
+    Number.isInteger(p.character)&&p.character>=0&&p.character<=lines[p.line].length;
+  for(const edit of edits){
+    if(!edit||typeof edit!=='object')return false;
     let range=edit.range;
     if(!range&&edit.position)range={start:edit.position,end:edit.position};
-    if(!range)return;
-    const start=editorOffsetFromPosition(value,range.start),end=editorOffsetFromPosition(value,range.end);
-    ops.push({start:Math.min(start,end),end:Math.max(start,end),text:String(edit.newText??edit.text??'')});
-  });
-  if(!ops.length)return false;
+    const text=edit.newText??edit.text;
+    if(!range||!validPosition(range.start)||!validPosition(range.end)||typeof text!=='string')return false;
+    const start=offsets[range.start.line]+range.start.character,end=offsets[range.end.line]+range.end.character;
+    if(start>end)return false;
+    ops.push({start,end,text});
+  }
   const primary=ops[0];let next=value;
-  ops.sort((a,b)=>b.start-a.start||b.end-a.end).forEach(op=>{next=next.slice(0,op.start)+op.text+next.slice(op.end)});
+  ops.reverse().sort((a,b)=>b.start-a.start);
+  let previousStart=value.length;
+  for(const op of ops){
+    if(op.end>previousStart)return false;
+    previousStart=op.start;
+    next=next.slice(0,op.start)+op.text+next.slice(op.end);
+  }
   return {value:next,cursor:Math.min(next.length,primary.start+primary.text.length)};
 }
 function editorRefreshLanguageFeaturesAfterEdit(delayBase){
@@ -20488,8 +20512,8 @@ async function navigateEditorDefinition(target,label){
     return false;
   }
   const absPath=editorDocumentUriToPath(uri),relPath=editorWorkspaceRelativePath(absPath);
-  if(!relPath){setStatus(label+' target is outside the active workspace');return false}
-  const opened=await openWorkspaceFile(relPath);
+  if(!relPath&&!absPath){setStatus(label+' target is outside the active workspace');return false}
+  const opened=await openWorkspaceFile(relPath||absPath);
   if(!opened)return false;
   if(range)editorRevealRange(range);
   setStatus(label+' opened: '+(opened.path||relPath));
@@ -24115,6 +24139,7 @@ async function formatDocument(options){
     countKey:'edits',itemLabel:'format edit',label:'Format document',quiet:opts.quiet===true,
     isCurrent:editorAction?()=>editorActionIsCurrent(editorAction):undefined
   });
+  if(editorProviderResultCancelled(res))return false;
   if(editorAction&&!editorActionIsCurrent(editorAction))return false;
   if(res&&res.ok&&Array.isArray(res.edits)&&res.edits.length){
     _undoPush(true);
@@ -24124,6 +24149,11 @@ async function formatDocument(options){
     }
   }
   if(editorAction&&!editorActionIsCurrent(editorAction))return false;
+  if(providerId||res&&(res.available||Array.isArray(res.providerErrors)&&res.providerErrors.length)){
+    if(res&&res.ok&&Array.isArray(res.edits)&&!res.edits.length)return true;
+    if(!opts.quiet)setStatus('Formatter failed: '+callFailedMessage(res,'Invalid formatter edits'));
+    return false;
+  }
   const jsonFormatted=formatEditorJsonLikeDocument(opts);
   if(jsonFormatted!==null)return jsonFormatted;
   if(editorAction&&!editorActionIsCurrent(editorAction))return false;
@@ -28402,8 +28432,9 @@ function openEditorOpenResult(res,relPath){
   if(isExtensionCustomEditorOpenResult(res))return openExtensionCustomEditorFile(res,relPath);
   if(isExtensionNotebookOpenResult(res))return openExtensionNotebookFile(res,relPath);
   explorerSelectedPath=res.path||relPath||'';
-  const absolutePath=res.absolute_path||'';
-  const workspacePath=res.path||relPath||'';
+  const isAbsolute=path=>/^(?:[A-Za-z]:[\\/]|[\\/])/.test(String(path||''));
+  const absolutePath=res.absolute_path||res.absolutePath||(res.uri?editorDocumentUriToPath(res.uri):'')||(isAbsolute(res.path)?res.path:'');
+  const workspacePath=res.path&&!isAbsolute(res.path)?res.path:(relPath&&!isAbsolute(relPath)?relPath:'');
   const existing=tabs.find(t=>(absolutePath&&t.filePath===absolutePath)||(workspacePath&&t.workspacePath===workspacePath));
   if(existing){
     existing.name=res.name||existing.name;
@@ -28412,7 +28443,7 @@ function openEditorOpenResult(res,relPath){
     existing.language=existing.language||res.language||'plaintext';
     switchTab(existing.id);
   }else{
-    addTab(res.name||pathBaseName(res.path),res.content||'',res.language||'',{filePath:absolutePath,workspacePath:workspacePath});
+    addTab(res.name||pathBaseName(res.path),res.content||'',languageForFileName(res.name||res.path)||res.language||'',{filePath:absolutePath,workspacePath:workspacePath});
   }
   if(res.truncated)showToast(t('file_preview_limited'),'info',2200);
   highlightExplorerSelection();
@@ -50564,7 +50595,7 @@ setTimeout(renderRecommendedExts,200);
 // (switchSidebar already handles extensions auto-search in its single definition above)
 
 // ── Multi-tab editor ──
-let tabs=[{id:0,name:'untitled',content:'',originalContent:'',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null}];
+let tabs=[{id:0,name:'untitled',content:'',originalContent:'',savedContent:'',language:'plaintext',cursor:0,filePath:'',workspacePath:'',runtimeMode:'text',customEditor:null,webview:null}];
 let activeTab=0, nextTabId=1;
 
 function isExtensionNotebookTab(tab){
@@ -50588,14 +50619,17 @@ function isTextEditableTab(tab){
 }
 function isTextTabDirty(tab){
   if(!isTextEditableTab(tab))return false;
-  return String(textTabLiveContent(tab))!==String(tab.originalContent!==undefined?tab.originalContent:(tab.content||''));
+  const baseline=!isSettingsJsonTab(tab)&&tab.savedContent!==undefined?tab.savedContent:tab.originalContent;
+  return String(textTabLiveContent(tab)).replace(/\r\n?/g,'\n')!==String(baseline!==undefined?baseline:(tab.content||'')).replace(/\r\n?/g,'\n');
 }
 
 function addTab(name,content,lang,meta){
   showEditorArea();
   const tabMeta=isPlainObject(meta)?meta:{};
-  const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang||'plaintext',cursor:0,
+  lang=lang||languageForFileName(name)||'plaintext';
+  const tab={id:nextTabId++,name:name||'untitled',content:content||'',language:lang,cursor:0,
     originalContent:tabMeta.originalContent!==undefined?String(tabMeta.originalContent||''):String(content||''),
+    savedContent:String(content||''),
     filePath:tabMeta.filePath||'',workspacePath:tabMeta.workspacePath||'',
     runtimeMode:tabMeta.runtimeMode||tabMeta.runtime_mode||'text',
     diff:tabMeta.diff||null,
@@ -50690,6 +50724,7 @@ function switchTab(id){
     hideCustomEditorSurface();
     hideNotebookSurface();
     $('editor-text').value=tab.content;
+    editorDirty=isTextTabDirty(tab);
     if(tab.originalContent===undefined)tab.originalContent=tab.content||'';
     _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
     setEditorLanguage(tab.language);
@@ -50734,6 +50769,7 @@ function saveCurrentTab(){
   if(isExtensionNotebookTab(tab)){tab.notebook=readNotebookFromSurface(tab);return}
   if(tab){
     tab.content=$('editor-text').value;tab.language=editorLang;tab.cursor=$('editor-text').selectionStart;
+    tab.dirty=isTextTabDirty(tab);
     if(tab.originalContent===undefined)tab.originalContent=tab.content||'';
     // Per-tab undo history: stash the live stacks so switching away and
     // back doesn't wipe them (they used to be global and reset on every
@@ -50931,6 +50967,7 @@ openInEditor=function(code,lang){
     editorFileName=tab.filePath||tab.name||'untitled';
   }
   _origOpenInEditor(code,lang);
+  editorDirty=isTextTabDirty(tab);
   renderTabs();
 };
 
@@ -52568,9 +52605,9 @@ $('kb-shortcuts-modal').addEventListener('click',e=>{if(e.target.id==='kb-shortc
 
 // ── Tab dirty indicator ──
 ed.addEventListener('input',function(){
-  editorDirty=true;
+  editorDirty=isTextTabDirty(activeEditorTab());
   const tab=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');
-  if(tab&&!tab.classList.contains('dirty'))tab.classList.add('dirty');
+  if(tab)tab.classList.toggle('dirty',editorDirty);
   scheduleEditorAutoSave();
   if(typeof scheduleEditorSurfaceStateRefresh==='function')scheduleEditorSurfaceStateRefresh(320);
 });
@@ -53772,8 +53809,11 @@ async function openFileDialog(){
   if(window.pywebview&&window.pywebview.api&&window.pywebview.api.open_text_file){
     try{
       const result=await window.pywebview.api.open_text_file();
-      if(result&&result.content!=null){addTab(result.name||'file',result.content,result.language||'');return}
-    }catch(e){console.log('open_text_file fallback:',e)}
+      if(result&&result.cancelled)return result;
+      if(result&&result.ok===true&&typeof result.content==='string')return openEditorOpenResult(result,'');
+      showToast(t('file_open_failed'),'error');
+      return result;
+    }catch(e){showToast(t('file_open_failed')+': '+e.message,'error');return null}
   }
   const input=document.createElement('input');input.type='file';input.accept='*/*';
   input.style.position='fixed';input.style.left='-9999px';document.body.appendChild(input);
@@ -53817,8 +53857,10 @@ async function pickSaveAsTarget(tab){
     picked=await call('save_file_dialog',suggested);
     if(picked&&picked.ok&&picked.path)return picked.path;
     if(picked&&picked.cancelled)return '';
+    showToast(t('file_save_failed'),'error');
+    return '';
   }
-  const target=window.prompt('Save As target path',fallback||suggested);
+  const target=window.prompt(t('file_save_target'),fallback||suggested);
   return target||'';
 }
 async function saveCustomEditorTabAs(tab){
@@ -53909,36 +53951,47 @@ async function revertNotebookTab(tab){
   return {ok:true};
 }
 async function saveTextTabAs(tab,options){
-  if(!tab||!tabs.includes(tab))return {ok:false,error:'no active text document'};
+  if(!isTextEditableTab(tab)||!tabs.includes(tab))return {ok:false,error:t('file_no_document')};
+  if(tab.saving)return {ok:false,error:t('file_save_busy')};
+  tab.saving=true;
   const sourceTabId=tab.id;
+  const sourcePath=tab.filePath;
   const opts=isPlainObject(options)?options:{};
-  if(!opts.skipSaveParticipants&&activeTab===sourceTabId)await runEditorSaveParticipants();
-  if(!tabs.includes(tab))return {ok:false,cancelled:true};
-  const content=activeTab===sourceTabId?$('editor-text').value:(tab.content||'');
-  const language=tab.language||editorLang;
-  const r=await call('save_file_as',content,saveAsSuggestedName(tab));
-  if(r&&r.ok){
-    if(tabs.includes(tab)){
-      const currentContent=activeTab===sourceTabId?$('editor-text').value:(tab.content||'');
-      tab.filePath=r.path;tab.name=r.name;tab.language=r.language||language;
-      tab.originalContent=content;tab.content=currentContent;tab.dirty=currentContent!==content;
+  try{
+    if(!opts.skipSaveParticipants&&activeTab===sourceTabId){
+      const participantResult=await runEditorSaveParticipants();
+      if(participantResult&&participantResult.cancelled||activeTab!==sourceTabId)return {ok:false,cancelled:true};
+    }
+    if(!tabs.includes(tab)||tab.filePath!==sourcePath)return {ok:false,cancelled:true};
+    const content=textTabLiveContent(tab);
+    const language=activeTab===sourceTabId?editorLang:tab.language;
+    const r=await api().save_file_as(content,saveAsSuggestedName(tab));
+    if(r&&r.cancelled)return r;
+    if(!r||r.ok!==true||typeof r.path!=='string'||!r.path)throw new Error(callFailedMessage(r,t('file_save_failed')));
+    if(tabs.includes(tab)&&tab.filePath===sourcePath){
+      const currentContent=textTabLiveContent(tab);
+      tab.filePath=r.path;tab.workspacePath='';tab.name=r.name||pathBaseName(r.path);
+      tab.language=languageForFileName(tab.name)||r.language||language;
+      tab.originalContent=content;tab.savedContent=content;tab.content=currentContent;tab.dirty=currentContent!==content;
+      tab.scmBaselineSource='';
       if(activeTab===sourceTabId){
         editorDirty=tab.dirty;
+        editorFileName=tab.filePath;
+        setEditorLanguage(tab.language);
         _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
         renderEditorVisualDecorations();
+        _loadEditorTitleActions();
       }
-      const tabEl=document.querySelector('.tab[data-tab-id="'+sourceTabId+'"]');
-      if(tabEl)tabEl.classList.toggle('dirty',tab.dirty);
     }
     renderTabs();
-    showToast('Saved: '+r.path,'success',1500);
+    showToast(t('file_saved').replace('$1',r.path),'success',1500);
     return r;
+  }catch(e){
+    showToast(t('file_save_failed')+': '+e.message,'error');
+    return {ok:false,error:e.message};
+  }finally{
+    tab.saving=false;
   }
-  if(r&&r.cancelled)return r;
-  if(r&&r.error){showToast('Save failed: '+r.error,'error');return r}
-  try{navigator.clipboard.writeText(content);showToast('Content copied to clipboard','info',2000)}
-  catch(e2){showToast('No file path to save to','warning',2000)}
-  return r||{error:'save_file_as unavailable'};
 }
 async function saveFileAs(){
   const tab=tabs.find(t=>t.id===activeTab);
@@ -53950,7 +54003,7 @@ async function saveFileAs(){
     await saveNotebookTab(tab);
     return;
   }
-  await saveTextTabAs(tab);
+  return await saveTextTabAs(tab);
 }
 async function revertFile(){
   const tab=tabs.find(t=>t.id===activeTab);
@@ -54076,35 +54129,44 @@ async function saveFile(options){
     return await saveNotebookTab(tab,opts);
   }
   if(isSettingsJsonTab(tab))return await saveSettingsJsonTab(tab,opts);
+  if(!isTextEditableTab(tab))return {ok:false,error:t('file_no_document')};
   if(opts.autoSave&&!(tab&&tab.filePath))return {ok:false,skipped:true};
-  const participantResult=await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''});
-  if(participantResult&&participantResult.cancelled)return {ok:false,cancelled:true};
-  const content=$('editor-text').value;
-  if(tab&&tab.filePath){
-    const r=await call('execute_tool','editFile',JSON.stringify({path:tab.filePath,content:content}),true);
-    if(r==null){if(!opts.autoSave)showToast('Save failed: backend unavailable','error');return {ok:false,error:'backend unavailable'}}
-    if(r){try{const d=JSON.parse(r);if(d.error){if(!opts.autoSave)showToast('Save failed: '+d.error,'error');return {ok:false,error:d.error}}}catch(e){}}
-    editorDirty=false;
-    if(tab){
-      tab.content=content;
-      // A git-HEAD SCM baseline must survive saves: overwriting it with the
-      // just-saved text would blank the dirty-diff gutter even though the
-      // file still differs from HEAD. Re-fetch instead (falls back to the
-      // saved content if git is unavailable for this file).
+  if(!tab.filePath)return await saveTextTabAs(tab);
+  if(tab.saving)return {ok:false,error:t('file_save_busy')};
+  tab.saving=true;
+  const path=tab.filePath;
+  try{
+    const participantResult=await runEditorSaveParticipants({autoSave:opts.autoSave===true,autoSaveMode:opts.autoSaveMode||''});
+    if(participantResult&&participantResult.cancelled||activeTab!==tab.id||!tabs.includes(tab)||tab.filePath!==path)return {ok:false,cancelled:true};
+    const content=textTabLiveContent(tab);
+    const args=[path,content];
+    if(typeof tab.savedContent==='string')args.push(tab.savedContent);
+    const r=await api().save_workspace_file(...args);
+    if(!r||r.ok!==true)throw new Error(callFailedMessage(r,t('file_save_failed')));
+    if(tabs.includes(tab)&&tab.filePath===path){
+      const currentContent=textTabLiveContent(tab);
+      tab.savedContent=content;tab.content=currentContent;tab.dirty=currentContent!==content;
+      tab.workspacePath=r.path||tab.workspacePath;
       if(tab.scmBaselineSource==='git-head'&&typeof refreshEditorScmBaseline==='function'){
         refreshEditorScmBaseline(tab.id,tab.filePath);
       }else{
         tab.originalContent=content;
       }
+      if(activeTab===tab.id){
+        editorDirty=tab.dirty;
+        _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
+        renderEditorVisualDecorations();
+      }
     }
-    _editorDirtyDiffCache={key:'',decorations:[],summary:null,changes:[]};
-    renderEditorVisualDecorations();
-    const tabEl=document.querySelector('.tab[data-tab-id="'+activeTab+'"]');if(tabEl)tabEl.classList.remove('dirty');
-    if(opts.autoSave)setStatus('Auto saved: '+tab.filePath);
-    else showToast('Saved: '+tab.filePath,'success',1500);
-    return {ok:true,path:tab.filePath,autoSave:opts.autoSave===true};
-  }else{
-    await saveTextTabAs(tab,{skipSaveParticipants:true});
+    renderTabs();
+    if(opts.autoSave)setStatus(t('file_auto_saved').replace('$1',path));
+    else showToast(t('file_saved').replace('$1',path),'success',1500);
+    return {...r,autoSave:opts.autoSave===true};
+  }catch(e){
+    if(!opts.autoSave)showToast(t('file_save_failed')+': '+e.message,'error');
+    return {ok:false,error:e.message};
+  }finally{
+    tab.saving=false;
   }
 }
 

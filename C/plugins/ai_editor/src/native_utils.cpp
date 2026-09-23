@@ -26,6 +26,74 @@ namespace {
 thread_local const char* g_atomic_write_last_stage = "not_started";
 thread_local DWORD g_atomic_write_last_error = ERROR_SUCCESS;
 
+enum class FileContentMode { Text, Binary };
+
+// A compact JSON byte array uses at most four characters per byte plus brackets.
+static_assert(kMaximumBinaryFileBytes * 4U + 1024U < kMaximumJsonBytes);
+
+std::string workspace_request_path(const Json& params) {
+    if (!params.is_object()) return {};
+    const auto uri = params.find("uri");
+    std::string value;
+    bool uri_path = false;
+    if (uri != params.end()) {
+        if (uri->is_string()) {
+            value = uri->get<std::string>();
+        } else if (uri->is_object()) {
+            const auto scheme = uri->find("scheme");
+            if (scheme != uri->end() && (!scheme->is_string() || *scheme != "file"))
+                return {};
+            if (uri->contains("authority") && (*uri)["authority"] != "") return {};
+            const auto fs_path = uri->find("fsPath");
+            const auto path = uri->find("path");
+            if (fs_path != uri->end() && fs_path->is_string())
+                value = fs_path->get<std::string>();
+            else if (path != uri->end() && path->is_string()) {
+                value = path->get<std::string>();
+                uri_path = true;
+            } else
+                return {};
+        } else
+            return {};
+    } else {
+        auto path = params.find("path");
+        if (path == params.end()) path = params.find("fsPath");
+        if (path == params.end() || !path->is_string()) return {};
+        value = path->get<std::string>();
+    }
+    if (value.empty() || value.size() > 32768U) return {};
+    if (value.rfind("file:///", 0) == 0) {
+        value.erase(0, 7);
+        if (value.find_first_of("?#") != std::string::npos) return {};
+        std::string decoded;
+        decoded.reserve(value.size());
+        const auto hex = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        for (size_t i = 0; i < value.size(); ++i) {
+            if (value[i] != '%') {
+                decoded.push_back(value[i]);
+                continue;
+            }
+            if (i + 2 >= value.size() || hex(value[i + 1]) < 0 || hex(value[i + 2]) < 0)
+                return {};
+            decoded.push_back(static_cast<char>((hex(value[i + 1]) << 4) | hex(value[i + 2])));
+            i += 2;
+        }
+        value = std::move(decoded);
+        uri_path = true;
+    } else if (value.find("://") != std::string::npos) {
+        return {};
+    }
+    if (uri_path && value.size() >= 3 && value[0] == '/' && value[2] == ':')
+        value.erase(0, 1);
+    if (value.find('\0') != std::string::npos || !valid_utf8(value)) return {};
+    return value;
+}
+
 void mark_atomic_write_stage(const char* stage) noexcept {
     g_atomic_write_last_stage = stage;
 }
@@ -336,7 +404,8 @@ int32_t capture_target(const std::filesystem::path& path, const FileBinding& par
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t read_text_handle(HANDLE handle, std::size_t maximum_bytes, std::string& result) {
+int32_t read_file_handle(HANDLE handle, std::size_t maximum_bytes, std::string& result,
+                         FileContentMode mode = FileContentMode::Text) {
     result.clear();
     LARGE_INTEGER size{};
     LARGE_INTEGER origin{};
@@ -369,7 +438,7 @@ int32_t read_text_handle(HANDLE handle, std::size_t maximum_bytes, std::string& 
         result.clear();
         return SAO_AI_EDITOR_ERR_BUSY;
     }
-    if (!valid_utf8(result)) {
+    if (mode == FileContentMode::Text && !valid_utf8(result)) {
         result.clear();
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
@@ -688,8 +757,9 @@ bool absolute_normalized(const std::filesystem::path& path, std::filesystem::pat
     return !result.empty();
 }
 
-int32_t read_text_bounded_impl(const std::filesystem::path& root, const std::filesystem::path& path,
-                               std::size_t maximum_bytes, std::string& result) {
+int32_t read_file_bounded_impl(const std::filesystem::path& root, const std::filesystem::path& path,
+                               std::size_t maximum_bytes, std::string& result,
+                               FileContentMode mode = FileContentMode::Text) {
     result.clear();
     try {
         std::filesystem::path root_path;
@@ -740,7 +810,7 @@ int32_t read_text_bounded_impl(const std::filesystem::path& root, const std::fil
         if (!before.exists) {
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
-        status = read_text_handle(before.handle.get(), maximum_bytes, result);
+        status = read_file_handle(before.handle.get(), maximum_bytes, result, mode);
         if (status != SAO_AI_EDITOR_OK) {
             return status;
         }
@@ -764,12 +834,14 @@ int32_t read_text_bounded_impl(const std::filesystem::path& root, const std::fil
     }
 }
 
-int32_t write_text_atomic_impl(const std::filesystem::path* bounded_root,
+int32_t write_file_atomic_impl(const std::filesystem::path* bounded_root,
                                const std::filesystem::path& path, std::string_view content,
                                bool create_only,
-                               const std::string_view* expected_content = nullptr) {
+                               const std::string_view* expected_content = nullptr,
+                               FileContentMode mode = FileContentMode::Text) {
     mark_atomic_write_stage("validate_content");
-    if (!valid_utf8(content) || (expected_content != nullptr && !valid_utf8(*expected_content))) {
+    if (mode == FileContentMode::Text &&
+        (!valid_utf8(content) || (expected_content != nullptr && !valid_utf8(*expected_content)))) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     try {
@@ -870,8 +942,8 @@ int32_t write_text_atomic_impl(const std::filesystem::path* bounded_root,
                 return SAO_AI_EDITOR_ERR_BUSY;
             }
             std::string current_content;
-            status = read_text_handle(target_before_write.handle.get(), expected_content->size(),
-                                      current_content);
+            status = read_file_handle(target_before_write.handle.get(), expected_content->size(),
+                                      current_content, mode);
             if (status == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL ||
                 (status == SAO_AI_EDITOR_OK &&
                  std::string_view(current_content) != *expected_content)) {
@@ -902,8 +974,8 @@ int32_t write_text_atomic_impl(const std::filesystem::path* bounded_root,
         }
         if (expected_content != nullptr) {
             std::string current_content;
-            status = read_text_handle(target_before_replace.handle.get(),
-                                      expected_content->size(), current_content);
+            status = read_file_handle(target_before_replace.handle.get(),
+                                      expected_content->size(), current_content, mode);
             if (status == SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL ||
                 (status == SAO_AI_EDITOR_OK &&
                  std::string_view(current_content) != *expected_content)) {
@@ -1060,6 +1132,72 @@ bool resolve_bounded_path(const std::filesystem::path& root, std::string_view va
     return true;
 }
 
+int32_t workspace_binary_file_io(const std::filesystem::path& root, const Json& params,
+                                 bool for_write, Json& result) {
+    result = Json{{"message", "invalid workspace file request"}};
+    if (!params.is_object()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    std::string bytes;
+    if (for_write) {
+        const auto content = params.find("content");
+        if (content == params.end() || !content->is_array())
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        if (content->size() > kMaximumBinaryFileBytes) {
+            result = Json{{"message", "file exceeds the bounded write limit"},
+                          {"maximumBytes", kMaximumBinaryFileBytes}};
+            return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+        }
+        bytes.reserve(content->size());
+        for (const auto& value : *content) {
+            if (!value.is_number_integer() ||
+                (value.is_number_unsigned() ? value.get<uint64_t>() > 255U
+                                           : value.get<int64_t>() < 0 || value.get<int64_t>() > 255)) {
+                result = Json{{"message", "content must contain byte values 0..255"}};
+                return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            }
+            const unsigned char byte = value.get<unsigned char>();
+            bytes.append(reinterpret_cast<const char*>(&byte), 1);
+        }
+    }
+    const std::string raw = workspace_request_path(params);
+    if (raw.empty()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    if (root.empty()) {
+        result = Json{{"message", "workspace is not initialized"}};
+        return SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    const std::filesystem::path requested(utf8_to_wide(raw));
+    if ((!requested.is_absolute() && (requested.has_root_name() || requested.has_root_directory())) ||
+        raw.rfind("\\\\?\\", 0) == 0 || raw.rfind("\\\\.\\", 0) == 0)
+        return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    for (const auto& component : requested.relative_path()) {
+        if (component.native().find(L':') != std::wstring::npos)
+            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    }
+    std::filesystem::path resolved;
+    if (!resolve_bounded_path(root, raw, for_write, resolved)) {
+        result = Json{{"message", "workspace path rejected"}};
+        return SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION;
+    }
+    // Preserve the requested chain so canonicalization cannot hide reparse components.
+    const int32_t status = for_write
+        ? write_file_atomic_impl(&root, requested, bytes, false, nullptr, FileContentMode::Binary)
+        : read_file_bounded_impl(root, requested, kMaximumBinaryFileBytes, bytes,
+                                 FileContentMode::Binary);
+    if (status != SAO_AI_EDITOR_OK) {
+        result = Json{{"message", for_write ? "workspace file write failed" : "workspace file read failed"},
+                      {"maximumBytes", kMaximumBinaryFileBytes}};
+        return status;
+    }
+    if (for_write) {
+        result = true;
+    } else {
+        Json output = Json::array();
+        output.get_ref<Json::array_t&>().reserve(bytes.size());
+        for (const unsigned char byte : bytes) output.push_back(byte);
+        result = std::move(output);
+    }
+    return SAO_AI_EDITOR_OK;
+}
+
 int32_t read_text_file(const std::filesystem::path& path, uint32_t maximum_bytes,
                        std::string& result) {
     result.clear();
@@ -1078,16 +1216,16 @@ int32_t read_text_file(const std::filesystem::path& path, uint32_t maximum_bytes
     if ((binding.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
         return SAO_AI_EDITOR_ERR_BOUNDARY_VIOLATION;
     }
-    return read_text_handle(handle.get(), maximum_bytes, result);
+    return read_file_handle(handle.get(), maximum_bytes, result);
 }
 
 int32_t read_text_file_bounded(const std::filesystem::path& root, const std::filesystem::path& path,
                                uint32_t maximum_bytes, std::string& result) {
-    return read_text_bounded_impl(root, path, maximum_bytes, result);
+    return read_file_bounded_impl(root, path, maximum_bytes, result);
 }
 
 int32_t write_text_atomic(const std::filesystem::path& path, std::string_view content) {
-    return write_text_atomic_impl(nullptr, path, content, false);
+    return write_file_atomic_impl(nullptr, path, content, false);
 }
 
 const char* atomic_write_last_stage() noexcept {
@@ -1100,19 +1238,19 @@ uint32_t atomic_write_last_error() noexcept {
 
 int32_t write_text_atomic_bounded(const std::filesystem::path& root,
                                   const std::filesystem::path& path, std::string_view content) {
-    return write_text_atomic_impl(&root, path, content, false);
+    return write_file_atomic_impl(&root, path, content, false);
 }
 
 int32_t write_text_atomic_bounded_if_unchanged(const std::filesystem::path& root,
                                                const std::filesystem::path& path,
                                                std::string_view expected_content,
                                                std::string_view content) {
-    return write_text_atomic_impl(&root, path, content, false, &expected_content);
+    return write_file_atomic_impl(&root, path, content, false, &expected_content);
 }
 
 int32_t create_text_atomic_bounded(const std::filesystem::path& root,
                                    const std::filesystem::path& path, std::string_view content) {
-    return write_text_atomic_impl(&root, path, content, true);
+    return write_file_atomic_impl(&root, path, content, true);
 }
 
 int32_t copy_text_to_caller(std::string_view value, char* output, uint32_t capacity,

@@ -29,10 +29,14 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "sao_plugins/abi.h"
 #include "sao_plugins/sao_status.h"
@@ -132,6 +136,18 @@ struct plugin_manifest {
     bool user_installed = false; // scanner 标记来源属于配置的 user_roots
     uint32_t abi_version = 0;  // manifest 声明的 ABI 版本; 0 = 未声明 (兼容 v1)
     std::string parse_error;   // 非空表示解析失败，并保留具体错误文本
+};
+
+class manifest_locale_resolver {
+    public:
+        manifest_locale_resolver(std::string_view locales_json, std::string_view locale) noexcept;
+
+        std::string text(std::initializer_list<std::string_view> path, std::string_view fallback,
+                                         size_t maximum_bytes = (std::numeric_limits<size_t>::max)()) const;
+
+    private:
+        nlohmann::ordered_json exact_;
+        nlohmann::ordered_json language_;
 };
 
 // 从 utf-8 json 文本解析。

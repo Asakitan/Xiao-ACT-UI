@@ -41,6 +41,30 @@ UI panel / hotkey / data source 全部通过 SDK ABI 反向注册 (见
 ``sao_plugins_lifecycle_register_host_adapter(language, vtable)`` 注册自己
 的适配器。loader 里没有任何 ``if (language == python) …`` 分支。
 
+## 内部 helper 退休与排空
+
+`plugin_context_lifetime_internal.h` 提供树内 `context_runtime_lease` 与
+`context_runtime_resource`；loader 按 ctx 世代拥有 attachment，不依赖 script_ctx
+或具体语言实现，不修改公开 C ABI 布局。资源释放关闭新调用和注册准入，在途 lease
+或注册未排空时返回 `BUSY` 并保留资源供重试；卸载入口在 helper 调用或清理重入时
+提前返回 `BUSY`，不等待当前回调。同步 data-source stop 可在当前清理作用域调用
+既有 helper，但不接受新的 callback 注册。
+
+事件/平台 quiesce → data-source stop → Entity destroy → platform release →
+清除注册之后，才在 loader/ctx mutex 之外调用 attachment 的 `retire()`。
+mini helper 随后排空 builder 的 SDK 回调、释放 callback boxes 和 interpreter；
+外部保留的 proxy/callable 失效，同 ID 重载获得独立世代。
+mini entry/helper 的 SDK 回调使用创建 ctx 桥时保存的弱世代身份取得 lease，
+不持有 runtime owner 强引用；入口解释器的 SDK 回调重入卸载也返回 `BUSY`。
+本修改经静态调用链、磁盘读回、聚焦独立审阅和全量 Debug / RelWithDebInfo 编译链接检查；
+session-79 未运行并发卸载/真实扩展/provider callback/面板验收。
+legacy facade OBJECT target 私有链接 loader，继承 manifest 公开头使用的
+`PUBLIC nlohmann_json::nlohmann_json` 依赖；loader 在 facade-only 分支之外创建，
+不反向依赖 facade 或具体宿主，最终 facade 仍显式链接 loader。
+新增边的无环性和 facade-only 条件仅经静态复核，未重新配置该变体。
+launcher 私有 locale helper 已使用 C++ linkage，补修后两配置编译确认 C4190 消失；
+build-tree bundle 均更新，本轮未运行 Hardened、发布验收或刷新 ship。
+
 ## Entity provider/root ABI
 
 ``entity_provider.h`` 提供 adapter-neutral ``context_entity_provider_descriptor``，可携带
@@ -56,10 +80,17 @@ UI panel / hotkey / data source 全部通过 SDK ABI 反向注册 (见
 5. stale/disabled invocation 分别返回 invalid-handle/busy，不把 host callback 生命周期泄漏给
   launcher。
 
-launcher token、D1 root registry 与 Entity complete-tree publication 不属于该 C ABI。Python
-adapter 已接入；Lua/AngelScript/Emma/C# 后续复用同一 contract。
+launcher token、D1 root registry 与 Entity complete-tree publication 不属于该 C ABI。
+CPython/pymini、Lua、Emma、AngelScript、managed C#/csmini 的宿主桥均复用该 contract；
+通用 JSON SDK request 没有菜单 callback 字段，不是这些宿主的菜单入口。
 
 ## plugin.json Schema (1:1 对齐 Python 平台)
+
+`manifest_locale_resolver` 对 `locales_json` 有界解析，区域键忽略大小写并将 `_`
+归一为 `-`，按完整区域→语言部分→manifest 原文逐项回退。空、非字符串、含 NUL
+及超预算翻译不进入展示；launcher 将 Windows 用户区域语言接到管理器名称/描述、
+tab 名称与 `sao_menu.actions.<id>.label`，Entity 刷新时重新同步。此机制不修改 ID、
+动作 token、运行时或权限，也不自动翻译脚本硬编码文字。
 
 | 字段 | 类型 | 必填 | 老别名 | 说明 |
 |------|------|------|--------|------|
@@ -98,7 +129,7 @@ adapter 已接入；Lua/AngelScript/Emma/C# 后续复用同一 contract。
 - 老 ``engine`` / ``runtime`` 字段作为 ``language`` 别名保留
 - 老 ``i18n`` / ``translations`` 作为 ``locales`` 别名保留
 
-**已验证的老插件** (纯 Python, Python 平台里跑得好好的, 目标 100% 无改动加载):
+**历史兼容目标**（旧 Python 平台来源清单，不代表本轮 native 运行验收）:
 
 - ``hide_seek_plugin`` (纯 Python + cv2)
 - ``midi_piano_plugin`` (Python + vendor 依赖 bootstrap)
@@ -106,7 +137,8 @@ adapter 已接入；Lua/AngelScript/Emma/C# 后续复用同一 contract。
 - ``example_emma_plugin`` (Emma DSL)
 - ``example_angelscript_plugin`` (AngelScript 子集)
 - ``example_lua_plugin`` (Lua via lupa → C++ 侧真 Lua 5.4)
-- ``example_csharp_plugin`` (C# via pythonnet → C++ 侧 hostfxr + Roslyn)
+- ``example_csharp_plugin``（当前示例为显式 csmini 子集；预编译 hostfxr 示例为
+  ``hello_csharp``，宿主不自动执行 Roslyn 源码编译）
 
 ## 目录扫描规则
 
@@ -123,7 +155,7 @@ adapter 已接入；Lua/AngelScript/Emma/C# 后续复用同一 contract。
 ## vcpkg 依赖
 
 - ``fmt`` (日志格式化, 可选)
-- 无 3rdparty JSON 依赖 (compat/py_v1_manifest 内置手写 JSON 解析器)
+- `nlohmann_json` 3（必需；loader 公开 manifest 头使用，由 target 的 PUBLIC 依赖传递）
 - 无 3rdparty 引擎依赖 (那些落在 ``*_host/`` 各自)
 
 ## 历史测试（2026-08-23 已删除）

@@ -15,6 +15,7 @@ using Json = nlohmann::json;
 
 constexpr uint32_t kDefaultMaximumFileBytes = 4U * 1024U * 1024U;
 constexpr uint32_t kMaximumJsonBytes = 16U * 1024U * 1024U;
+constexpr uint32_t kMaximumBinaryFileBytes = 1U * 1024U * 1024U;
 constexpr uint32_t kDefaultSearchResults = 100U;
 
 bool valid_utf8(std::string_view value) noexcept;
@@ -25,6 +26,9 @@ std::string wide_to_utf8(std::wstring_view value);
 bool normalize_root(std::string_view value, std::filesystem::path& result, bool create);
 bool resolve_bounded_path(const std::filesystem::path& root, std::string_view value, bool for_write,
                           std::filesystem::path& result);
+
+int32_t workspace_binary_file_io(const std::filesystem::path& root, const Json& params,
+                                 bool for_write, Json& result);
 
 int32_t read_text_file(const std::filesystem::path& path, uint32_t maximum_bytes,
                        std::string& result);

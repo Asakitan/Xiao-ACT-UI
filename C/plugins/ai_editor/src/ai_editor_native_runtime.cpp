@@ -2,6 +2,7 @@
 
 #include "ai_editor_settings.h"
 #include "chat_provider_router.h"
+#include "extension_process_runtime.h"
 #include "kernel_map_commands.h"
 #include "kernel_map_panel_provider.h"
 #include "kernel_map_tools.h"
@@ -22,6 +23,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +35,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -43,12 +46,18 @@
 #include <vector>
 
 namespace sao::ai_editor::native {
+namespace extapi {
+void retire_language_owner(std::string_view extension_id, uint64_t generation);
+void retire_extension_owner(std::string_view extension_id, uint64_t generation);
+}
 namespace {
 
 constexpr uint32_t kDefaultEventDrainLimit = 32U;
 constexpr uint32_t kMaximumEventDrainLimit = 64U;
 constexpr size_t kMaximumEventDrainBytes = 768U * 1024U;
 constexpr size_t kMaximumWebviewHtmlBytes = 1024U * 1024U;
+constexpr size_t kMaximumRuntimeEventBytes = 8U * 1024U * 1024U;
+constexpr size_t kMaximumRuntimeEventQueueBytes = 32U * 1024U * 1024U;
 
 struct McpNotificationGate final {
     std::mutex mutex;
@@ -1539,10 +1548,24 @@ void NativeRuntime::emit(std::string_view event_name, const Json& payload,
         if (stopping_) {
             return;
         }
-        if (events_.size() >= maximum_event_queue_) {
+        if (text.size() > kMaximumRuntimeEventBytes) {
+            ++dropped_events_;
+            return;
+        }
+        while (!events_.empty() &&
+               (events_.size() >= maximum_event_queue_ ||
+                text.size() > kMaximumRuntimeEventQueueBytes -
+                                  queued_event_bytes_)) {
+            queued_event_bytes_ -= events_.front().size();
             events_.pop_front();
             ++dropped_events_;
         }
+        if (text.size() > kMaximumRuntimeEventQueueBytes -
+                              queued_event_bytes_) {
+            ++dropped_events_;
+            return;
+        }
+        queued_event_bytes_ += text.size();
         events_.push_back(std::move(text));
     }
     event_ready_.notify_one();
@@ -1563,6 +1586,7 @@ int32_t NativeRuntime::next_event(uint32_t timeout_ms, std::string& event_json) 
     }
     event_json = std::move(events_.front());
     events_.pop_front();
+    queued_event_bytes_ -= event_json.size();
     return SAO_AI_EDITOR_OK;
 }
 
@@ -1649,6 +1673,9 @@ int32_t NativeRuntime::invoke(std::string_view method, const Json& params, Json&
         for (size_t index = 0; index < selected; ++index) {
             events_.pop_front();
         }
+        queued_event_bytes_ = selected_bytes <= queued_event_bytes_
+                                  ? queued_event_bytes_ - selected_bytes
+                                  : 0;
         dropped_events_ = 0;
         return SAO_AI_EDITOR_OK;
     }
@@ -4557,6 +4584,8 @@ int32_t NativeRuntime::dispatch_extension(std::string_view method, const Json& p
         const std::string extension_id = params["extensionId"].get<std::string>();
         const int32_t status = extension_host_->deactivate(extension_id, result);
         if (status == SAO_AI_EDITOR_OK) {
+            extapi::retire_extension_owner(
+                extension_id, result.value("generation", uint64_t{}));
             extapi::publish("extensionHost",
                             Json{{"op", "deactivated"}, {"extensionId", extension_id}});
         }
@@ -4579,6 +4608,65 @@ int32_t NativeRuntime::dispatch_extension(std::string_view method, const Json& p
 
 int32_t NativeRuntime::dispatch_extension_call(std::string_view method, const Json& params,
                                                Json& result) {
+    if (method == "vscode.languages.registerProvider" ||
+        method == "vscode.languages.setLanguageConfiguration" ||
+        method == "vscode.languages.setDiagnostics" || method == "vscode.languages.providerChanged") {
+        const auto generation = params.find("generation");
+        if (extension_host_ == nullptr || generation == params.end() ||
+            !generation->is_number_unsigned() || generation->get<uint64_t>() == 0 ||
+            generation->get<uint64_t>() > UINT64_C(9007199254740991) ||
+            !extension_host_->generation_current(params.value("extensionId", std::string{}),
+                                                  generation->get<uint64_t>()))
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        const int32_t status = extapi::dispatch(this, method, params, result);
+        if (!extension_host_->generation_current(params.value("extensionId", std::string{}), generation->get<uint64_t>())) {
+            extapi::retire_language_owner(params.value("extensionId", std::string{}), generation->get<uint64_t>());
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        return status;
+    }
+    const bool execution_surface =
+        method == "vscode.window.createTerminal" ||
+        method == "vscode.window.sendTerminalText" ||
+        method == "vscode.window.showTerminal" ||
+        method == "vscode.window.hideTerminal" ||
+        method == "vscode.window.resizeTerminal" ||
+        method == "vscode.window.disposeTerminal" ||
+        method.rfind("vscode.tasks.", 0) == 0 ||
+        method.rfind("vscode.debug.", 0) == 0;
+    const std::string execution_owner = params.value("extensionId", std::string{});
+    const uint64_t execution_generation = params.value("generation", uint64_t{});
+    if (execution_surface && !execution_owner.empty()) {
+        if (extension_host_ == nullptr || execution_generation == 0 ||
+            execution_generation > UINT64_C(9007199254740991) ||
+            !extension_host_->generation_current(execution_owner,
+                                                  execution_generation))
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        const int32_t status = extapi::dispatch(this, method, params, result);
+        if (!extension_host_->generation_current(execution_owner,
+                                                 execution_generation)) {
+            extapi::retire_extension_owner(execution_owner,
+                                           execution_generation);
+            return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        return status;
+    }
+    if (method == "vscode.workspace.saveTextDocument" || method == "vscode.workspace.applyEdit" ||
+        method == "vscode.workspace.applyTextEdits" || method == "vscode.workspace.fs.writeFile") {
+        RuntimePolicySnapshot policy;
+        {
+            std::lock_guard<std::mutex> lock(store_mutex_);
+            const int32_t status = prepare_runtime_policy(scopes_, Json::object(), policy);
+            if (status != SAO_AI_EDITOR_OK) return status;
+        }
+        Json arguments = params;
+        arguments.erase("confirmed");
+        ToolExecutionPlan plan;
+        const Json descriptor{{"name", "editFile"}, {"readOnly", false}};
+        const int32_t status = prepare_tool_execution(policy, "editFile", "editFile", &descriptor, arguments, plan);
+        if (status != SAO_AI_EDITOR_OK) return status;
+        return extapi::dispatch(this, method, plan.arguments, result);
+    }
     // vscode.workspace.* — file surface goes through the built-in tools
     // registry so writes still respect the workspace boundary + permission
     // model.
@@ -6686,14 +6774,25 @@ namespace extapi {
 
 constexpr size_t kEventQueueCapacity = 1024;
 constexpr uint32_t kChannelBufferBytes = 256U * 1024U;
-constexpr uint32_t kDocumentBytes = 16U * 1024U * 1024U;
+constexpr uint32_t kDocumentBytes = 1024U * 1024U;
 constexpr size_t kMaximumProviders = 512;
 constexpr size_t kMaximumDocuments = 512;
 constexpr size_t kMaximumWatchers = 64;
 constexpr size_t kMaximumWatcherBatchEvents = 512;
 constexpr size_t kMaximumExtensionsInvoke = 32;
+constexpr size_t kMaximumProcessRecords = 512;
+constexpr size_t kMaximumBreakpoints = 4096;
+constexpr size_t kMaximumProcessJsonBytes = 4U * 1024U * 1024U;
+constexpr size_t kMaximumProcessQueueBytes = 32U * 1024U * 1024U;
+constexpr uint64_t kMaximumSafeJsonInteger = UINT64_C(9007199254740991);
+constexpr int64_t kPreparedDebugTtlMs = 5 * 60 * 1000;
 constexpr uint32_t kNodeInvokeTimeoutMs = 15000;
 constexpr uint32_t kNodeEventTimeoutMs = 250;
+
+struct OwnerIdentity final {
+    std::string extension_id;
+    uint64_t generation = 0;
+};
 
 struct OutputChannelRecord final {
     std::string id;
@@ -6712,6 +6811,7 @@ struct DocumentRecord final {
     bool dirty = false;
     bool untitled = false;
     std::string content;
+    std::string saved_content;
 };
 
 struct WatcherRecord final {
@@ -6724,18 +6824,30 @@ struct WatcherRecord final {
     bool ignore_delete = false;
 };
 
+struct QueuedExtapiEvent final {
+    Json value;
+    size_t encoded_bytes = 0;
+};
+
 struct ExtapiState final {
     std::mutex mutex;
+    std::condition_variable publishers_idle;
+    size_t active_publishers = 0;
     NativeRuntime* runtime = nullptr;
     std::filesystem::path workspace_root;
     std::filesystem::path system_root;
     std::string plugin_roots_json;
     bool configured = false;
 
+    std::shared_ptr<ExtensionProcessRuntime> process_runtime;
+    std::filesystem::path process_runtime_root;
+    uint64_t process_runtime_binding = 0;
+
     std::unique_ptr<ScopeStore> standalone_scopes;
     std::unique_ptr<SecretStore> standalone_secrets;
 
-    std::deque<Json> event_queue;
+    std::deque<QueuedExtapiEvent> event_queue;
+    size_t event_queue_bytes = 0;
     uint64_t event_dropped = 0;
     uint64_t sequence = 1;
 
@@ -6751,6 +6863,11 @@ struct ExtapiState final {
     std::map<std::string, Json, std::less<>> lm_providers;
     std::map<std::string, Json, std::less<>> task_providers;
     std::map<std::string, Json, std::less<>> debug_providers;
+    std::map<std::string, Json, std::less<>> terminals;
+    std::map<std::string, Json, std::less<>> task_executions;
+    std::map<std::string, Json, std::less<>> debug_sessions;
+    std::map<std::string, Json, std::less<>> prepared_debug_sessions;
+    std::map<std::string, Json, std::less<>> breakpoints;
     std::vector<WatcherRecord> watchers;
     std::string active_document_uri;
 
@@ -6837,7 +6954,8 @@ std::string file_uri_for(const std::filesystem::path& path) {
     encoded.reserve(utf8.size() + 8);
     for (const char character : utf8) {
         const unsigned char byte = static_cast<unsigned char>(character);
-        if (byte == '%' || byte == ' ' || byte == '#' || byte == '?') {
+        if (byte <= 32 || byte >= 127 || byte == '%' || byte == '#' || byte == '?' ||
+            byte == '"' || byte == '<' || byte == '>' || byte == '`' || byte == '{' || byte == '}') {
             char digits[4];
             std::snprintf(digits, sizeof(digits), "%%%02X", byte);
             encoded += digits;
@@ -6927,10 +7045,7 @@ int32_t resolve_workspace_uri(std::string_view uri_utf8, bool for_write,
     return resolve_workspace(params, for_write, out);
 }
 
-// Best-effort push of one extapi event into the live Node shim via the
-// commands.execute tunnel (internal command sao.internal.extapi.event).
-// Callback-guard contention degrades silently: the drain queue stays the
-// authoritative channel.
+// Notifications bypass callback admission without consuming the UI drain queue.
 void push_event_to_node(NativeRuntime* runtime, const Json& event) {
     if (runtime == nullptr) {
         return;
@@ -6957,11 +7072,17 @@ int32_t invoke_extension(NativeRuntime* runtime, std::string_view target,
 
 void publish(std::string_view kind, const Json& payload) {
     Json event;
+    Json queued_event;
+    size_t queued_bytes = 0;
     try {
         event = Json{{"type", "extapi.event"},
                      {"kind", std::string(kind)},
                      {"ts", extapi_now_ms()},
                      {"payload", payload}};
+        queued_event = event;
+        if (kind == "document" && queued_event["payload"].contains("document"))
+            queued_event["payload"]["document"].erase("content");
+        queued_bytes = queued_event.dump().size();
     } catch (...) {
         return;
     }
@@ -6969,19 +7090,65 @@ void publish(std::string_view kind, const Json& payload) {
     {
         auto& s = state();
         std::lock_guard<std::mutex> lock(s.mutex);
-        if (s.event_queue.size() >= kEventQueueCapacity) {
+        while (!s.event_queue.empty() &&
+               (s.event_queue.size() >= kEventQueueCapacity ||
+                queued_bytes > kMaximumProcessQueueBytes -
+                                   s.event_queue_bytes)) {
+            s.event_queue_bytes -= s.event_queue.front().encoded_bytes;
             s.event_queue.pop_front();
             ++s.event_dropped;
         }
-        s.event_queue.push_back(event);
+        if (queued_bytes <= kMaximumProcessJsonBytes &&
+            queued_bytes <= kMaximumProcessQueueBytes - s.event_queue_bytes) {
+            s.event_queue_bytes += queued_bytes;
+            s.event_queue.push_back({queued_event, queued_bytes});
+        } else {
+            ++s.event_dropped;
+        }
         runtime = s.runtime;
+        if (runtime != nullptr) ++s.active_publishers;
     }
     if (runtime != nullptr) {
+        struct PublishLease final {
+            ~PublishLease() {
+                auto& s = state();
+                std::lock_guard<std::mutex> lock(s.mutex);
+                if (--s.active_publishers == 0) s.publishers_idle.notify_all();
+            }
+        } lease;
         runtime->emit_extapi_event(std::string("vscode.extapi.") +
                                        std::string(kind),
-                                   payload);
+                                   queued_event["payload"]);
         push_event_to_node(runtime, event);
     }
+}
+
+std::shared_ptr<ExtensionProcessRuntime> process_runtime() {
+    auto& s = state();
+    std::shared_ptr<ExtensionProcessRuntime> retired;
+    std::shared_ptr<ExtensionProcessRuntime> current;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.configured || s.workspace_root.empty()) {
+            return {};
+        }
+        if (s.process_runtime != nullptr &&
+            s.process_runtime_root != s.workspace_root) {
+            retired = std::move(s.process_runtime);
+            s.process_runtime_root.clear();
+        }
+        if (s.process_runtime == nullptr) {
+            s.process_runtime = std::make_shared<ExtensionProcessRuntime>(
+                s.workspace_root, [](std::string_view kind, const Json& payload) {
+                    publish(kind, payload);
+                });
+            ++s.process_runtime_binding;
+            s.process_runtime_root = s.workspace_root;
+        }
+        current = s.process_runtime;
+    }
+    if (retired) retired->shutdown();
+    return current;
 }
 
 // --- clipboard (real Win32) ----------------------------------------------
@@ -7889,6 +8056,7 @@ int32_t language_register_provider(NativeRuntime* runtime, const Json& params,
         s.language_providers[provider_id] = Json{
             {"providerId", provider_id},
             {"extensionId", extension_id},
+            {"generation", params.value("generation", uint64_t{})},
             {"kind", kind},
             {"invoke", methods.at(kind)},
             {"selector", params.value("selector", Json(nullptr))},
@@ -7905,9 +8073,16 @@ int32_t language_unregister_provider(const Json& params, Json& result) {
     const std::string provider_id = params.value("providerId", std::string{});
     {
         std::lock_guard<std::mutex> lock(state().mutex);
-        if (state().language_providers.erase(provider_id) == 0) {
+        const auto found = state().language_providers.find(provider_id);
+        if (found == state().language_providers.end()) {
+            result = Json{{"ok", true}};
+            return SAO_AI_EDITOR_OK;
+        }
+        if (found->second.value("extensionId", std::string{}) != params.value("extensionId", std::string{}) ||
+            found->second.value("generation", uint64_t{}) != params.value("generation", uint64_t{})) {
             return SAO_AI_EDITOR_ERR_NOT_FOUND;
         }
+        state().language_providers.erase(found);
     }
     publish("providers",
             Json{{"op", "unregister"}, {"providerId", provider_id}});
@@ -7934,16 +8109,22 @@ int32_t language_list_providers(const Json& params, Json& result) {
 // language field equals the document's languageId (or is absent).
 bool provider_selector_matches(const Json& selector, const std::string& language_id,
                                const std::string& scheme) {
+    if (selector.is_array()) {
+        return std::any_of(selector.begin(), selector.end(), [&](const Json& item) {
+            return provider_selector_matches(item, language_id, scheme);
+        });
+    }
+    if (selector.is_string()) return selector == "*" || language_id.empty() || selector == language_id;
     if (!selector.is_object()) {
-        return !selector.is_null();  // absent selector → match anything
+        return false;
     }
     if (selector.contains("language") && selector["language"].is_string()) {
-        if (selector["language"].get<std::string>() != language_id) {
+        if (!language_id.empty() && selector["language"] != "*" && selector["language"].get<std::string>() != language_id) {
             return false;
         }
     }
     if (selector.contains("scheme") && selector["scheme"].is_string()) {
-        if (selector["scheme"].get<std::string>() != scheme) {
+        if (selector["scheme"] != "*" && selector["scheme"].get<std::string>() != scheme) {
             return false;
         }
     }
@@ -7964,7 +8145,9 @@ int32_t language_invoke(NativeRuntime* runtime, const Json& params, Json& result
             }
             if (params.contains("providerId") && params["providerId"].is_string() &&
                 provider.value("providerId", std::string{}) !=
-                    params["providerId"].get<std::string>()) {
+                    params["providerId"].get<std::string>() &&
+                (kind != "documentFormatting" || provider.value("extensionId", std::string{}) !=
+                    params["providerId"].get<std::string>())) {
                 continue;
             }
             providers.push_back(provider);
@@ -7987,6 +8170,7 @@ int32_t language_invoke(NativeRuntime* runtime, const Json& params, Json& result
     if (params.contains("document") && params["document"].is_object()) {
         request["document"] = params["document"];
     }
+    if (params.contains("options")) request["options"] = params["options"];
     Json results = Json::array();
     for (const auto& provider : providers) {
         if (!provider_selector_matches(provider.value("selector", Json(nullptr)),
@@ -7994,10 +8178,18 @@ int32_t language_invoke(NativeRuntime* runtime, const Json& params, Json& result
             continue;
         }
         request["providerId"] = provider.value("providerId", std::string{});
+        request["extensionId"] = provider.value("extensionId", std::string{});
+        request["generation"] = provider.value("generation", uint64_t{});
         Json out;
         const int32_t status =
             invoke_extension(runtime, "languages", request, out);
-        if (status == SAO_AI_EDITOR_OK) {
+        bool current = false;
+        {
+            std::lock_guard<std::mutex> lock(state().mutex);
+            const auto found = state().language_providers.find(request["providerId"].get<std::string>());
+            current = found != state().language_providers.end() && found->second == provider;
+        }
+        if (status == SAO_AI_EDITOR_OK && current) {
             Json entry{{"providerId", provider.value("providerId", std::string{})},
                        {"status", "ok"},
                        {"result", out.value("result", out)}};
@@ -8006,7 +8198,7 @@ int32_t language_invoke(NativeRuntime* runtime, const Json& params, Json& result
             results.push_back(Json{{"providerId",
                                     provider.value("providerId", std::string{})},
                                    {"status", "error"},
-                                   {"code", status},
+                                   {"code", status == SAO_AI_EDITOR_OK ? SAO_AI_EDITOR_ERR_NOT_FOUND : status},
                                    {"message", "provider invocation failed"}});
         }
     }
@@ -8022,7 +8214,14 @@ int32_t language_set_configuration(const Json& params, Json& result) {
     }
     {
         std::lock_guard<std::mutex> lock(state().mutex);
-        state().language_configs[language] = params["configuration"];
+        auto& configs = state().language_configs[language];
+        if (!configs.is_array()) configs = Json::array();
+        if (configs.size() >= kMaximumProviders || params["configuration"].dump().size() > 1024 * 1024)
+            return SAO_AI_EDITOR_ERR_BUSY;
+        configs.push_back(Json{{"extensionId", params.value("extensionId", std::string{})},
+                               {"generation", params.value("generation", uint64_t{})},
+                               {"registrationId", params.value("registrationId", std::string{})},
+                               {"configuration", params["configuration"]}});
     }
     publish("languageConfig",
             Json{{"op", "set"}, {"language", language}});
@@ -8030,11 +8229,77 @@ int32_t language_set_configuration(const Json& params, Json& result) {
     return SAO_AI_EDITOR_OK;
 }
 
+bool same_language_owner(const Json& record, const Json& params) {
+    return record.value("extensionId", std::string{}) == params.value("extensionId", std::string{}) &&
+           record.value("generation", uint64_t{}) == params.value("generation", uint64_t{}) &&
+           record.value("registrationId", std::string{}) == params.value("registrationId", std::string{});
+}
+
+void retire_language_owner(std::string_view extension_id, uint64_t generation) {
+    auto& s = state();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    const auto owned = [&](const Json& record) {
+        return record.value("extensionId", std::string{}) == extension_id &&
+               (generation == 0 || record.value("generation", uint64_t{}) == generation);
+    };
+    for (auto* registry : {&s.language_providers, &s.diagnostic_collections}) {
+        for (auto it = registry->begin(); it != registry->end();) {
+            if (owned(it->second)) it = registry->erase(it); else ++it;
+        }
+    }
+    for (auto it = s.language_configs.begin(); it != s.language_configs.end();) {
+        auto& configs = it->second;
+        configs.erase(std::remove_if(configs.begin(), configs.end(), owned), configs.end());
+        if (configs.empty()) it = s.language_configs.erase(it); else ++it;
+    }
+}
+
+void retire_extension_owner(std::string_view extension_id, uint64_t generation) {
+    std::shared_ptr<ExtensionProcessRuntime> runtime;
+    {
+        auto& s = state();
+        std::lock_guard<std::mutex> lock(s.mutex);
+        const auto owned = [&](const Json& record) {
+            return record.value("extensionId", std::string{}) == extension_id &&
+                   (generation == 0 ||
+                    record.value("generation", uint64_t{}) == generation);
+        };
+        for (auto* registry : {&s.task_providers, &s.debug_providers}) {
+            for (auto it = registry->begin(); it != registry->end();) {
+                if (owned(it->second)) it = registry->erase(it);
+                else ++it;
+            }
+        }
+        runtime = s.process_runtime;
+    }
+    retire_language_owner(extension_id, generation);
+    if (runtime) runtime->retire_owner(extension_id, generation);
+}
+
+int32_t language_dispose_configuration(const Json& params, Json& result) {
+    const std::string language = params.value("language", std::string{});
+    {
+        std::lock_guard<std::mutex> lock(state().mutex);
+        auto found = state().language_configs.find(language);
+        if (found != state().language_configs.end()) {
+            auto& configs = found->second;
+            configs.erase(std::remove_if(configs.begin(), configs.end(), [&](const Json& item) {
+                return same_language_owner(item, params);
+            }), configs.end());
+            if (configs.empty()) state().language_configs.erase(found);
+        }
+    }
+    publish("languageConfig", Json{{"op", "dispose"}, {"language", language}});
+    result = Json{{"ok", true}};
+    return SAO_AI_EDITOR_OK;
+}
+
 // --- diagnostics --------------------------------------------------------------
 
-std::string diagnostics_key(const std::string& extension_id,
-                            const std::string& name) {
-    return extension_id + "::" + name;
+std::string diagnostics_key(const Json& params) {
+    return params.value("extensionId", std::string{}) + "::" +
+        std::to_string(params.value("generation", uint64_t{})) + "::" +
+        params.value("registrationId", params.value("collection", params.value("name", std::string{})));
 }
 
 int32_t diagnostics_set(NativeRuntime* runtime, const Json& params, Json& result) {
@@ -8044,35 +8309,48 @@ int32_t diagnostics_set(NativeRuntime* runtime, const Json& params, Json& result
     if (!valid_simple_id(extension_id) || name.empty() || name.size() > 256) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    const std::string key = diagnostics_key(extension_id, name);
+    const std::string key = diagnostics_key(params);
     const std::string uri = params.value("uri", std::string{});
+    Json changed = Json::array();
     auto& s = state();
     {
         std::lock_guard<std::mutex> lock(s.mutex);
-        Json& collection = s.diagnostic_collections[key];
-        if (!collection.is_object()) {
-            collection = Json{{"name", name},
-                              {"extensionId", extension_id},
-                              {"entries", Json::object()}};
-        }
-        if (uri.empty()) {
-            // uri omitted + diagnostics array → replace whole collection;
-            // uri omitted + no diagnostics → clear.
+        const auto found = s.diagnostic_collections.find(key);
+        if (found == s.diagnostic_collections.end() && s.diagnostic_collections.size() >= kMaximumProviders)
+            return SAO_AI_EDITOR_ERR_BUSY;
+        Json collection = found == s.diagnostic_collections.end()
+            ? Json{{"name", name}, {"extensionId", extension_id},
+                   {"generation", params.value("generation", uint64_t{})},
+                   {"registrationId", params.value("registrationId", std::string{})},
+                   {"entries", Json::object()}} : found->second;
+        if (!same_language_owner(collection, params)) return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        Json updates = params.value("updates", Json::array());
+        if (!updates.is_array() || updates.size() > 4096) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        if (!uri.empty()) updates.push_back(Json{{"uri", uri}, {"diagnostics", params.value("diagnostics", Json::array())}});
+        if (uri.empty() && !params.contains("updates")) {
+            for (const auto& [item_uri, values] : collection["entries"].items()) {
+                (void)values;
+                changed.push_back(item_uri);
+            }
             collection["entries"] = Json::object();
-        } else if (params.contains("diagnostics") &&
-                   params["diagnostics"].is_array() &&
-                   !params["diagnostics"].empty()) {
-            collection["entries"][uri] = params["diagnostics"];
-        } else {
-            collection["entries"].erase(uri);
         }
+        for (const auto& update : updates) {
+            const std::string item_uri = update.value("uri", std::string{});
+            const Json values = update.value("diagnostics", Json::array());
+            if (item_uri.empty() || item_uri.size() > 32768 || !valid_utf8(item_uri) ||
+                !values.is_array() || values.size() > 4096) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+            if (values.empty()) collection["entries"].erase(item_uri);
+            else collection["entries"][item_uri] = values;
+            changed.push_back(item_uri);
+        }
+        if (collection.dump().size() > 1024 * 1024) return SAO_AI_EDITOR_ERR_BUSY;
+        s.diagnostic_collections[key] = std::move(collection);
     }
     publish("diagnostics", Json{{"collection", name},
                                 {"extensionId", extension_id},
                                 {"uri", uri},
                                 {"op", uri.empty() ? "clear" : "set"},
-                                {"uris",
-                                 uri.empty() ? Json::array() : Json::array({uri})}});
+                                {"uris", changed}});
     result = Json{{"ok", true}};
     return SAO_AI_EDITOR_OK;
 }
@@ -8115,14 +8393,23 @@ int32_t diagnostics_get(const Json& params, Json& result) {
 int32_t diagnostics_dispose(const Json& params, Json& result) {
     const std::string extension_id = params.value("extensionId", std::string{});
     const std::string name = params.value("collection", params.value("name", std::string{}));
-    const std::string key = diagnostics_key(extension_id, name);
+    const std::string key = diagnostics_key(params);
+    Json uris = Json::array();
     {
         std::lock_guard<std::mutex> lock(state().mutex);
-        state().diagnostic_collections.erase(key);
+        const auto found = state().diagnostic_collections.find(key);
+        if (found != state().diagnostic_collections.end()) {
+            if (!same_language_owner(found->second, params)) return SAO_AI_EDITOR_ERR_NOT_FOUND;
+            for (const auto& [uri, values] : found->second["entries"].items()) {
+                (void)values;
+                uris.push_back(uri);
+            }
+            state().diagnostic_collections.erase(found);
+        }
     }
     publish("diagnostics", Json{{"collection", name},
                                 {"extensionId", extension_id},
-                                {"op", "dispose"}});
+                                {"op", "dispose"}, {"uris", uris}});
     result = Json{{"ok", true}};
     return SAO_AI_EDITOR_OK;
 }
@@ -8130,14 +8417,15 @@ int32_t diagnostics_dispose(const Json& params, Json& result) {
 // --- text documents ----------------------------------------------------------
 //
 // Real document store: openTextDocument materialises a tracked copy (UTF-8,
-// 16 MiB cap, workspace containment), edits apply in UTF-16 code-unit
+// 1 MiB cap, workspace containment), edits apply in UTF-16 code-unit
 // semantics (matching VS Code position encoding), dirty buffers persist
 // only through saveTextDocument.  Untracked applyEdit edits write straight
 // to disk through the same bounded writers used by tools.
 
 std::string guess_language_id(const std::string& file_path) {
     const std::filesystem::path path(utf8_to_wide(file_path));
-    const std::string ext = wide_to_utf8(path.extension().native());
+    std::string ext = wide_to_utf8(path.extension().native());
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     static const std::map<std::string, std::string, std::less<>> table = {
         {".js", "javascript"},  {".mjs", "javascript"}, {".cjs", "javascript"},
         {".ts", "typescript"},  {".jsx", "javascriptreact"},
@@ -8148,6 +8436,7 @@ std::string guess_language_id(const std::string& file_path) {
         {".hpp", "cpp"},        {".cs", "csharp"},
         {".json", "json"},      {".md", "markdown"},
         {".html", "html"},      {".css", "css"},
+        {".c", "c"}, {".lua", "lua"}, {".emma", "emma"}, {".as", "angelscript"},
     };
     const auto found = table.find(ext);
     return found == table.end() ? "plaintext" : found->second;
@@ -8176,6 +8465,11 @@ int32_t document_open(NativeRuntime* runtime, const Json& params, Json& result) 
         {
             auto& s = state();
             std::lock_guard<std::mutex> lock(s.mutex);
+            const auto existing = s.documents.find(explicit_uri);
+            if (existing != s.documents.end()) {
+                result = document_to_json(existing->second, true);
+                return SAO_AI_EDITOR_OK;
+            }
             if (s.documents.size() >= kMaximumDocuments) {
                 return SAO_AI_EDITOR_ERR_BUSY;
             }
@@ -8186,12 +8480,14 @@ int32_t document_open(NativeRuntime* runtime, const Json& params, Json& result) 
             record.language_id =
                 params.value("languageId", std::string{"plaintext"});
             record.content = params.value("content", std::string{});
+            record.dirty = !record.content.empty();
             if (record.content.size() > kDocumentBytes || !valid_utf8(record.content)) {
                 return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
             }
+            if (Json(record.content).dump().size() > kDocumentBytes) return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
             s.documents[record.uri] = record;
         }
-        publish("document", Json{{"op", "open"}, {"uri", record.uri}});
+        publish("document", Json{{"op", "open"}, {"uri", record.uri}, {"document", document_to_json(record, true)}});
         result = document_to_json(record, true);
         return SAO_AI_EDITOR_OK;
     }
@@ -8226,13 +8522,21 @@ int32_t document_open(NativeRuntime* runtime, const Json& params, Json& result) 
     record.fs_path = wide_to_utf8(resolved.native());
     record.language_id = guess_language_id(record.fs_path);
     record.content = std::move(content);
+    record.saved_content = record.content;
+    if (Json(record.content).dump().size() > kDocumentBytes) return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
-        s.documents[record.uri] = record;
+        const auto found = s.documents.find(record.uri);
+        if (found != s.documents.end()) {
+            result = document_to_json(found->second, true);
+            return SAO_AI_EDITOR_OK;
+        }
+        if (s.documents.size() >= kMaximumDocuments) return SAO_AI_EDITOR_ERR_BUSY;
+        s.documents.emplace(record.uri, record);
     }
     publish("document", Json{{"op", "open"},
                              {"uri", record.uri},
-                             {"languageId", record.language_id}});
+                             {"languageId", record.language_id}, {"document", document_to_json(record, true)}});
     result = document_to_json(record, true);
     return SAO_AI_EDITOR_OK;
 }
@@ -8265,53 +8569,57 @@ int32_t document_save(const Json& params, Json& result) {
     if (params.contains("content") && !params["content"].is_string()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    DocumentRecord snapshot;
-    {
-        auto& s = state();
-        std::lock_guard<std::mutex> lock(s.mutex);
-        const auto found = s.documents.find(uri);
-        if (found == s.documents.end() || found->second.untitled) {
-            return SAO_AI_EDITOR_ERR_NOT_FOUND;
-        }
-        found->second.content = params.value("content", found->second.content);
-        if (found->second.content.size() > kDocumentBytes ||
-            !valid_utf8(found->second.content)) {
-            return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
-        }
-        snapshot = found->second;
-    }
     std::filesystem::path resolved;
     const int32_t path_status = resolve_workspace_uri(uri, true, resolved);
     if (path_status != SAO_AI_EDITOR_OK) {
         return path_status;
     }
     const std::filesystem::path root = workspace_root();
-    const int32_t write_status =
-        write_text_atomic_bounded(root, resolved, snapshot.content);
-    if (write_status != SAO_AI_EDITOR_OK) {
-        return write_status;
-    }
+    DocumentRecord snapshot;
+    bool changed_content = false;
+    bool changed_dirty = false;
     {
         auto& s = state();
         std::lock_guard<std::mutex> lock(s.mutex);
-        auto& doc = s.documents[uri];
+        const auto found = s.documents.find(uri);
+        if (found == s.documents.end() || found->second.untitled) return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        auto& doc = found->second;
+        if ((params.contains("version") && params["version"] != doc.version) ||
+            (params.contains("expectedContent") && params["expectedContent"] != doc.content))
+            return SAO_AI_EDITOR_ERR_BUSY;
+        const std::string content = params.value("content", doc.content);
+        if (content.size() > kDocumentBytes || !valid_utf8(content)) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        if (Json(content).dump().size() > kDocumentBytes) return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+        const int32_t write_status = write_text_atomic_bounded_if_unchanged(root, resolved, doc.saved_content, content);
+        if (write_status != SAO_AI_EDITOR_OK) return write_status;
+        changed_content = content != doc.content;
+        changed_dirty = doc.dirty;
+        if (changed_content) ++doc.version;
+        doc.content = content;
+        doc.saved_content = content;
         doc.dirty = false;
-        ++doc.version;
-        snapshot.version = doc.version;
+        snapshot = doc;
     }
-    publish("document", Json{{"op", "save"}, {"uri", uri}});
-    result = Json{{"ok", true}, {"uri", uri}, {"version", snapshot.version}};
+    if (changed_content || changed_dirty)
+        publish("document", Json{{"op", "change"}, {"uri", uri}, {"changes", Json::array()},
+                                  {"document", document_to_json(snapshot, true)}});
+    publish("document", Json{{"op", "save"}, {"uri", uri}, {"document", document_to_json(snapshot, true)}});
+    result = Json{{"ok", true}, {"uri", uri}, {"version", snapshot.version}, {"document", document_to_json(snapshot, true)}};
     return SAO_AI_EDITOR_OK;
 }
 
-int32_t document_list(Json& result) {
+int32_t document_list(Json& result, bool include_content = false) {
     std::lock_guard<std::mutex> lock(state().mutex);
     Json items = Json::array();
+    size_t bytes = 0;
     for (const auto& [uri, record] : state().documents) {
         (void)uri;
-        items.push_back(document_to_json(record, false));
+        Json item = document_to_json(record, include_content);
+        bytes += item.dump().size();
+        if (bytes > 4 * 1024 * 1024) return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+        items.push_back(std::move(item));
     }
-    result = Json{{"documents", items}, {"total", items.size()}};
+    result = Json{{"documents", items}, {"total", items.size()}, {"activeUri", state().active_document_uri}};
     return SAO_AI_EDITOR_OK;
 }
 
@@ -8325,19 +8633,21 @@ int32_t utf16_offset(const std::wstring& wide, int64_t line, int64_t character,
     size_t cursor = 0;
     int64_t current_line = 0;
     while (current_line < line) {
-        const size_t newline = wide.find(L'\n', cursor);
+        const size_t newline = wide.find_first_of(L"\r\n", cursor);
         if (newline == std::wstring::npos) {
             return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         }
         cursor = newline + 1;
+        if (wide[newline] == L'\r' && cursor < wide.size() && wide[cursor] == L'\n') ++cursor;
         ++current_line;
     }
-    size_t line_end = wide.find(L'\n', cursor);
+    size_t line_end = wide.find_first_of(L"\r\n", cursor);
     if (line_end == std::wstring::npos) {
         line_end = wide.size();
     }
     const size_t line_length = line_end - cursor;
-    offset = cursor + std::min<size_t>(static_cast<size_t>(character), line_length);
+    if (static_cast<uint64_t>(character) > line_length) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    offset = cursor + static_cast<size_t>(character);
     return SAO_AI_EDITOR_OK;
 }
 
@@ -8365,6 +8675,17 @@ int32_t apply_edits_to_text(const std::string& content, const Json& edits,
         const Json& range = edit["range"];
         const Json& start = range.value("start", Json::object());
         const Json& end = range.value("end", Json::object());
+        const auto valid_position = [](const Json& position) {
+            if (!position.is_object()) return false;
+            for (const char* key : {"line", "character"}) {
+                const auto value = position.find(key);
+                if (value == position.end() || !value->is_number_integer() ||
+                    (value->is_number_unsigned() ? value->get<uint64_t>() > UINT64_C(9007199254740991)
+                                                : value->get<int64_t>() < 0)) return false;
+            }
+            return true;
+        };
+        if (!valid_position(start) || !valid_position(end)) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
         const int64_t start_line = start.value("line", INT64_C(-1));
         const int64_t start_char = start.value("character", INT64_C(-1));
         const int64_t end_line = end.value("line", start_line);
@@ -8390,13 +8711,19 @@ int32_t apply_edits_to_text(const std::string& content, const Json& edits,
         }
         resolved.push_back(std::move(one));
     }
-    std::sort(resolved.begin(), resolved.end(),
+    std::reverse(resolved.begin(), resolved.end());
+    std::stable_sort(resolved.begin(), resolved.end(),
               [](const Edit& left, const Edit& right) {
                   return left.begin > right.begin;
               });
     changes = Json::array();
+    size_t previous_begin = wide.size();
     for (const auto& edit : resolved) {
+        if (edit.end > previous_begin) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        previous_begin = edit.begin;
         const std::wstring replacement = utf8_to_wide(edit.replacement);
+        if (working.size() - (edit.end - edit.begin) + replacement.size() > kDocumentBytes)
+            return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
         working.replace(edit.begin, edit.end - edit.begin, replacement);
         changes.push_back(Json{{"range", edit.range},
                                {"rangeOffset", edit.begin},
@@ -8404,7 +8731,9 @@ int32_t apply_edits_to_text(const std::string& content, const Json& edits,
                                {"text", edit.replacement}});
     }
     out_content = wide_to_utf8(working);
-    if (out_content.size() > kDocumentBytes) {
+    if (!working.empty() && out_content.empty()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    if (out_content.size() > kDocumentBytes || Json(out_content).dump().size() > kDocumentBytes ||
+        changes.dump().size() > 2 * kDocumentBytes) {
         return SAO_AI_EDITOR_ERR_BUSY;
     }
     std::reverse(changes.begin(), changes.end());  // restore document order
@@ -8427,6 +8756,8 @@ int32_t document_apply_edits(const Json& params, Json& result) {
         const auto found = s.documents.find(uri);
         tracked = found != s.documents.end();
         if (tracked) {
+            if (params.contains("version") && params["version"] != found->second.version)
+                return SAO_AI_EDITOR_ERR_BUSY;
             const int32_t status = apply_edits_to_text(found->second.content, edits,
                                                        out_content, changes);
             if (status != SAO_AI_EDITOR_OK) {
@@ -8457,19 +8788,22 @@ int32_t document_apply_edits(const Json& params, Json& result) {
             return status;
         }
         const int32_t write_status =
-            write_text_atomic_bounded(root, resolved, out_content);
+            write_text_atomic_bounded_if_unchanged(root, resolved, content, out_content);
         if (write_status != SAO_AI_EDITOR_OK) {
             return write_status;
         }
     }
-    publish("document", Json{{"op", "change"},
+    Json event{{"op", "change"},
                              {"uri", uri},
                              {"changes", changes},
-                             {"persisted", !tracked}});
+                             {"persisted", !tracked}};
+    if (tracked) event["document"] = document_to_json(updated, true);
+    publish("document", event);
     if (tracked) {
         result = Json{{"applied", true},
                       {"uri", uri},
                       {"version", updated.version},
+                      {"document", document_to_json(updated, true)},
                       {"contentChanges", changes}};
     } else {
         result = Json{{"applied", true}, {"uri", uri}, {"persisted", true},
@@ -8479,6 +8813,48 @@ int32_t document_apply_edits(const Json& params, Json& result) {
 }
 
 int32_t workspace_apply_edit(const Json& params, Json& result) {
+    if (params.value("fileOperations", Json::array()).empty()) {
+        const Json edits = params.value("documentEdits", Json::array());
+        if (!edits.is_array() || edits.size() > kMaximumDocuments) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+        std::vector<Json> events;
+        Json snapshots = Json::array();
+        {
+            auto& s = state();
+            std::lock_guard<std::mutex> lock(s.mutex);
+            std::map<std::string, DocumentRecord, std::less<>> candidates;
+            for (const auto& edit : edits) {
+                const std::string uri = edit.value("uri", std::string{});
+                const auto found = s.documents.find(uri);
+                if (found == s.documents.end() || candidates.count(uri) != 0 ||
+                    (edit.contains("version") && edit["version"] != found->second.version)) {
+                    result = Json{{"applied", false}, {"message", "document is missing, duplicated or stale"}};
+                    return SAO_AI_EDITOR_OK;
+                }
+                DocumentRecord candidate = found->second;
+                Json changes;
+                std::string content;
+                const int32_t status = apply_edits_to_text(candidate.content, edit.value("edits", Json::array()), content, changes);
+                if (status != SAO_AI_EDITOR_OK) {
+                    result = Json{{"applied", false}, {"status", status}};
+                    return SAO_AI_EDITOR_OK;
+                }
+                if (!changes.empty()) {
+                    candidate.content = std::move(content);
+                    candidate.dirty = true;
+                    ++candidate.version;
+                    events.push_back(Json{{"op", "change"}, {"uri", uri}, {"changes", changes},
+                                          {"document", document_to_json(candidate, true)}});
+                }
+                snapshots.push_back(document_to_json(candidate, true));
+                candidates.emplace(uri, std::move(candidate));
+            }
+            if (snapshots.dump().size() > 4 * 1024 * 1024) return SAO_AI_EDITOR_ERR_BUFFER_TOO_SMALL;
+            for (auto& [uri, candidate] : candidates) s.documents.at(uri) = std::move(candidate);
+        }
+        for (const auto& event : events) publish("document", event);
+        result = Json{{"applied", true}, {"documents", snapshots}, {"documentEdits", edits.size()}, {"fileOperations", 0}};
+        return SAO_AI_EDITOR_OK;
+    }
     int applied_document_edits = 0;
     int applied_file_operations = 0;
     Json failures = Json::array();
@@ -8933,7 +9309,11 @@ int32_t workspace_update_folders(const Json& params, Json& result) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
     Json extras;
-    (void)workspace_load_extra_folders(extras);
+    const int32_t load_status = workspace_load_extra_folders(extras);
+    if (load_status != SAO_AI_EDITOR_OK) return load_status;
+    Json previous_folders;
+    const int32_t previous_status = workspace_folders(previous_folders);
+    if (previous_status != SAO_AI_EDITOR_OK) return previous_status;
     std::vector<Json> current(extras.begin(), extras.end());
     const int64_t total = 1 + static_cast<int64_t>(current.size());
     const int64_t clamped_start =
@@ -9003,7 +9383,17 @@ int32_t workspace_update_folders(const Json& params, Json& result) {
         publish("workspaceFolder", Json{{"op", "remove"}, {"folder", folder}});
     }
     Json folders_result;
-    (void)workspace_folders(folders_result);
+    const int32_t folders_status = workspace_folders(folders_result);
+    if (folders_status != SAO_AI_EDITOR_OK)
+        return folders_status;
+    Json added_folders = Json::array(), removed_folders = Json::array();
+    for (size_t index = 0; index < additions.size(); ++index)
+        added_folders.push_back(folders_result.at(erase_begin + 1 + index));
+    for (size_t index = 0; index < removed.size(); ++index)
+        removed_folders.push_back(previous_folders.at(erase_begin + 1 + index));
+    publish("workspaceFolders", Json{{"folders", folders_result},
+                                      {"added", added_folders},
+                                      {"removed", removed_folders}});
     result = Json{{"applied", true}, {"folders", folders_result}};
     return SAO_AI_EDITOR_OK;
 }
@@ -9638,21 +10028,32 @@ int32_t debug_register_provider(const Json& params, Json& result) {
     const std::string extension_id = params.value("extensionId", std::string{});
     const std::string type = params.value("type", std::string{});
     const std::string kind = params.value("kind", std::string{"configuration"});
+    const std::string registration_id = params.value("registrationId", std::string{});
+    const uint64_t generation = params.value("generation", uint64_t{});
     static const std::vector<std::string> kinds = {
         "configuration", "adapterFactory", "adapterDescriptorFactory",
         "trackerFactory"};
     if (!valid_simple_id(extension_id) || type.empty() || type.size() > 128 ||
+        registration_id.empty() || registration_id.size() > 256 || generation == 0 ||
+        generation > kMaximumSafeJsonInteger ||
         std::find(kinds.begin(), kinds.end(), kind) == kinds.end()) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    const std::string key = extension_id + "::" + kind + "::" + type;
+    const std::string key = extension_id + "::" + std::to_string(generation) + "::" +
+                            registration_id;
     {
         std::lock_guard<std::mutex> lock(state().mutex);
+        if (state().debug_providers.size() >= kMaximumProviders &&
+            !state().debug_providers.contains(key))
+            return SAO_AI_EDITOR_ERR_BUSY;
         state().debug_providers[key] = Json{
             {"key", key},
             {"extensionId", extension_id},
+            {"generation", generation},
+            {"registrationId", registration_id},
             {"type", type},
-            {"kind", kind}};
+            {"kind", kind},
+            {"triggerKind", params.value("triggerKind", 0)}};
     }
     publish("debug",
             Json{{"op", "registerProvider"}, {"kind", kind}, {"type", type}});
@@ -9660,23 +10061,73 @@ int32_t debug_register_provider(const Json& params, Json& result) {
     return SAO_AI_EDITOR_OK;
 }
 
+int32_t debug_unregister_provider(const Json& params, Json& result) {
+    const std::string key = params.value("key", std::string{});
+    if (key.empty()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    bool erased = false;
+    {
+        std::lock_guard<std::mutex> lock(state().mutex);
+        const auto found = state().debug_providers.find(key);
+        if (found != state().debug_providers.end() &&
+            found->second.value("extensionId", std::string{}) ==
+                params.value("extensionId", std::string{}) &&
+            found->second.value("generation", uint64_t{}) ==
+                params.value("generation", uint64_t{})) {
+            state().debug_providers.erase(found);
+            erased = true;
+        }
+    }
+    result = Json{{"disposed", erased}, {"key", key}};
+    return erased ? SAO_AI_EDITOR_OK : SAO_AI_EDITOR_ERR_NOT_FOUND;
+}
+
 int32_t tasks_register_provider(const Json& params, Json& result) {
     const std::string extension_id = params.value("extensionId", std::string{});
     const std::string type = params.value("type", std::string{});
-    if (!valid_simple_id(extension_id) || type.empty() || type.size() > 128) {
+    const std::string registration_id = params.value("registrationId", std::string{});
+    const uint64_t generation = params.value("generation", uint64_t{});
+    if (!valid_simple_id(extension_id) || type.empty() || type.size() > 128 ||
+        registration_id.empty() || registration_id.size() > 256 || generation == 0 ||
+        generation > kMaximumSafeJsonInteger) {
         return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
     }
-    const std::string key = extension_id + "::" + type;
+    const std::string key = extension_id + "::" + std::to_string(generation) + "::" +
+                            registration_id;
     {
         std::lock_guard<std::mutex> lock(state().mutex);
+        if (state().task_providers.size() >= kMaximumProviders &&
+            !state().task_providers.contains(key))
+            return SAO_AI_EDITOR_ERR_BUSY;
         state().task_providers[key] = Json{
             {"key", key},
             {"extensionId", extension_id},
+            {"generation", generation},
+            {"registrationId", registration_id},
             {"type", type}};
     }
     publish("tasks", Json{{"op", "registerProvider"}, {"type", type}});
     result = Json{{"key", key}};
     return SAO_AI_EDITOR_OK;
+}
+
+int32_t tasks_unregister_provider(const Json& params, Json& result) {
+    const std::string key = params.value("key", std::string{});
+    if (key.empty()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    bool erased = false;
+    {
+        std::lock_guard<std::mutex> lock(state().mutex);
+        const auto found = state().task_providers.find(key);
+        if (found != state().task_providers.end() &&
+            found->second.value("extensionId", std::string{}) ==
+                params.value("extensionId", std::string{}) &&
+            found->second.value("generation", uint64_t{}) ==
+                params.value("generation", uint64_t{})) {
+            state().task_providers.erase(found);
+            erased = true;
+        }
+    }
+    result = Json{{"disposed", erased}, {"key", key}};
+    return erased ? SAO_AI_EDITOR_OK : SAO_AI_EDITOR_ERR_NOT_FOUND;
 }
 
 int32_t tasks_fetch(NativeRuntime* runtime, const Json& params, Json& result) {
@@ -9697,7 +10148,9 @@ int32_t tasks_fetch(NativeRuntime* runtime, const Json& params, Json& result) {
     Json tasks = Json::array();
     for (const auto& provider : providers) {
         Json invoke_params{{"type", provider.value("type", std::string{})},
-                           {"key", provider.value("key", std::string{})}};
+                   {"key", provider.value("key", std::string{})},
+                   {"extensionId", provider.value("extensionId", std::string{})},
+                   {"generation", provider.value("generation", uint64_t{})}};
         Json out;
         const int32_t status =
             invoke_extension(runtime, "tasks.fetch", invoke_params, out);
@@ -9714,6 +10167,127 @@ int32_t tasks_fetch(NativeRuntime* runtime, const Json& params, Json& result) {
         }
     }
     result = Json{{"tasks", tasks}, {"total", tasks.size()}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t tasks_resolve(NativeRuntime* runtime, const Json& params, Json& result) {
+    const std::string key = params.value("key", std::string{});
+    Json provider;
+    {
+        std::lock_guard<std::mutex> lock(state().mutex);
+        const auto found = state().task_providers.find(key);
+        if (found == state().task_providers.end()) return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        provider = found->second;
+    }
+    Json out;
+    const int32_t status = invoke_extension(
+        runtime, "tasks.resolve",
+        Json{{"key", key},
+             {"extensionId", provider.value("extensionId", std::string{})},
+             {"generation", provider.value("generation", uint64_t{})},
+             {"task", params.value("task", Json::object())}},
+        out);
+    if (status != SAO_AI_EDITOR_OK) return status;
+    result = std::move(out);
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t debug_provide_configurations(NativeRuntime* runtime, const Json& params,
+                                     Json& result) {
+    const std::string type = params.value("type", std::string{});
+    std::vector<Json> providers;
+    {
+        std::lock_guard<std::mutex> lock(state().mutex);
+        for (const auto& [key, provider] : state().debug_providers) {
+            (void)key;
+            if (provider.value("kind", std::string{}) == "configuration" &&
+                (type.empty() || provider.value("type", std::string{}) == type))
+                providers.push_back(provider);
+        }
+    }
+    Json configurations = Json::array();
+    for (const Json& provider : providers) {
+        Json out;
+        const int32_t status = invoke_extension(
+            runtime, "debug.provideConfigurations",
+            Json{{"key", provider.value("key", std::string{})},
+                 {"extensionId", provider.value("extensionId", std::string{})},
+                 {"generation", provider.value("generation", uint64_t{})},
+                 {"folder", params.value("folder", Json(nullptr))}}, out);
+        if (status != SAO_AI_EDITOR_OK) continue;
+        const Json values = out.is_object() ? out.value("configurations", Json::array()) : out;
+        if (!values.is_array()) continue;
+        for (const Json& value : values)
+            if (value.is_object() && configurations.size() < 512)
+                configurations.push_back(value);
+    }
+    result = Json{{"configurations", std::move(configurations)}};
+    return SAO_AI_EDITOR_OK;
+}
+
+int32_t debug_prepare(NativeRuntime* runtime, const Json& params, Json& result) {
+    Json configuration = params.value("configuration", Json::object());
+    if (!configuration.is_object()) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    const std::string type = configuration.value("type", std::string{});
+    if (type.empty() || type.size() > 128) return SAO_AI_EDITOR_ERR_INVALID_ARGUMENT;
+    std::vector<Json> providers;
+    {
+        std::lock_guard<std::mutex> lock(state().mutex);
+        for (const auto& [key, provider] : state().debug_providers) {
+            (void)key;
+            if (provider.value("type", std::string{}) == type)
+                providers.push_back(provider);
+        }
+    }
+    const Json folder = params.value("folder", Json(nullptr));
+    for (const bool substituted : {false, true}) {
+        for (const Json& provider : providers) {
+            if (provider.value("kind", std::string{}) != "configuration") continue;
+            Json out;
+            const int32_t status = invoke_extension(
+                runtime, "debug.resolveConfiguration",
+                Json{{"key", provider.value("key", std::string{})},
+                     {"extensionId", provider.value("extensionId", std::string{})},
+                     {"generation", provider.value("generation", uint64_t{})},
+                     {"folder", folder}, {"configuration", configuration},
+                     {"substituted", substituted}}, out);
+            if (status != SAO_AI_EDITOR_OK) return status;
+            if (out.is_null() || (out.is_object() && out.value("cancelled", false)))
+                return SAO_AI_EDITOR_ERR_CANCELLED;
+            configuration = out.is_object() && out.contains("configuration")
+                                ? out["configuration"] : out;
+            if (!configuration.is_object()) return SAO_AI_EDITOR_ERR_PROTOCOL;
+        }
+    }
+    Json descriptor = params.value("descriptor", Json(nullptr));
+    if (descriptor.is_null()) {
+        for (const Json& provider : providers) {
+            const std::string kind = provider.value("kind", std::string{});
+            if (kind != "adapterDescriptorFactory" && kind != "adapterFactory") continue;
+            Json out;
+            const int32_t status = invoke_extension(
+                runtime, "debug.createDescriptor",
+                Json{{"key", provider.value("key", std::string{})},
+                     {"extensionId", provider.value("extensionId", std::string{})},
+                     {"generation", provider.value("generation", uint64_t{})},
+                     {"configuration", configuration},
+                     {"executable", params.value("executable", Json(nullptr))}}, out);
+            if (status != SAO_AI_EDITOR_OK) return status;
+            descriptor = out.is_object() && out.contains("descriptor")
+                             ? out["descriptor"] : out;
+            if (!descriptor.is_null()) break;
+        }
+    }
+    if (descriptor.is_null()) {
+        const std::string command = configuration.value(
+            "debugAdapterExecutable", configuration.value("adapterCommand", std::string{}));
+        if (!command.empty())
+            descriptor = Json{{"kind", "executable"}, {"command", command},
+                              {"args", configuration.value("adapterArgs", Json::array())}};
+    }
+    if (!descriptor.is_object()) return SAO_AI_EDITOR_ERR_NOT_FOUND;
+    result = Json{{"configuration", std::move(configuration)},
+                  {"descriptor", std::move(descriptor)}};
     return SAO_AI_EDITOR_OK;
 }
 
@@ -9839,7 +10413,7 @@ int32_t dispatch_impl(NativeRuntime* runtime, std::string_view method,
     }
     if (method == "vscode.workspace.documents" ||
         method == "vscode.workspace.textDocuments") {
-        return document_list(result);
+        return document_list(result, params.value("includeContent", false));
     }
     if (method == "vscode.workspace.applyTextEdits") {
         return document_apply_edits(params, result);
@@ -9891,6 +10465,10 @@ int32_t dispatch_impl(NativeRuntime* runtime, std::string_view method,
     }
 
     // fs.*
+    if (method == "vscode.workspace.fs.readFile" || method == "vscode.workspace.fs.writeFile") {
+        return workspace_binary_file_io(workspace_root(), params,
+                                         method == "vscode.workspace.fs.writeFile", result);
+    }
     if (method == "vscode.workspace.fs.stat") {
         return fs_stat(params, result);
     }
@@ -9919,7 +10497,8 @@ int32_t dispatch_impl(NativeRuntime* runtime, std::string_view method,
         std::set<std::string> languages{"plaintext", "json", "javascript",
                                         "typescript", "python",  "cpp",
                                         "csharp",    "go",   "rust",
-                                        "markdown",  "html", "css"};
+                                        "markdown",  "html", "css",
+                                        "lua", "emma", "angelscript", "c"};
         {
             std::lock_guard<std::mutex> lock(state().mutex);
             for (const auto& [language, config] : state().language_configs) {
@@ -9956,6 +10535,22 @@ int32_t dispatch_impl(NativeRuntime* runtime, std::string_view method,
     if (method == "vscode.languages.setLanguageConfiguration") {
         return language_set_configuration(params, result);
     }
+    if (method == "vscode.languages.disposeLanguageConfiguration") {
+        return language_dispose_configuration(params, result);
+    }
+    if (method == "vscode.languages.providerChanged") {
+        {
+            std::lock_guard<std::mutex> lock(state().mutex);
+            const auto found = state().language_providers.find(params.value("providerId", std::string{}));
+            if (found == state().language_providers.end() ||
+                found->second.value("extensionId", std::string{}) != params.value("extensionId", std::string{}) ||
+                found->second.value("generation", uint64_t{}) != params.value("generation", uint64_t{}))
+                return SAO_AI_EDITOR_ERR_NOT_FOUND;
+        }
+        publish("providers", Json{{"op", "change"}, {"providerId", params.value("providerId", std::string{})}});
+        result = Json{{"ok", true}};
+        return SAO_AI_EDITOR_OK;
+    }
     if (method == "vscode.languages.getLanguageConfiguration") {
         const std::string language = params.value("language", std::string{});
         std::lock_guard<std::mutex> lock(state().mutex);
@@ -9963,7 +10558,7 @@ int32_t dispatch_impl(NativeRuntime* runtime, std::string_view method,
         result = Json{{"language", language},
                       {"configuration", found == state().language_configs.end()
                                              ? Json(nullptr)
-                                             : found->second}};
+                                             : found->second.back()["configuration"]}};
         return SAO_AI_EDITOR_OK;
     }
     if (method == "vscode.languages.setDiagnostics") {
@@ -10052,16 +10647,90 @@ int32_t dispatch_impl(NativeRuntime* runtime, std::string_view method,
         return auth_get_session(runtime, params, result);
     }
 
-    // debug + tasks registries.
+    // terminals.
+    if (method == "vscode.window.createTerminal") {
+        const auto service = process_runtime();
+        return service ? service->create_terminal(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.window.sendTerminalText") {
+        const auto service = process_runtime();
+        return service ? service->send_terminal_text(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.window.showTerminal") {
+        const auto service = process_runtime();
+        return service ? service->show_terminal(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.window.hideTerminal") {
+        const auto service = process_runtime();
+        return service ? service->hide_terminal(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.window.resizeTerminal") {
+        const auto service = process_runtime();
+        return service ? service->resize_terminal(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.window.disposeTerminal") {
+        const auto service = process_runtime();
+        return service ? service->dispose_terminal(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.window.listTerminals") {
+        const auto service = process_runtime();
+        return service ? service->list_terminals(result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+
+    // debug + tasks registries and execution.
     if (method == "vscode.debug.registerProvider") {
         return debug_register_provider(params, result);
+    }
+    if (method == "vscode.debug.unregisterProvider") {
+        return debug_unregister_provider(params, result);
     }
     if (method == "vscode.debug.listProviders") {
         std::lock_guard<std::mutex> lock(state().mutex);
         return registry_list(state().debug_providers, result, "providers");
     }
+    if (method == "vscode.debug.provideConfigurations") {
+        return debug_provide_configurations(runtime, params, result);
+    }
+    if (method == "vscode.debug.prepareSession") {
+        return debug_prepare(runtime, params, result);
+    }
+    if (method == "vscode.debug.startSession") {
+        const auto service = process_runtime();
+        return service ? service->start_debug_session(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.debug.sendMessage") {
+        const auto service = process_runtime();
+        return service ? service->send_debug_message(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.debug.stopSession") {
+        const auto service = process_runtime();
+        return service ? service->stop_debug_session(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.debug.sessionStatus") {
+        const auto service = process_runtime();
+        return service ? service->debug_status(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.debug.listSessions") {
+        const auto service = process_runtime();
+        return service ? service->list_debug_sessions(result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
     if (method == "vscode.tasks.registerTaskProvider") {
         return tasks_register_provider(params, result);
+    }
+    if (method == "vscode.tasks.unregisterTaskProvider") {
+        return tasks_unregister_provider(params, result);
     }
     if (method == "vscode.tasks.listProviders") {
         std::lock_guard<std::mutex> lock(state().mutex);
@@ -10069,6 +10738,29 @@ int32_t dispatch_impl(NativeRuntime* runtime, std::string_view method,
     }
     if (method == "vscode.tasks.fetchTasks") {
         return tasks_fetch(runtime, params, result);
+    }
+    if (method == "vscode.tasks.resolveTask") {
+        return tasks_resolve(runtime, params, result);
+    }
+    if (method == "vscode.tasks.executeTask") {
+        const auto service = process_runtime();
+        return service ? service->execute_task(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.tasks.terminateTask") {
+        const auto service = process_runtime();
+        return service ? service->terminate_task(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.tasks.executionStatus") {
+        const auto service = process_runtime();
+        return service ? service->task_status(params, result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
+    }
+    if (method == "vscode.tasks.listExecutions") {
+        const auto service = process_runtime();
+        return service ? service->list_task_executions(result)
+                       : SAO_AI_EDITOR_ERR_NOT_INITIALIZED;
     }
 
     // extapi housekeeping.
@@ -10140,6 +10832,16 @@ void attach_runtime(NativeRuntime* runtime) noexcept {
                   runtime->runtime_options().system_root,
                   runtime->runtime_options().plugin_roots_json);
         std::lock_guard<std::mutex> lock(state().mutex);
+        if (state().runtime != runtime) {
+            state().documents.clear();
+            state().active_document_uri.clear();
+            state().language_providers.clear();
+            state().language_configs.clear();
+            state().diagnostic_collections.clear();
+            state().event_queue.clear();
+            state().event_queue_bytes = 0;
+            state().event_dropped = 0;
+        }
         state().runtime = runtime;
     } catch (...) {
     }
@@ -10147,13 +10849,28 @@ void attach_runtime(NativeRuntime* runtime) noexcept {
 
 void detach_runtime(NativeRuntime* runtime) noexcept {
     try {
+        std::shared_ptr<ExtensionProcessRuntime> process_service;
         {
-            std::lock_guard<std::mutex> lock(state().mutex);
+            std::unique_lock<std::mutex> lock(state().mutex);
             if (state().runtime != runtime) {
                 return;
             }
             state().runtime = nullptr;
+            state().publishers_idle.wait(lock, [] { return state().active_publishers == 0; });
+            state().documents.clear();
+            state().active_document_uri.clear();
+            state().language_providers.clear();
+            state().language_configs.clear();
+            state().diagnostic_collections.clear();
+            state().task_providers.clear();
+            state().debug_providers.clear();
+            process_service = std::move(state().process_runtime);
+            state().process_runtime_root.clear();
+            state().event_queue.clear();
+            state().event_queue_bytes = 0;
+            state().event_dropped = 0;
         }
+        if (process_service) process_service->shutdown();
         stop_watcher_pump();
     } catch (...) {
     }
@@ -10165,16 +10882,25 @@ int32_t drain(Json& out) {
     auto& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
     out = Json::array();
+    size_t drained_bytes = 0;
     if (s.event_dropped > 0) {
-        out.push_back(Json{{"type", "extapi.event"},
-                           {"kind", "queue.overflow"},
-                           {"ts", extapi_now_ms()},
-                           {"payload",
-                            Json{{"dropped", s.event_dropped}}}});
+        Json overflow = Json{{"type", "extapi.event"},
+                             {"kind", "queue.overflow"},
+                             {"ts", extapi_now_ms()},
+                             {"payload", Json{{"dropped", s.event_dropped}}}};
+        drained_bytes = overflow.dump().size();
+        out.push_back(std::move(overflow));
         s.event_dropped = 0;
     }
     while (!s.event_queue.empty()) {
-        out.push_back(std::move(s.event_queue.front()));
+        if (!out.empty() &&
+            s.event_queue.front().encoded_bytes >
+                kMaximumProcessJsonBytes - drained_bytes) {
+            break;
+        }
+        drained_bytes += s.event_queue.front().encoded_bytes;
+        s.event_queue_bytes -= s.event_queue.front().encoded_bytes;
+        out.push_back(std::move(s.event_queue.front().value));
         s.event_queue.pop_front();
     }
     return SAO_AI_EDITOR_OK;

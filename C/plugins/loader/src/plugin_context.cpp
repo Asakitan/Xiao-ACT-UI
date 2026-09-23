@@ -1,4 +1,5 @@
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/plugin_context_lifetime_internal.h"
 #include "entity_provider_internal.h"
 #include "plugin_internal.h"
 #include "sao/plugins/loader/plugin_deps.h"
@@ -461,6 +462,13 @@ extension_kind parse_extension_kind(const char* value, bool& valid) {
 
 } // namespace
 
+struct context_runtime_state {
+    size_t active_calls = 0;
+    bool retiring = false;
+    bool releasing = false;
+    std::unordered_map<const void*, std::shared_ptr<context_runtime_resource>> resources;
+};
+
 struct plugin_context_s {
     plugin_handle_t plugin = nullptr;
     std::shared_ptr<plugin_handle_s> plugin_owner;
@@ -499,11 +507,13 @@ struct context_lifetime_state {
     size_t active_registrations = 0;
     size_t active_host_leases = 0;
     bool closing = false;
+    std::shared_ptr<context_runtime_state> runtime = std::make_shared<context_runtime_state>();
 };
 
 std::mutex g_context_lifetime_mutex;
 std::condition_variable g_context_lifetime_idle;
 std::unordered_map<plugin_context_t*, context_lifetime_state> g_context_lifetimes;
+thread_local context_runtime_state* g_draining_runtime = nullptr;
 
 std::mutex g_platform_quarantine_drain_mutex;
 std::atomic<plugin_context_t*> g_platform_quarantine_head{nullptr};
@@ -519,8 +529,11 @@ bool register_context_lifetime(plugin_context_t* ctx) noexcept {
 
 void unregister_context_lifetime(plugin_context_t* ctx) noexcept {
     try {
-        std::lock_guard lock(g_context_lifetime_mutex);
-        g_context_lifetimes.erase(ctx);
+        decltype(g_context_lifetimes)::node_type removed;
+        {
+            std::lock_guard lock(g_context_lifetime_mutex);
+            removed = g_context_lifetimes.extract(ctx);
+        }
     } catch (...) {
     }
 }
@@ -536,13 +549,14 @@ class context_registration_lease {
 
     context_registration_lease() = default;
 
-    bool acquire(plugin_context_t* ctx) noexcept {
+    bool acquire(plugin_context_t* ctx, bool allow_retiring = false) noexcept {
         if (ctx == nullptr)
             return false;
         try {
             std::lock_guard lock(g_context_lifetime_mutex);
             const auto found = g_context_lifetimes.find(ctx);
-            if (found == g_context_lifetimes.end() || found->second.closing)
+            if (found == g_context_lifetimes.end() || found->second.closing ||
+                (found->second.runtime->retiring && !allow_retiring))
                 return false;
             ++found->second.active_registrations;
             ctx_ = ctx;
@@ -610,6 +624,57 @@ void cancel_context_destruction(plugin_context_t* ctx) noexcept {
 void finish_context_destruction(plugin_context_t* ctx) noexcept {
     unregister_context_lifetime(ctx);
 }
+
+class context_resource_retirement {
+  public:
+    int32_t begin(plugin_context_t* ctx) {
+        std::lock_guard lock(g_context_lifetime_mutex);
+        const auto found = g_context_lifetimes.find(ctx);
+        if (found == g_context_lifetimes.end())
+            return SAO_ERR_HANDLE_INVALID;
+        const auto& runtime = found->second.runtime;
+        if (runtime->releasing)
+            return SAO_PLUGINS_ERR_BUSY;
+        runtime->retiring = true;
+        if (runtime->active_calls != 0 || found->second.active_registrations != 0)
+            return SAO_PLUGINS_ERR_BUSY;
+        runtime->releasing = true;
+        state_ = runtime;
+        return SAO_OK;
+    }
+
+    void finish() {
+        decltype(context_runtime_state::resources) resources;
+        {
+            std::lock_guard lock(g_context_lifetime_mutex);
+            resources.swap(state_->resources);
+        }
+        for (const auto& [key, resource] : resources)
+            resource->retire();
+    }
+
+    int32_t stop(const data_source_record& source) noexcept {
+        auto* previous = g_draining_runtime;
+        g_draining_runtime = state_.get();
+        int32_t status = SAO_ERR_OS_CALL_FAILED;
+        try {
+            status = source.stop(source.user_data);
+        } catch (...) {
+        }
+        g_draining_runtime = previous;
+        return status;
+    }
+
+    ~context_resource_retirement() {
+        if (state_) {
+            std::lock_guard lock(g_context_lifetime_mutex);
+            state_->releasing = false;
+        }
+    }
+
+  private:
+    std::shared_ptr<context_runtime_state> state_;
+};
 
 class platform_call_lease {
   public:
@@ -1167,6 +1232,9 @@ int32_t add_extension(plugin_context_t* ctx, extension_kind kind, const char* id
                       const char* payload) {
     if (ctx == nullptr || id == nullptr || id[0] == '\0' || payload == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
     try {
         parsed_context_json input;
         if (!parse_context_json(payload, input))
@@ -1187,6 +1255,64 @@ int32_t add_extension(plugin_context_t* ctx, extension_kind kind, const char* id
 }
 
 } // namespace
+
+context_runtime_lease::context_runtime_lease(plugin_context_t* ctx) noexcept {
+    try {
+        std::lock_guard lock(g_context_lifetime_mutex);
+        const auto found = g_context_lifetimes.find(ctx);
+        if (found == g_context_lifetimes.end())
+            return;
+        const bool draining = found->second.runtime.get() == g_draining_runtime;
+        if ((found->second.closing || found->second.runtime->retiring) && !draining)
+            return;
+        state_ = found->second.runtime;
+        ++state_->active_calls;
+    } catch (...) {
+    }
+}
+
+context_runtime_lease::context_runtime_lease(
+    std::shared_ptr<context_runtime_state> state) noexcept {
+    try {
+        std::lock_guard lock(g_context_lifetime_mutex);
+        if (!state || (state->retiring && state.get() != g_draining_runtime))
+            return;
+        state_ = std::move(state);
+        ++state_->active_calls;
+    } catch (...) {
+    }
+}
+
+context_runtime_lease::~context_runtime_lease() {
+    if (state_) {
+        std::lock_guard lock(g_context_lifetime_mutex);
+        --state_->active_calls;
+    }
+}
+
+std::shared_ptr<context_runtime_resource> context_runtime_lease::resource(
+    const void* key, std::shared_ptr<context_runtime_resource> candidate) const {
+    if (!state_ || !key)
+        return {};
+    std::lock_guard lock(g_context_lifetime_mutex);
+    const auto found = state_->resources.find(key);
+    if (found != state_->resources.end())
+        return found->second;
+    if (!candidate || state_->retiring)
+        return {};
+    return state_->resources.emplace(key, candidate).first->second;
+}
+
+bool plugin_context_runtime_busy(plugin_context_t* ctx) noexcept {
+    try {
+        std::lock_guard lock(g_context_lifetime_mutex);
+        const auto found = g_context_lifetimes.find(ctx);
+        return found != g_context_lifetimes.end() &&
+               (found->second.runtime->active_calls != 0 || found->second.runtime->releasing);
+    } catch (...) {
+        return true;
+    }
+}
 
 int32_t plugin_context_retain_host_lease(plugin_context_t* ctx) noexcept {
     if (ctx == nullptr)
@@ -1308,6 +1434,10 @@ int32_t plugin_context_release_resources(plugin_context_t* ctx) noexcept {
         return SAO_PLUGINS_ERR_BUSY;
     }
     try {
+        context_resource_retirement retirement;
+        const int32_t runtime_status = retirement.begin(ctx);
+        if (runtime_status != SAO_OK)
+            return runtime_status;
         const int32_t event_status = quiesce_event_subscriptions(ctx);
         if (event_status != SAO_OK)
             return event_status;
@@ -1327,12 +1457,7 @@ int32_t plugin_context_release_resources(plugin_context_t* ctx) noexcept {
         for (const auto& data_source : data_sources) {
             if (data_source.stop == nullptr)
                 continue;
-            int32_t status = SAO_ERR_OS_CALL_FAILED;
-            try {
-                status = data_source.stop(data_source.user_data);
-            } catch (...) {
-                status = SAO_ERR_OS_CALL_FAILED;
-            }
+            const int32_t status = retirement.stop(data_source);
             if (status != SAO_OK)
                 return status;
         }
@@ -1349,6 +1474,7 @@ int32_t plugin_context_release_resources(plugin_context_t* ctx) noexcept {
             ctx->entity_providers.clear();
         }
         plugin_remove_extensions(ctx->plugin);
+        retirement.finish();
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -1535,7 +1661,7 @@ extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_ctx_destroy(plugin_
         return;
     {
         context_registration_lease lifetime;
-        if (!lifetime.acquire(ctx))
+        if (!lifetime.acquire(ctx, true))
             return;
         std::lock_guard plugin_lock(ctx->plugin_owner->mutex);
         if (ctx->plugin_owner->context == ctx)
@@ -1571,6 +1697,9 @@ sao_plugins_ctx_subscribe(plugin_context_t* ctx, const char* topic_utf8, event_c
     if (ctx == nullptr || topic_utf8 == nullptr || topic_utf8[0] == '\0' || callback == nullptr ||
         out_token == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
     try {
         std::lock_guard lock(ctx->mutex);
         const auto token = ctx->next_token++;
@@ -1594,6 +1723,9 @@ sao_plugins_ctx_subscribe_once(plugin_context_t* ctx, const char* topic_utf8,
         out_token == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
     try {
         std::lock_guard lock(ctx->mutex);
         const auto token = ctx->next_token++;
@@ -1870,7 +2002,7 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_unregister_u
     if (ctx == nullptr || panel_id == nullptr || panel_id[0] == '\0')
         return SAO_ERR_INVALID_ARGUMENT;
     context_registration_lease registration;
-    if (!registration.acquire(ctx))
+    if (!registration.acquire(ctx, true))
         return SAO_ERR_HANDLE_INVALID;
     try {
         const auto remove_metadata = [ctx, panel_id] {
@@ -2174,6 +2306,9 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_ctx_register_dat
     data_source_start_fn start, data_source_stop_fn stop, void* user_data) {
     if (ctx == nullptr || start == nullptr || stop == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
+    context_registration_lease registration;
+    if (!registration.acquire(ctx))
+        return SAO_ERR_HANDLE_INVALID;
     const auto status =
         add_extension(ctx, extension_kind::data_source, source_id_utf8, metadata_json_utf8);
     if (status != SAO_OK)
@@ -2524,7 +2659,7 @@ int32_t plugin_context_unregister_entity_providers(plugin_context_t* ctx,
     if (count > kMaximumEntityProvidersPerContext)
         return SAO_ERR_INVALID_ARGUMENT;
     context_registration_lease lifetime;
-    if (!lifetime.acquire(ctx))
+    if (!lifetime.acquire(ctx, true))
         return SAO_ERR_HANDLE_INVALID;
     try {
         std::unordered_set<std::string> provider_ids;

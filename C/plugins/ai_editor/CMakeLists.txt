@@ -95,6 +95,7 @@ add_library(sao_plugin_ai_editor SHARED
     src/chat_provider_router.cpp
     src/conversation_store.cpp
     src/extension_host.cpp
+    src/extension_process_runtime.cpp
     ${_SAO_AI_EDITOR_GPU_HUNT_PRESENT_SOURCES}
     src/kernel_map_bridge.cpp
     src/kernel_map_commands.cpp
@@ -173,6 +174,10 @@ target_include_directories(sao_plugin_ai_editor PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
+if (WIN32)
+    target_link_libraries(sao_plugin_ai_editor PRIVATE ws2_32)
+endif()
+
 target_compile_definitions(sao_plugin_ai_editor PRIVATE SAO_AI_EDITOR_BUILDING_DLL)
 target_compile_features(sao_plugin_ai_editor PUBLIC cxx_std_20)
 target_link_libraries(sao_plugin_ai_editor PUBLIC
@@ -237,6 +242,9 @@ add_custom_command(TARGET sao_ai_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_host_shim.js"
         "$<TARGET_FILE_DIR:sao_ai_editor>/assets/ai_editor/extension_host_shim.js"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_execution_shim.js"
+        "$<TARGET_FILE_DIR:sao_ai_editor>/assets/ai_editor/extension_execution_shim.js"
     VERBATIM)
 
 install(TARGETS sao_ai_editor
@@ -259,6 +267,7 @@ endif()
 
 install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_host_shim.js"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/extension_execution_shim.js"
     DESTINATION "bin/assets/ai_editor"
     COMPONENT ship
 )
