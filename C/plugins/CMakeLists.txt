@@ -54,6 +54,8 @@ add_library(sao_plugins_legacy_loader_facade_objects OBJECT
 target_include_directories(sao_plugins_legacy_loader_facade_objects PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/loader/include)
+target_link_libraries(sao_plugins_legacy_loader_facade_objects PRIVATE
+    sao_plugins_loader)
 target_compile_features(sao_plugins_legacy_loader_facade_objects PRIVATE cxx_std_20)
 target_compile_definitions(sao_plugins_legacy_loader_facade_objects PRIVATE
     SAO_PLUGINS_BUILDING_DLL
