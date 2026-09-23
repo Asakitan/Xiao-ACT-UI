@@ -23,13 +23,20 @@
 #include "sao/core/status.h"
 #include "platform_timer_owner_internal.h"
 // Plugin-facing SaoStatus literals mirror the canonical sao_status_e values.
-static_assert(SAO_ERR_INVALID_ARGUMENT == SAO_STATUS_ERR_INVALID_ARGUMENT);
-static_assert(SAO_ERR_NOT_INITIALIZED == SAO_STATUS_ERR_NOT_INITIALIZED);
-static_assert(SAO_ERR_HANDLE_INVALID == SAO_STATUS_ERR_HANDLE_INVALID);
-static_assert(SAO_ERR_BUFFER_TOO_SMALL == SAO_STATUS_ERR_BUFFER_TOO_SMALL);
-static_assert(SAO_ERR_OS_CALL_FAILED == SAO_STATUS_ERR_OS_CALL_FAILED);
-static_assert(SAO_ERR_NOT_IMPLEMENTED == SAO_STATUS_ERR_NOT_IMPLEMENTED);
-static_assert(SAO_ERR_UNKNOWN == SAO_STATUS_ERR_UNKNOWN);
+static_assert(static_cast<int32_t>(SAO_ERR_INVALID_ARGUMENT) ==
+              static_cast<int32_t>(SAO_STATUS_ERR_INVALID_ARGUMENT));
+static_assert(static_cast<int32_t>(SAO_ERR_NOT_INITIALIZED) ==
+              static_cast<int32_t>(SAO_STATUS_ERR_NOT_INITIALIZED));
+static_assert(static_cast<int32_t>(SAO_ERR_HANDLE_INVALID) ==
+              static_cast<int32_t>(SAO_STATUS_ERR_HANDLE_INVALID));
+static_assert(static_cast<int32_t>(SAO_ERR_BUFFER_TOO_SMALL) ==
+              static_cast<int32_t>(SAO_STATUS_ERR_BUFFER_TOO_SMALL));
+static_assert(static_cast<int32_t>(SAO_ERR_OS_CALL_FAILED) ==
+              static_cast<int32_t>(SAO_STATUS_ERR_OS_CALL_FAILED));
+static_assert(static_cast<int32_t>(SAO_ERR_NOT_IMPLEMENTED) ==
+              static_cast<int32_t>(SAO_STATUS_ERR_NOT_IMPLEMENTED));
+static_assert(static_cast<int32_t>(SAO_ERR_UNKNOWN) ==
+              static_cast<int32_t>(SAO_STATUS_ERR_UNKNOWN));
 
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_EMMA)
 #include "sao/plugins/emma_host/emma_loader_adapter.h"
@@ -2884,24 +2891,24 @@ int32_t registerHostAdapters(
     [[maybe_unused]] const sao::launcher::PluginsProviderConfiguration& configuration) noexcept {
     [[maybe_unused]] int32_t status = SAO_OK;
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PYMINI)
-    // python engine_kind::python is served by the pymini composite adapter:
-    // native subset interpreter by default; manifest py_runtime:cpython /
-    // subset-overflow plugins delegate to sao_plugins_pyhost_* when a
-    // configured python_home probes available.
     if (configuration.python_home.empty()) {
         owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_UNCONFIGURED;
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_PYTHON)
     } else if (sao::plugins::python_host::sao_plugins_pyhost_available(
                    configuration.python_home.c_str())) {
+        // READY describes layout availability, not an initialized interpreter.
         owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_READY;
     } else {
         owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_UNAVAILABLE;
+#else
+    } else {
+        owned.python_runtime_status = SAO_PLUGINS_PYTHON_RUNTIME_HOST_UNAVAILABLE;
+#endif
     }
     {
         sao::plugins::pymini::pymini_adapter_config pymini_cfg{};
         pymini_cfg.python_home =
-            owned.python_runtime_status == SAO_PLUGINS_PYTHON_RUNTIME_READY
-                ? configuration.python_home.c_str()
-                : nullptr;
+            configuration.python_home.empty() ? nullptr : configuration.python_home.c_str();
         std::vector<const wchar_t*> python_module_dirs;
         python_module_dirs.reserve(configuration.python_module_dirs.size());
         for (const auto& dir : configuration.python_module_dirs)
@@ -3201,21 +3208,39 @@ std::string dependencyId(std::string requirement) {
 
 std::vector<bool> runtimeDeferred(const sao_plugins_registry_body& body) {
     std::vector<bool> blocked(body.handles.size(), false);
+    std::vector<bool> invalid(body.handles.size(), false);
     const bool python_ready = body.python_runtime_status == SAO_PLUGINS_PYTHON_RUNTIME_READY;
     for (size_t index = 0; index < body.manifests.size(); ++index) {
         const auto& manifest = body.manifests[index];
 #if defined(SAO_LAUNCHER_PROVIDER_HAS_PYMINI)
-        // pymini 是 engine_kind::python 的本机 adapter:py_runtime 语义与
-        // adapter 的 decide_route 一致——"pymini"/auto/未声明走本机子集
-        // 解释器(auto 出子集时由 adapter 在 load 处 fail-closed 记为插件
-        // 失败而不是静默永久 defer);只有显式 "cpython" 且无 READY
-        // delegate 的 manifest 才 degrade-defer。
-        blocked[index] = !python_ready && manifest.native_entry.empty() &&
-                         manifest.language == loader::engine_kind::python &&
-                         manifest.py_runtime == "cpython";
+        if (!python_ready && manifest.native_entry.empty() &&
+            manifest.language == loader::engine_kind::python) {
+            bool required = false;
+            char* reason = nullptr;
+            const int32_t status =
+                sao::plugins::pymini::sao_plugins_pymini_adapter_requires_python(
+                    body.pymini_owner, &manifest, &required, &reason);
+            sao::plugins::pymini::sao_plugins_pymini_free_string(reason);
+            invalid[index] = status != SAO_OK;
+            blocked[index] = status == SAO_OK && required;
+        }
 #else
         blocked[index] = !python_ready && manifest.native_entry.empty() &&
                          manifest.language == loader::engine_kind::python;
+#endif
+#if defined(SAO_LAUNCHER_PROVIDER_HAS_CSMINI)
+        if (manifest.native_entry.empty() &&
+            manifest.language == loader::engine_kind::csharp) {
+            bool required = false;
+            bool available = false;
+            char* reason = nullptr;
+            const int32_t status =
+                sao::plugins::csmini::sao_plugins_csmini_adapter_requires_dotnet(
+                    body.csmini_owner, &manifest, &required, &available, &reason);
+            sao::plugins::csmini::sao_plugins_csmini_free_string(reason);
+            invalid[index] = status != SAO_OK;
+            blocked[index] = status == SAO_OK && required && !available;
+        }
 #endif
     }
 
@@ -3224,6 +3249,8 @@ std::vector<bool> runtimeDeferred(const sao_plugins_registry_body& body) {
         changed = false;
         for (size_t index = 0; index < body.manifests.size(); ++index) {
             if (blocked[index])
+                continue;
+            if (invalid[index])
                 continue;
             for (const auto& requirement : body.manifests[index].requires_list) {
                 const auto dependency = dependencyId(requirement);
@@ -3475,6 +3502,7 @@ extern "C" sao_status_t sao_plugins_activate_autostart(sao_plugins_registry* reg
         std::vector<loader::plugin_handle_t> sorted(body.handles.size());
         if (loader::sao_plugins_lifecycle_topo_sort(body.handles.data(), body.handles.size(),
                                                     sorted.data()) != SAO_OK) {
+            body.last_operation_status = SAO_STATUS_PLUGIN_LOAD_FAIL;
             return SAO_STATUS_PLUGIN_LOAD_FAIL;
         }
         const auto deferred = runtimeDeferred(body);
@@ -3490,17 +3518,28 @@ extern "C" sao_status_t sao_plugins_activate_autostart(sao_plugins_registry* reg
                                           ? SAO_PLUGINS_PYTHON_LAUNCH_IN_PROCESS
                                           : SAO_PLUGINS_PYTHON_LAUNCH_DEFER_DEGRADED;
 #endif
+        sao_status_t activation_status = SAO_STATUS_OK;
+        std::unordered_set<std::string> failed;
         for (const auto handle : sorted) {
             const auto found = std::find(body.handles.begin(), body.handles.end(), handle);
             const auto index = static_cast<size_t>(std::distance(body.handles.begin(), found));
-            if (found != body.handles.end() && body.autostart[index] && !deferred[index] &&
-                loader::sao_plugins_lifecycle_load(handle) != SAO_OK) {
-                return SAO_STATUS_PLUGIN_LOAD_FAIL;
+            if (found == body.handles.end() || !body.autostart[index] || deferred[index])
+                continue;
+            const auto& manifest = body.manifests[index];
+            const bool dependency_failed = std::any_of(
+                manifest.requires_list.begin(), manifest.requires_list.end(),
+                [&failed](const auto& requirement) {
+                    return failed.contains(dependencyId(requirement));
+                });
+            if (dependency_failed || loader::sao_plugins_lifecycle_load(handle) != SAO_OK) {
+                failed.insert(manifest.plugin_id);
+                activation_status = SAO_STATUS_PLUGIN_LOAD_FAIL;
             }
         }
-        body.last_operation_status = SAO_STATUS_OK;
-        return SAO_STATUS_OK;
+        body.last_operation_status = activation_status;
+        return activation_status;
     } catch (...) {
+        lease.body().last_operation_status = SAO_STATUS_PLUGIN_LOAD_FAIL;
         return SAO_STATUS_PLUGIN_LOAD_FAIL;
     }
 }

@@ -639,7 +639,7 @@ if (TARGET SaoAuto)
     endif()
     if (TARGET sao_plugin_ai_editor)
         set(_SAO_AI_EDITOR_REQUIRED_ASSETS
-            "extension_host_shim.js" "agents/refactor-mentor.json" "agents/security-auditor.json" "agents/sql-expert.json" "agents/test-writer.json"
+            "extension_host_shim.js" "extension_execution_shim.js" "agents/refactor-mentor.json" "agents/security-auditor.json" "agents/sql-expert.json" "agents/test-writer.json"
             "workflows/security-audit-and-fix.json" "workflows/sql-schema-fix.json" "workflows/test-first-refactor.json"
             "prompts/performance-review.json" "prompts/refactor-plan.json" "prompts/security-checklist.json" "prompts/sql-audit.json"
             "kernel_map_panel/index.html" "kernel_map_panel/panel.css" "kernel_map_panel/panel.js"
@@ -651,7 +651,8 @@ if (TARGET SaoAuto)
             "kernel_map_panel/fonts/SAOUI.ttf" "kernel_map_panel/fonts/ZhuZiAYuanJWD.ttf"
             "mcp_management_panel/fonts/SAOUI.ttf" "mcp_management_panel/fonts/ZhuZiAYuanJWD.ttf")
         foreach (_sao_ai_editor_asset IN LISTS _SAO_AI_EDITOR_REQUIRED_ASSETS)
-            if (_sao_ai_editor_asset STREQUAL "extension_host_shim.js")
+            if (_sao_ai_editor_asset STREQUAL "extension_host_shim.js" OR
+                _sao_ai_editor_asset STREQUAL "extension_execution_shim.js")
                 set(_sao_ai_editor_asset_source "${CMAKE_CURRENT_SOURCE_DIR}/plugins/ai_editor/assets/${_sao_ai_editor_asset}")
             else()
                 set(_sao_ai_editor_asset_source "${CMAKE_CURRENT_SOURCE_DIR}/plugins/ai_editor/assets/ai_editor/${_sao_ai_editor_asset}")

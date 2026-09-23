@@ -1,6 +1,7 @@
 #include "plugin_tabs_publication_internal.h"
 
 #include "sao/plugins/loader/plugin_lifecycle.h"
+#include "sao/plugins/loader/plugin_manifest.h"
 #include "sao/plugins/loader/plugin_registry.h"
 
 #include <algorithm>
@@ -43,9 +44,12 @@ struct Tab {
     std::vector<SaoUiPluginTabAction> actions;
 };
 
-void read_metadata(const Loader::plugin_manifest& manifest, Tab& tab) {
+void read_metadata(const Loader::plugin_manifest& manifest,
+                   const Loader::manifest_locale_resolver& localized, Tab& tab) {
     tab.id = manifest.plugin_id;
     tab.name = valid_text(manifest.name) ? manifest.name : std::string{};
+    tab.name = localized.text({"name"}, tab.name, entity_action_routes::kMaximumStringBytes);
+    std::string menu_name;
     if (manifest.sao_menu_json.size() <= 16 * 1024 && !manifest.sao_menu_json.empty()) {
         try {
             std::size_t nodes = 0;
@@ -61,16 +65,20 @@ void read_metadata(const Loader::plugin_manifest& manifest, Tab& tab) {
                 if (tab.icon.empty())
                     tab.icon = menu_text(menu, "icon");
                 tab.category = menu_text(menu, "category");
-                const auto name = menu_text(menu, "name");
-                if (!name.empty())
-                    tab.name = name;
-                else if (!tab.category.empty())
-                    tab.name = tab.category;
+                menu_name = menu_text(menu, "name");
             }
         } catch (const nlohmann::json::exception&) {
         } catch (const std::invalid_argument&) {
         }
     }
+    tab.category = localized.text({"sao_menu", "category"}, tab.category,
+                                  entity_action_routes::kMaximumStringBytes);
+    menu_name = localized.text({"sao_menu", "name"}, menu_name,
+                               entity_action_routes::kMaximumStringBytes);
+    if (!menu_name.empty())
+        tab.name = std::move(menu_name);
+    else if (!tab.category.empty())
+        tab.name = tab.category;
     if (tab.name.empty())
         tab.name = tab.id;
 }
@@ -93,7 +101,7 @@ std::string bounded_text(std::string value, std::size_t maximum) {
 sao_status_t publish_items(sao_ui_plugin_tabs_handle_t tabs,
                           const entity_action_routes::EntityActionRouteStore& routes,
                           const entity_provider_publication::EntityProviderPublicationState& state,
-                          bool loader_bound) {
+                          bool loader_bound, std::string_view locale) {
     if (!loader_bound)
         return sao_ui_plugin_tabs_set_items(tabs, nullptr, 0);
     const auto registry = Loader::sao_plugins_registry_instance();
@@ -149,7 +157,8 @@ sao_status_t publish_items(sao_ui_plugin_tabs_handle_t tabs,
             manifest.plugin_id.size() >= sizeof(SaoUiPluginTabsSnapshot{}.selected_plugin_id_utf8))
             continue;
         Tab tab;
-        read_metadata(manifest, tab);
+        const Loader::manifest_locale_resolver localized(manifest.locales_json, locale);
+        read_metadata(manifest, localized, tab);
         const bool active = lifecycle == Loader::lifecycle_state::loaded_active;
         tab.status = active ? SAO_UI_PLUGIN_TAB_STATUS_ACTIVE : SAO_UI_PLUGIN_TAB_STATUS_DISABLED;
         std::vector<const Route*> owner_routes;
@@ -203,8 +212,11 @@ sao_status_t publish_items(sao_ui_plugin_tabs_handle_t tabs,
         tab.actions.reserve(rows.size());
         for (const auto& row : rows) {
             const auto& route = *row.route;
+            const auto label = localized.text({"sao_menu", "actions", route.action_id, "label"},
+                                               route.row_label,
+                                               entity_action_routes::kMaximumStringBytes);
             tab.labels.push_back(bounded_text(groups.size() > 1 && !row.group.empty()
-                ? row.group + " / " + route.row_label : route.row_label,
+                ? row.group + " / " + label : label,
                 entity_action_routes::kMaximumStringBytes));
             tab.icons.push_back(bounded_text(route.row_icon, 128));
             SaoUiPluginTabAction action{};
@@ -247,12 +259,12 @@ sao_status_t publish_items(sao_ui_plugin_tabs_handle_t tabs,
 sao_status_t publish(sao_ui_plugin_tabs_handle_t tabs,
                      const entity_action_routes::EntityActionRouteStore& routes,
                      const entity_provider_publication::EntityProviderPublicationState& state,
-                     bool loader_bound) noexcept {
+                     bool loader_bound, std::string_view locale) noexcept {
     if (tabs == nullptr)
         return SAO_STATUS_ERR_NOT_INITIALIZED;
     sao_status_t status = SAO_STATUS_ERR_UNKNOWN;
     try {
-        status = publish_items(tabs, routes, state, loader_bound);
+        status = publish_items(tabs, routes, state, loader_bound, locale);
     } catch (...) {
         status = SAO_STATUS_ERR_UNKNOWN;
     }

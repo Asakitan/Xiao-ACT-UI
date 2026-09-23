@@ -47,6 +47,7 @@ struct PluginSnapshot {
     PluginState state{PluginState::unknown};
     PluginSource source{PluginSource::unknown};
     bool manifest_enabled{};
+    std::string locales_json;
 };
 
 struct Snapshot {
@@ -75,7 +76,8 @@ using ReloadAllHandler = std::function<sao_status_t()>;
 
 // Pure internal seams used by focused tests and by the production owner.
 [[nodiscard]] SaoPanelDescriptor descriptor_for_testing() noexcept;
-[[nodiscard]] std::string build_spec_for_testing(const Snapshot& snapshot);
+[[nodiscard]] std::string build_spec_for_testing(const Snapshot& snapshot,
+                                                 std::string_view locale = {});
 
 struct Owner final {
     explicit Owner(sao_ui_compositor_handle_t borrowed_compositor) noexcept;
@@ -91,6 +93,7 @@ struct Owner final {
 
     void request_shutdown() noexcept;
     [[nodiscard]] sao_status_t set_operations(Operations operations) noexcept;
+    [[nodiscard]] sao_status_t set_locale(std::string_view locale) noexcept;
 
     // Registers once, refreshes, shows, and raises the existing instance on
     // repeated calls. The compositor is borrowed and must outlive this owner.

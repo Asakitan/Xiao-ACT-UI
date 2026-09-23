@@ -407,6 +407,7 @@ Snapshot snapshot_loader() {
         if (plugin.language.empty())
             plugin.language = "unknown";
         plugin.description = manifest.description;
+        plugin.locales_json = manifest.locales_json;
         plugin.source_path = manifest.source_path;
         plugin.source = manifest.user_installed ? PluginSource::user : PluginSource::built_in;
         plugin.manifest_enabled = manifest.enabled;
@@ -609,10 +610,22 @@ Json status_strip_node(const Snapshot& snapshot, ManagerState manager,
     return card_node("状态", Json::array({row_node(std::move(badges))}), accent);
 }
 
-std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
+std::string build_spec(Snapshot snapshot, bool reload_all_busy,
                        const std::unordered_set<std::string>& busy_plugins,
                        std::string_view catalog_query, CatalogStateFilter state_filter,
-                       CatalogSourceFilter source_filter) {
+                       CatalogSourceFilter source_filter, std::string_view locale) {
+#if SAO_LAUNCHER_PLUGIN_MANAGER_HAS_LOADER
+    for (auto& plugin : snapshot.plugins) {
+        const sao::plugins::loader::manifest_locale_resolver localized(plugin.locales_json, locale);
+        plugin.name = localized.text({"name"}, plugin.name);
+        plugin.description = localized.text({"description"}, plugin.description);
+    }
+    std::ranges::sort(snapshot.plugins, [](const PluginSnapshot& left, const PluginSnapshot& right) {
+        return left.name != right.name ? left.name < right.name : left.plugin_id < right.plugin_id;
+    });
+#else
+    (void)locale;
+#endif
     const ManagerState manager = manager_state(snapshot);
     const std::string normalized_query = normalized_catalog_query(catalog_query);
     const bool filters_active = !normalized_query.empty() || state_filter != CatalogStateFilter::all ||
@@ -812,9 +825,9 @@ std::string build_spec(const Snapshot& snapshot, bool reload_all_busy,
     return Json{{"version", 1}, {"title", ""}, {"nodes", std::move(compact)}}.dump();
 }
 
-std::string build_spec_for_testing(const Snapshot& snapshot) {
+std::string build_spec_for_testing(const Snapshot& snapshot, std::string_view locale) {
     return build_spec(snapshot, snapshot.busy, {}, {}, CatalogStateFilter::all,
-                      CatalogSourceFilter::all);
+                      CatalogSourceFilter::all, locale);
 }
 
 struct Owner::Impl {
@@ -917,6 +930,26 @@ struct Owner::Impl {
             last_snapshot = {};
             snapshot_available = false;
             operation_error.clear();
+            return SAO_STATUS_OK;
+        } catch (...) {
+            return SAO_STATUS_ERR_UNKNOWN;
+        }
+    }
+
+    sao_status_t set_locale(std::string_view replacement) noexcept {
+        const sao_status_t owner_status = require_owner_thread();
+        if (owner_status != SAO_STATUS_OK)
+            return owner_status;
+        if (!valid_text(replacement, 128U, false))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        try {
+            std::lock_guard lock(mutex);
+            if (retiring || owner_publishing)
+                return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            if (locale != replacement) {
+                locale = replacement;
+                cache_dirty = true;
+            }
             return SAO_STATUS_OK;
         } catch (...) {
             return SAO_STATUS_ERR_UNKNOWN;
@@ -1038,6 +1071,7 @@ struct Owner::Impl {
             sao_ui_panel_body_handle_t target_body = nullptr;
             std::string pending_error;
             std::string catalog_query_value;
+            std::string locale_value;
             std::unordered_set<std::string> busy_plugins;
             CatalogStateFilter catalog_state = CatalogStateFilter::all;
             CatalogSourceFilter catalog_source = CatalogSourceFilter::all;
@@ -1049,6 +1083,7 @@ struct Owner::Impl {
                 reload_all_available = static_cast<bool>(operations.reload_all);
                 pending_error = operation_error;
                 catalog_query_value = catalog_query;
+                locale_value = locale;
                 catalog_state = selected_catalog_state;
                 catalog_source = selected_catalog_source;
                 busy_plugins = busy_plugin_ids;
@@ -1064,8 +1099,8 @@ struct Owner::Impl {
                 snapshot.error_message.append(pending_error);
             }
             const std::string spec =
-                build_spec(snapshot, reload_all_busy, busy_plugins, catalog_query_value,
-                           catalog_state, catalog_source);
+                build_spec(std::move(snapshot), reload_all_busy, busy_plugins, catalog_query_value,
+                           catalog_state, catalog_source, locale_value);
             {
                 std::lock_guard lock(mutex);
                 if (body == target_body && last_published_body == target_body &&
@@ -1607,6 +1642,7 @@ struct Owner::Impl {
     Snapshot last_snapshot;
     std::string operation_error;
     std::string catalog_query;
+    std::string locale;
     std::unordered_set<std::string> busy_plugin_ids;
     CatalogStateFilter selected_catalog_state{CatalogStateFilter::all};
     CatalogSourceFilter selected_catalog_source{CatalogSourceFilter::all};
@@ -1678,6 +1714,10 @@ void Owner::request_shutdown() noexcept {
 sao_status_t Owner::set_operations(Operations operations) noexcept {
     return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED
                             : impl_->set_operations(std::move(operations));
+}
+
+sao_status_t Owner::set_locale(std::string_view locale) noexcept {
+    return impl_ == nullptr ? SAO_STATUS_ERR_NOT_INITIALIZED : impl_->set_locale(locale);
 }
 
 sao_status_t Owner::open() noexcept {

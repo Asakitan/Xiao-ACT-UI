@@ -2776,6 +2776,27 @@ create_settings_owner(const wchar_t* base_dir,
     }
 }
 
+extern "C++" {
+static std::string plugin_presentation_locale() noexcept {
+    try {
+        wchar_t locale[LOCALE_NAME_MAX_LENGTH]{};
+        const int count = GetUserDefaultLocaleName(locale, LOCALE_NAME_MAX_LENGTH);
+        if (count <= 1)
+            return {};
+        std::string result;
+        result.reserve(static_cast<std::size_t>(count - 1));
+        for (int index = 0; index < count - 1; ++index) {
+            if (locale[index] > 127)
+                return {};
+            result.push_back(static_cast<char>(locale[index]));
+        }
+        return result;
+    } catch (...) {
+        return {};
+    }
+}
+}
+
 #if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
 struct SharedPanelVisibilityProbe {
     bool plugin_manager = false;
@@ -2878,6 +2899,9 @@ sao_status_t create_shared_ui_owners(const wchar_t* base_dir, sao_platform_ctx* 
             ctx->plugin_manager_panel =
                 std::make_unique<sao::launcher::plugin_manager_panel::Owner>(
                     ctx->compositor, [ctx] { return reload_plugins(ctx); });
+            status = ctx->plugin_manager_panel->set_locale(plugin_presentation_locale());
+            if (status != SAO_STATUS_OK)
+                return status;
             auto process_operations =
                 sao::launcher::process_selector_panel::make_default_operations(ctx->rt_io_proxy);
             ctx->memory_viewer_panel = std::make_unique<sao::launcher::memory_viewer_panel::Owner>(
@@ -3659,6 +3683,14 @@ sao_status_t refresh_entity(void* user_data) {
     sync_entity_publication_authority(ctx);
     ctx->entity_provider_publication.topmost = ctx->builtin_action_state.topmost;
     ctx->entity_provider_publication.streaming_mode = ctx->builtin_action_state.streaming_mode;
+    const std::string locale = plugin_presentation_locale();
+#if defined(SAO_LAUNCHER_SHARED_PANEL_COMPOSITION)
+    if (ctx->plugin_manager_panel) {
+        const sao_status_t locale_status = ctx->plugin_manager_panel->set_locale(locale);
+        if (locale_status != SAO_STATUS_OK)
+            return locale_status;
+    }
+#endif
     sao_status_t status = sao::launcher::entity_provider_publication::refresh(
         ctx->entity_shell, ctx->entity_action_routes, ctx->entity_provider_publication,
         ctx->nervgear_mode, &sao::plugins::loader::sao_plugins_entity_provider_snapshot_v2,
@@ -3667,7 +3699,7 @@ sao_status_t refresh_entity(void* user_data) {
     if (status == SAO_STATUS_OK && ctx->plugin_tabs != nullptr) {
         status = sao::launcher::plugin_tabs_publication::publish(
             ctx->plugin_tabs, ctx->entity_action_routes, ctx->entity_provider_publication,
-            ctx->plugins_registry != nullptr);
+            ctx->plugins_registry != nullptr, locale);
     }
     if (status != SAO_STATUS_OK) {
         ctx->builtin_action_state.authority.publication_available = false;
