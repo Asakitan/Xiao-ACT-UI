@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "entry": "plugin.py",
   "language": "python",
-  "description": "Python 插件示例。CPython 3.11 嵌入宿主, 手写 PyModuleDef SDK, 老 Python 平台插件无缝迁移。",
+  "py_runtime": "cpython",
+  "description": "Python 插件示例。显式选择 CPython 嵌入宿主，演示面板、设置与快捷键。",
   "enabled": false,
   "capabilities": [
     "plugin_manager",

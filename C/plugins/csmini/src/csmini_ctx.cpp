@@ -29,6 +29,7 @@
 #include "csmini_interp.h"
 
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/plugin_context_lifetime_internal.h"
 #include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/plugin_manifest.h"
 #include "sao/plugins/sdk_binding/binding_common.h"
@@ -108,6 +109,8 @@ nlohmann::json json_from_cs(interpreter& i, const CsRef& v, int depth = 0) {
         return as_float(v)->v;
     case cs_kind::string:
         return as_str(v)->v;
+    case cs_kind::guid:
+        return cs_guid_format(as_guid(v)->bytes);
     case cs_kind::array: {
         nlohmann::json arr = nlohmann::json::array();
         for (const auto& x : as_array(v)->v)
@@ -258,9 +261,19 @@ cb_box* keep_cb(interpreter& i, CsRef fn, std::string aux = {}) {
 // csmini_host calls this at interpreter teardown (after the loader removed
 // every registration that could still deliver callbacks).
 void csmini_drop_callbacks(interpreter& i) {
-    std::lock_guard<std::mutex> g(g_cb_mu);
-    g_cb_keep.erase(&i);
-    g_ctx_builders.erase(&i);
+    std::vector<cb_ptr> boxes;
+    std::vector<std::shared_ptr<ctx_builder>> builders;
+    {
+        std::lock_guard<std::mutex> g(g_cb_mu);
+        if (auto it = g_ctx_builders.find(&i); it != g_ctx_builders.end()) {
+            builders = std::move(it->second);
+            g_ctx_builders.erase(it);
+        }
+        if (auto it = g_cb_keep.find(&i); it != g_cb_keep.end()) {
+            boxes = std::move(it->second);
+            g_cb_keep.erase(it);
+        }
+    }
 }
 
 namespace {
@@ -1500,6 +1513,9 @@ struct ctx_builder {
         return r;
     }
     CsRef m_load_local(interpreter&, const cs_args& a) {
+        if (a.pos.size() != 1 || !as_str(a.pos[0]) ||
+            as_str(a.pos[0])->v.find('\0') != std::string::npos)
+            i.raise_exc("ArgumentException", "load_local expects one path string without NUL", {});
         const std::string rel = pos_str(i, a, 0);
         script::load_local_result kind{};
         std::shared_ptr<script::script_module> mod;
@@ -1510,7 +1526,8 @@ struct ctx_builder {
             i.cfg.plugin_root.c_str(), rel.c_str(), &kind, &mod, &abs,
             &diag);
         if (r != 0)
-            return cs_null();
+            i.raise_exc("InvalidOperationException", "load_local failed with status " +
+                        std::to_string(r) + ": " + diag, {});
         switch (kind) {
         case script::load_local_result::module:
             if (mod)
@@ -1590,13 +1607,16 @@ struct ctx_builder {
         auto* self = static_cast<ctx_builder*>(user_data);
         if (!self || !channel_utf8)
             return;
+        loader::context_runtime_lease invocation(self->i.context_lifetime.lock());
+        if (self->i.cfg.ctx && !invocation)
+            return;
+        cs_guard g(self->i);
         cb_box* target = nullptr;
         if (const auto found = self->engine_channels.find(channel_utf8);
             found != self->engine_channels.end())
             target = found->second;
         if (!target || !target->i || !target->fn)
             return;
-        cs_guard g(*target->i);
         try {
             const std::string text(
                 reinterpret_cast<const char*>(payload_utf8),
@@ -1931,8 +1951,11 @@ struct ctx_builder {
         for (const auto& mname : mod->member_names()) {
             script::script_value_ptr v;
             std::string err;
-            if (mod->get(mname, &v, &err) == 0 && v &&
-                v->k == script::script_value::kind::function) {
+            const int32_t status = mod->get(mname, &v, &err);
+            if (status != SAO_OK)
+                i.raise_exc("InvalidOperationException", "load_local member " + mname +
+                            " failed with status " + std::to_string(status) + ": " + err, {});
+            if (v && v->k == script::script_value::kind::function) {
                 dict_set(pd, cs_str(mname),
                          cs_builtin(
                              mname,
@@ -1977,6 +2000,9 @@ struct ctx_builder {
             return script::script_value::make_number(as_float(v)->v);
         case cs_kind::string:
             return script::script_value::make_string(as_str(v)->v);
+        case cs_kind::guid:
+            return script::script_value::make_string(
+                cs_guid_format(as_guid(v)->bytes));
         case cs_kind::array: {
             std::vector<script::script_value_ptr> items;
             for (const auto& x : as_array(v)->v)
@@ -2213,6 +2239,10 @@ const char* const k_surface_names[] = {
 
 // ── public entry: build ctx object bound to interpreter cfg ───────────
 CsRef csmini_make_ctx(interpreter& i) {
+    loader::context_runtime_lease invocation(i.cfg.ctx);
+    if (i.cfg.ctx && !invocation)
+        i.raise_exc("InvalidOperationException", "plugin context is retired", {});
+    i.context_lifetime = invocation.state();
     // heap-allocated + anchored: method lambdas in build() capture the raw
     // `this`, so the builder must outlive the ctx dict.
     auto b = std::make_shared<ctx_builder>(i);

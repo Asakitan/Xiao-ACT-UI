@@ -563,7 +563,15 @@ struct lexer {
                     out.push_back({tok_kind::dot, {}, 0, 0.0, at});
                 }
                 break;
-            case ':': get(); out.push_back({tok_kind::colon, {}, 0, 0.0, at}); break;
+            case ':':
+                get();
+                if (peek() == '=') {
+                    get();
+                    out.push_back({tok_kind::walrus, {}, 0, 0.0, at});
+                } else {
+                    out.push_back({tok_kind::colon, {}, 0, 0.0, at});
+                }
+                break;
             case '@':
                 get();
                 if (peek() == '=') { get(); out.push_back({tok_kind::at_eq, {}, 0, 0.0, at}); }

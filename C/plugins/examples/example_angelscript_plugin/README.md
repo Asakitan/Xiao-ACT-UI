@@ -15,21 +15,14 @@ C++ 平台用真 SDK, 因此你能:
 
 ## SDK 命名
 
-因为 AngelScript 静态类型限制, ctx 方法用后缀区分类型:
-- ``get_setting_str(key, default)`` — 返回 string
-- ``get_setting_int(key, default)`` — 返回 int
-- ``get_setting_bool(key, default)`` — 返回 bool
-- ``ui_panel(title, array<UiNode@>&)`` — 返回 UiNode@
-- ``ui_section(title, ...)``
-- ``ui_kv(key, value)``
-- ``ui_button(label, action_id, style)``
-- ``notify(title, message, duration_s)`` — void
-
-Python 平台的 ``.as`` 子集脚本 (无强类型) 也能加载, 但享受不到静态类型
-的编译期错误检查。
+当前绑定以 `angel_host/src/as_ctx_surface.cpp` 和 `as_stdlib.cpp` 为准：
+- `ctx.get_setting(key, default)` 返回 `json@`，其 `opImplConv` 支持赋给 string 等标量。
+- `ctx.ui.panel(title, children)`、`section`、`row`、`kv`、`button` 返回 `dictionary@`。
+- UI 子节点使用 `array<dictionary@>`，不是 `UiNode`。
+- `ctx.notify(title, message, duration_s)` 返回 bool。
+- `on_load(PluginContext@ c)` 保存 ctx；其余生命周期 hook 为无参数自由函数。
 
 ## 从 Python 平台迁移
 
-``python/plugins/example_angelscript_plugin/plugin.as`` 可直接搬, 但如果
-用了 ``dictionary`` 弱类型 (Python 侧手写解释器允许), 建议改成 typed
-版本以享受编译期检查。
+旧脚本须按真实 AngelScript 编译器和当前 ctx 注册声明核对语法、类型及回调签名；
+旧解释器接受的写法不代表本宿主全部接受。本例保留面板、问候与计数功能；运行效果由实际宿主验证。

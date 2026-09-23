@@ -225,6 +225,9 @@ CsRef interpreter::subscript_get(const CsRef& obj, const CsRef& index,
         raise_exc("NullReferenceException", "index on null", pos);
     }
     if (auto* arr = as_array(obj)) {
+        if (arr->is_set())
+            raise_exc("InvalidOperationException",
+                      "HashSet does not support indexing", pos);
         bool ok = false;
         const int64_t i = cs_to_int(index, &ok);
         if (!ok || i < 0 || static_cast<std::size_t>(i) >= arr->v.size())
@@ -267,6 +270,9 @@ void interpreter::subscript_set(const CsRef& obj, const CsRef& index,
     if (!obj)
         raise_exc("NullReferenceException", "index-set on null", pos);
     if (auto* arr = as_array(obj)) {
+        if (arr->is_set())
+            raise_exc("InvalidOperationException",
+                      "HashSet does not support indexed assignment", pos);
         bool ok = false;
         const int64_t i = cs_to_int(index, &ok);
         if (!ok || i < 0 || static_cast<std::size_t>(i) >= arr->v.size())
@@ -301,8 +307,8 @@ CsRef interpreter::assign_target(ast_expr* target, CsRef value, frame& f) {
             }
             if (auto* co = f.class_ref ? as_class(f.class_ref) : nullptr) {
                 if (dict_get(as_dict(co->attrs), cs_str(target->name))) {
-                    dict_set(as_dict(co->attrs), cs_str(target->name), value);
-                    return value;
+                    if (setattr(f.class_ref, target->name, value))
+                        return value;
                 }
             }
             if (dict_get(as_dict(globals), cs_str(target->name))) {

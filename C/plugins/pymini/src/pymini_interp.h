@@ -16,6 +16,7 @@
 
 namespace sao::plugins::loader {
 struct plugin_context_s;
+struct context_runtime_state;
 typedef plugin_context_s plugin_context_t;
 }
 
@@ -48,6 +49,8 @@ struct frame {
     uint32_t line = 0;                            // current line (diagnostics)
     bool in_class_body = false;
     frame* caller = nullptr;
+    frame* named_expr_scope = nullptr;
+    std::vector<PyRef>* yield_sink = nullptr;
 };
 
 // ── interpreter ───────────────────────────────────────────────────────────
@@ -72,7 +75,8 @@ class interpreter {
     // ── modules ──
     PyRef exec_module_source(const std::string& logical_name,
                              const std::string& file_utf8,
-                             std::string_view source);
+                             std::string_view source,
+                             PyRef prepared_module = {});
     PyRef import_dotted(const std::string& dotted, frame* from,
                         int level = 0);
     PyRef import_from(PyRef module, const std::string& name);
@@ -82,6 +86,7 @@ class interpreter {
     PyRef eval(const ast_expr* e, frame& f);
     void exec(const ast_stmt* s, frame& f);
     void exec_body(const std::vector<stmt_ptr>& body, frame& f);
+    void emit_yield(frame& f, PyRef value, src_pos pos);
     PyRef call(const PyRef& callable, const py_args& args, src_pos pos = {});
     PyRef call0(const PyRef& callable, src_pos pos = {});   // no args
     PyRef call1(const PyRef& callable, PyRef a, src_pos pos = {});
@@ -141,6 +146,7 @@ class interpreter {
     PyRef sys_modules;                        // dict: name→module
     std::vector<PyRef> pending;               // module exec stack (import reentry)
     config cfg;
+    std::weak_ptr<loader::context_runtime_state> context_lifetime;
     std::recursive_mutex gil;
     frame* cur_frame = nullptr;
     uint32_t call_depth = 0;
@@ -157,8 +163,7 @@ class interpreter {
                                const std::string& package = {});
     void register_module(PyRef module);       // sys.modules[name] = m
 
-    // unsupported-feature table used by preflight (import roots that can only
-    // be satisfied by a real CPython).
+    // Known external dependencies, checked only after native/local resolution.
     static const std::unordered_set<std::string>& cpython_only_roots();
 };
 
@@ -174,10 +179,17 @@ void pymini_register_stdlib_factories_2(interpreter& i);
 void pymini_install_builtins(interpreter& i);
 // ctx object bound to `i.cfg` — defined in pymini_ctx.cpp.
 PyRef pymini_make_ctx(interpreter& i);
-// Cheap lexical subset check (pymini_imports.cpp): false = source needs a
-// cpython-only feature; out_reason names the feature.
+// False denotes a known unsupported feature; malformed input throws py_error.
 bool pymini_preflight_subset(std::string_view src,
                              std::string* out_reason);
+bool pymini_preflight_plugin(const std::wstring& plugin_root,
+                              const std::wstring& entry_rel,
+                              const std::vector<std::wstring>& extra_dirs,
+                              std::string* out_reason);
+std::string pymini_configure_imports(interpreter::config& cfg,
+                                     const std::wstring& plugin_root,
+                                     const std::wstring& entry_rel,
+                                     const std::vector<std::wstring>& extra_dirs);
 // Drops every registered py callback box (host teardown order: loader
 // unregister first, then this, then interpreter destruction).
 void pymini_drop_callbacks(interpreter& i);

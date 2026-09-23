@@ -41,15 +41,79 @@ C++ 平台的 angel_host 走**真 SDK**:
 
 ## 关键设计
 
-**用真 SDK 意味着依赖 vcpkg**: ``unofficial-angelscript``。如果 vcpkg 里
-拿不到, 本 host 用 stub 编译, 无效返回 NOT_IMPLEMENTED。
+**真 SDK 已内嵌**：默认使用仓库中的 ``vendor/angelscript_2.36.1`` 源码，
+运行插件无需另装外部 runtime；配置时找到的 vcpkg/upstream SDK 优先。
+显式强制 fallback 或没有可用 SDK 时才构建返回 NOT_IMPLEMENTED 的 stub。
 
 **每插件一个 asIScriptModule**: 隔离编译, 一个插件的语法错误不影响别的
 plugin 的 module。
 
-## vcpkg 依赖
+## 可选 SDK 来源
 
-- ``unofficial-angelscript`` (真 SDK, 头 + lib)
+- ``unofficial-angelscript`` / upstream Angelscript package（头 + lib）。
+- ``SAO_ANGELSCRIPT_SOURCE_DIR``（离线 SDK 源码；默认指向仓库内嵌版本）。
+
+## Native SDK helper 隔离
+
+共享 runtime bridge 的逻辑名是 ``act_plugin_<plugin_id>__<stem>``；同一文件重复
+``load_local`` 和不同目录同 stem 都得到同一逻辑名。旧 helper 用该名字执行
+``GetModule(..., asGM_ALWAYS_CREATE)``，第二次加载替换第一次的模块；旧代理析构又
+按相同名字 ``DiscardModule``，会删除新代理使用的模块。
+
+``as_ctx_surface.cpp`` 现在为每个 helper 分配独立 ``sao_local_helper_g<N>`` 物理名，
+``module_id()`` 仍返回原逻辑名。分配、查找、调用和析构均持有 execution guard；
+序号到达 ``uint64_t`` 上限后报错，不回绕复用，已占用物理名直接跳过。
+创建前建立 RAII owner，构建、绑定或后续分配失败只清理本实例；析构和访问都核对
+模块指针。原生 ``get`` 产生的函数值持有 helper owner，避免代理释放后函数失去模块。
+
+helper 与入口一样执行 legacy source rewrite、条件注入 ``PluginContext@ ctx`` 和
+``sao_engine`` preamble，并检查 context 绑定结果；调用携带原 plugin userdata，
+保留嵌套 ``load_local`` 的 owner。没有新增 loader-live 状态门槛。
+编译错误携带源文件 section、行列和 SDK 消息；执行异常沿现有 exception formatter
+保留函数、位置与异常文本，``LocalModule.call/get`` 的失败转成脚本异常。
+共享 missing / unsupported / path_only 成功空模块语义保持不变。
+
+源码核对发现入口与 helper 都直接 ``AddScriptSection``，没有 ``#include`` 文件预处理；
+本切片没有变更入口编译器或引入 include loader，fixture 使用实际支持的
+``ctx.load_local``，不宣称 ``#include`` 兼容。
+
+### 成功 fixture 与断言
+
+``tools/provider_probe/fixture/native_sdk/angelscript/``（相对原生构建根）只有根
+``plugin.json``，ID 为 ``sdk_angel``、language 为 ``angelscript``、enabled 为 true。
+入口 ``plugin.as`` 在 ``on_load`` 内依次验证：
+
+- 同一 counter helper 重复加载后旧状态保留、新状态独立，逻辑 ID 不变。
+- 先释放新代理再调用旧代理，以及重新加载后释放旧代理再调用新代理。
+- ``left/shared.as`` 与 ``right/shared.as`` 同 stem、不同初值和 origin，互不替换；
+	两种释放顺序后幸存代理均可继续调用。
+- 显式声明和自动注入的 helper ``ctx`` 均继承入口路径；helper 内嵌套加载也保留 owner。
+- ``LocalModule.call/get`` 返回 ``json@``，标量断言用实际 ``stringify()`` API，
+	没有假定不存在的 ``as_int`` 或直接函数代理 API。
+
+断言先记录 ``SDK_ANGEL_ASSERT_FAIL <label>``，再故意执行 ``json_parse("{")``
+触发现有 JSON 异常，终止 hook；全部断言且显式代理释放完成后才输出：
+
+```text
+SDK_ANGEL_NATIVE_OK repeated=isolated siblings=isolated release=both_orders owner=inherited
+```
+
+### 后续错误场景建议
+
+- helper 语法错误、缺 include 文件或不支持的 ``#include``：应保留编译行列与文本，
+	不转成 missing/unsupported，也不执行另一 provider。
+- helper 内无效 JSON、越界访问或其他执行异常：应终止入口 hook，保留 helper 函数与位置，
+	不出现成功 marker。
+- 文件解析后消失、读失败、绑定失败、已有同名物理模块、序号耗尽：应失败或跳过占用名，
+	既存 helper 不被删除，失败构建不遗留本实例模块。
+- missing/unsupported/path_only：仍按共享成功空模块合同验证，不将其当作执行异常。
+- 原生函数值持有 helper 后释放外层代理、最终函数值释放和 host teardown：单独验证
+	owner 生命周期；AS ``get`` 的函数值 JSON 转换不等于可调用的脚本函数句柄。
+
+session-81 审阅补修后定向 Debug 与 provider888/0 已通过；三种 runtime 配置下实际输出成功
+marker，重复/同名 helper、双释放顺序与嵌套 ctx 均完成，且无 Python/.NET DLL。
+helper 编译与 JSON 执行异常都保留终止诊断，独立原生插件继续，正常 shutdown=0。
+文件竞态、序号耗尽、故障注入和一般并发退休未实测。
 
 ## 历史测试（2026-08-23 已删除）
 

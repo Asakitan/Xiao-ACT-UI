@@ -3,8 +3,7 @@
 //
 // Scope model: flat locals chain per method frame — each block pushes a
 // scope node; name resolution walks scope → this members → class statics →
-// module globals → builtins.  C# needs no closures in the subset (no
-// lambdas/nested functions).
+// module globals → builtins. Lambda frames retain their lexical scope node.
 //
 // Control flow: C++ exceptions carry signals —
 //   sig_raise{exc CsRef}, sig_return{value}, sig_break, sig_continue.
@@ -17,6 +16,7 @@
 
 namespace sao::plugins::loader {
 struct plugin_context_s;
+struct context_runtime_state;
 typedef plugin_context_s plugin_context_t;
 }
 
@@ -51,6 +51,7 @@ struct frame {
     std::string file;
     uint32_t line = 0;                          // current line (diagnostics)
     frame* caller = nullptr;
+    std::shared_ptr<void> anchor;
 };
 
 // ── interpreter ───────────────────────────────────────────────────────────
@@ -138,6 +139,7 @@ class interpreter {
     CsRef globals;                            // module dict (CsDictObj)
     std::unordered_set<std::string> features; // out-of-subset features hit
     config cfg;
+    std::weak_ptr<loader::context_runtime_state> context_lifetime;
     std::recursive_mutex gil;
     frame* cur_frame = nullptr;
     uint32_t call_depth = 0;
@@ -163,6 +165,13 @@ void csmini_install_stdlib2(interpreter& i);    // csmini_stdlib2.cpp extras
 // member access without an interpreter-owned instance.
 CsRef csmini_value_member(interpreter& i, const CsRef& obj,
                           const std::string& name, bool* found);
+CsRef csmini_value_callable_member(interpreter& i, const CsRef& obj,
+                                   const std::string& name, bool* found);
+CsRef csmini_enumerable_call(interpreter& i, std::string_view name,
+                             const CsRef& source, const cs_args& args);
+CsRef csmini_make_task(CsRef result, bool value_task = false);
+CsRef csmini_await_value(interpreter& i, const CsRef& value,
+                         src_pos pos = {});
 // ctx object bound to `i.cfg` — defined in csmini_ctx.cpp.
 CsRef csmini_make_ctx(interpreter& i);
 // Drops every registered cs callback box (host teardown order: loader

@@ -8,7 +8,7 @@
   "enabled": false,
   "capabilities": [
     "plugin_manager",
-    {"id": "ui_panels", "title": "Lua Demo", "actions": ["greet", "count"]}
+    {"id": "ui_panels", "title": "Lua Demo", "actions": ["greet", "count", "timer_toggle"]}
   ],
   "permissions": [],
   "settings_schema": {

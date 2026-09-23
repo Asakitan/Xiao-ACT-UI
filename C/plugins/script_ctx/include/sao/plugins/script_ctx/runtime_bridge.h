@@ -7,19 +7,15 @@
 // ``sao_plugins_ctx_load_local`` path form.
 //
 // Dispatch: files route by extension through a registry of *engine providers*
-// (`script_engine_ops`).  Each host registers a provider for its own language;
-// the python slot registers pymini (priority 10) and, when a real CPython is
-// embedded, python_host (priority 90) — the lowest-priority provider that can
-// `probe` the file wins; `probe` decline advances to the next provider.
-// With no provider able to load, load_local degrades to `unsupported`: the
-// host maps that to `nil`/`None`/`null` + a `missing_runtime` diagnostic log —
-// matching the old platform's graceful path (plugins nil-guard).
+// (`script_engine_ops`).  Hosts register the providers they implement;
+// providers are tried in priority order; only an unsupported preflight advances.
+// Missing runtimes remain `unsupported`; execution failures return a nonzero status.
 //
 // Script-module contract: a provider returns `script_module` (refcounted via
 // shared_ptr).  The module bound ctx is the *caller's* plugin_context_t —
 // helper modules act on behalf of the plugin that loaded them.  The module
-// becomes invalid once that context is destroyed; hosts must drop proxies on
-// plugin unload (their own interpreter teardown already does this).
+// becomes invalid once that context is destroyed.
+// Loader-owned retirement drains registrations before releasing mini helpers.
 #pragma once
 
 #include <cstdint>
@@ -133,9 +129,8 @@ struct script_engine_ops {
     const char* engine_name_utf8;                                   // "pymini", "lua", …
     uint32_t priority;                    // lower probes first (pymini=10)
     const char* const* extensions_utf8;   // {"py", nullptr} — no dot, lowercase
-    // Cheap capability check.  Return true if this engine can load `abs_path`.
-    // `note` optionally carries why it cannot (feature list for diagnostics).
-    bool (*probe)(loader::plugin_context_t* ctx,
+    // Only SAO_ERR_NOT_IMPLEMENTED permits fallback; other nonzero statuses are terminal.
+    int32_t (*probe)(loader::plugin_context_t* ctx,
                   const wchar_t* abs_path,
                   std::string& note,
                   void* user_data) noexcept;
@@ -157,17 +152,21 @@ int32_t runtime_bridge_unregister(const script_engine_ops* ops) noexcept;
 enum class load_local_result : int32_t {
     module = 0,       // *out_module holds a callable module
     path_only = 1,    // non-script payload → *out_abs_path
-    missing = 2,      // path resolution failed → *out_diag
+    missing = 2,      // contained file is absent → *out_diag
     unsupported = 3,  // script file but every provider declined → *out_diag
+    failed = 4,       // nonzero status; no module was published
 };
 
-// Resolve `rel_path_utf8` inside `plugin_root_dir` (containment enforced —
-// `..`/absolute escape → missing), then dispatch:
-//   - non-script extension                → path_only
-//   - script extension, provider probe ok → module via provider
-//   - no provider                          → unsupported (+diag)
-// Returns SAO_OK for all four outcomes; result kind discriminates.
-// `out_diag` is always populated on non-module results worth reporting.
+// Existing files resolve to an absolute path; only absence returns OK with exists=false.
+int32_t runtime_bridge_resolve_local(const wchar_t* plugin_root_dir,
+                                    const char* rel_path_utf8,
+                                    std::wstring* out_abs_path,
+                                    bool* out_exists,
+                                    std::string* out_diag) noexcept;
+
+// OK: module, non-script path_only, missing, or unsupported (no accepting provider).
+// Invalid paths, I/O/internal errors and execution failures return nonzero + failed.
+// A selected provider's load result is terminal, including NOT_IMPLEMENTED.
 int32_t runtime_bridge_load_local(loader::plugin_context_t* ctx,
                                   const char* plugin_id_utf8,
                                   const wchar_t* plugin_root_dir,
@@ -177,7 +176,7 @@ int32_t runtime_bridge_load_local(loader::plugin_context_t* ctx,
                                   std::wstring* out_abs_path,
                                   std::string* out_diag) noexcept;
 
-// Extension is a script extension iff some registered provider lists it.
+// Built-in py/lua/emma/as/cs families remain scripts without registered providers.
 bool runtime_bridge_is_script_extension(const std::string& ext_no_dot_lower) noexcept;
 
 } // namespace sao::plugins::script_ctx

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "entry": "plugin.emma",
   "language": "emma",
-  "description": "Emma 插件示例。零依赖内置脚本语言, 语法类 Python, 可调用全部平台 API。",
+  "description": "Emma 插件示例。内置脚本语言，演示已绑定的面板、设置、事件与计时器 API。",
   "enabled": false,
   "capabilities": [
     "plugin_manager",

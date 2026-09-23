@@ -7,11 +7,20 @@
 // fast paths in interpreter::new_instance_eval before facade lookup.
 #include "csmini_interp.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
+#include <thread>
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <bcrypt.h>
+#else
+#include <random>
+#endif
 
 namespace sao::plugins::csmini {
 namespace {
@@ -116,6 +125,68 @@ nn parse_int_fn(bool floating_ok) {
 }
 
 } // namespace
+
+CsRef csmini_make_task(CsRef result, bool value_task) {
+    CsRef task = cs_native(value_task ? "System.Threading.Tasks.ValueTask"
+                                      : "System.Threading.Tasks.Task",
+                           false);
+    CsRef awaiter = cs_native(value_task
+                                  ? "System.Runtime.CompilerServices.ValueTaskAwaiter"
+                                  : "System.Runtime.CompilerServices.TaskAwaiter",
+                              false);
+    put(awaiter, "IsCompleted", cs_true());
+    put(awaiter, "GetResult",
+        cs_builtin("TaskAwaiter.GetResult",
+                   [result](interpreter&, const cs_args&) { return result; }));
+    put(task, "Result", result);
+    put(task, "IsCompleted", cs_true());
+    put(task, "IsCompletedSuccessfully", cs_true());
+    put(task, "IsFaulted", cs_false());
+    put(task, "IsCanceled", cs_false());
+    put(task, "GetAwaiter",
+        cs_builtin("Task.GetAwaiter",
+                   [awaiter](interpreter&, const cs_args&) { return awaiter; }));
+    put(task, "GetResult",
+        cs_builtin("Task.GetResult",
+                   [result](interpreter&, const cs_args&) { return result; }));
+    if (value_task) {
+        put(task, "AsTask",
+            cs_builtin("ValueTask.AsTask",
+                       [result](interpreter&, const cs_args&) {
+                           return csmini_make_task(result, false);
+                       }));
+    }
+    put(task, "ContinueWith",
+        cs_builtin("Task.ContinueWith",
+                   [](interpreter& i, const cs_args&) -> CsRef {
+                       i.record_feature("async_continuations");
+                       i.raise_exc("NotSupportedException",
+                                   "Task continuations are outside async-lite");
+                   }));
+    put(task, "ConfigureAwait",
+        cs_builtin("Task.ConfigureAwait",
+                   [](interpreter& i, const cs_args&) -> CsRef {
+                       i.record_feature("async_continuations");
+                       i.raise_exc("NotSupportedException",
+                                   "Task continuations are outside async-lite");
+                   }));
+    return task;
+}
+
+CsRef csmini_await_value(interpreter& i, const CsRef& value, src_pos pos) {
+    if (!value || value->kind != cs_kind::native_obj)
+        return value ? value : cs_null();
+    bool found = false;
+    CsRef get_awaiter = i.getattr(value, "GetAwaiter", &found);
+    if (!found || !get_awaiter)
+        return value;
+    CsRef awaiter = i.call0(get_awaiter, pos);
+    CsRef get_result = i.getattr(awaiter, "GetResult", &found);
+    if (!found || !get_result)
+        i.raise_exc("InvalidOperationException",
+                    "awaiter has no synchronous GetResult", pos);
+    return i.call0(get_result, pos);
+}
 
 void csmini_install_builtins(interpreter& i) {
     auto* g = as_dict(i.globals);
@@ -594,18 +665,131 @@ void csmini_install_builtins(interpreter& i) {
            cs_native("System.Collections.Generic.Dictionary`2", false));
     inject("HashSet", cs_native("System.Collections.Generic.HashSet`1", false));
 
-    // ── Guid → hard NO (feature "guid") ────────────────────────────────
+    // ── LINQ Enumerable facade ─────────────────────────────────────────
+    {
+        CsRef enumerable = cs_native("System.Linq.Enumerable", false);
+        static constexpr const char* methods[] = {
+            "Where", "Select", "Any", "All", "First", "FirstOrDefault",
+            "Last", "LastOrDefault", "Count", "ToList", "ToArray", "Sum",
+            "Min", "Max", "Distinct", "Take", "Skip", "OrderBy",
+            "OrderByDescending",
+        };
+        for (const char* method : methods) {
+            putfn(enumerable, method,
+                  [method](interpreter& interp, const cs_args& args) {
+                      if (args.pos.empty())
+                          interp.raise_exc(
+                              "ArgumentException",
+                              std::string("Enumerable.") + method +
+                                  " requires a source");
+                      cs_args tail;
+                      tail.pos.assign(args.pos.begin() + 1, args.pos.end());
+                      return csmini_enumerable_call(interp, method, args.pos[0],
+                                                    tail);
+                  });
+        }
+        inject("Enumerable", enumerable);
+    }
+
+    // ── synchronous Task / ValueTask ───────────────────────────────────
+    {
+        auto make_task_facade = [](bool value_task) {
+            CsRef facade = cs_native(value_task
+                                         ? "System.Threading.Tasks.ValueTask"
+                                         : "System.Threading.Tasks.Task",
+                                     false);
+            put(facade, "CompletedTask", csmini_make_task(cs_null(), value_task));
+            putfn(facade, "FromResult",
+                  [value_task](interpreter& interp, const cs_args& args) {
+                      if (args.pos.size() != 1)
+                          interp.raise_exc("ArgumentException",
+                                           "FromResult expects one value");
+                      return csmini_make_task(args.pos[0], value_task);
+                  });
+            return facade;
+        };
+        CsRef task = make_task_facade(false);
+        putfn(task, "Delay", [](interpreter& interp, const cs_args& args) {
+            if (args.pos.size() != 1)
+                interp.raise_exc("ArgumentException", "Task.Delay expects milliseconds");
+            const int64_t requested = int_arg(interp, args.pos[0], "milliseconds");
+            if (requested < 0)
+                interp.raise_exc("ArgumentOutOfRangeException",
+                                 "Task.Delay milliseconds must be nonnegative");
+            constexpr int64_t maximum_delay_ms = 250;
+            if (requested > maximum_delay_ms) {
+                interp.record_feature("async_continuations");
+                interp.raise_exc("NotSupportedException",
+                                 "Task.Delay exceeds synchronous async-lite limit");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(requested));
+            return csmini_make_task(cs_null(), false);
+        });
+        putfn(task, "WhenAll", [](interpreter& interp, const cs_args& args) {
+            std::vector<CsRef> tasks;
+            if (args.pos.size() == 1 && as_array(args.pos[0]))
+                tasks = as_array(args.pos[0])->v;
+            else
+                tasks = args.pos;
+            if (tasks.size() > k_max_collection_items)
+                interp.raise_exc("InvalidOperationException",
+                                 "Task.WhenAll exceeds csmini collection limit");
+            auto results = cs_array();
+            as_array(results)->v.reserve(tasks.size());
+            for (const CsRef& pending : tasks)
+                as_array(results)->v.push_back(
+                    csmini_await_value(interp, pending));
+            return csmini_make_task(results, false);
+        });
+        putfn(task, "Run", [](interpreter& interp, const cs_args&) -> CsRef {
+            interp.record_feature("async_continuations");
+            interp.raise_exc("NotSupportedException",
+                             "Task.Run is outside synchronous async-lite");
+        });
+        CsRef value_task = make_task_facade(true);
+        inject("Task", task);
+        inject("ValueTask", value_task);
+    }
+
+    // ── Guid ───────────────────────────────────────────────────────────
     {
         CsRef gd = cs_native("System.Guid", false);
-        putfn(gd, "NewGuid", [](interpreter& i, const cs_args&) -> CsRef {
-            i.record_feature("guid");
-            i.raise_exc("NotSupportedException",
-                        "Guid is outside the csmini subset (feature 'guid')");
+        put(gd, "Empty", cs_guid({}));
+        putfn(gd, "NewGuid", [](interpreter& interp, const cs_args& args) -> CsRef {
+            if (!args.pos.empty())
+                interp.raise_exc("ArgumentException", "Guid.NewGuid takes no arguments");
+            std::array<uint8_t, 16> bytes{};
+#if defined(_WIN32)
+            if (BCryptGenRandom(nullptr, bytes.data(),
+                                static_cast<ULONG>(bytes.size()),
+                                BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+                interp.raise_exc("InvalidOperationException",
+                                 "system random generator failed");
+#else
+            std::random_device random;
+            for (uint8_t& byte : bytes)
+                byte = static_cast<uint8_t>(random());
+#endif
+            bytes[6] = static_cast<uint8_t>((bytes[6] & 0x0f) | 0x40);
+            bytes[8] = static_cast<uint8_t>((bytes[8] & 0x3f) | 0x80);
+            return cs_guid(bytes);
         });
-        putfn(gd, "Parse", [](interpreter& i, const cs_args&) -> CsRef {
-            i.record_feature("guid");
-            i.raise_exc("NotSupportedException",
-                        "Guid is outside the csmini subset (feature 'guid')");
+        putfn(gd, "Parse", [](interpreter& interp, const cs_args& args) -> CsRef {
+            if (args.pos.size() != 1 || !as_str(args.pos[0]))
+                interp.raise_exc("ArgumentException", "Guid.Parse expects a string");
+            std::array<uint8_t, 16> bytes{};
+            if (!cs_guid_parse(as_str(args.pos[0])->v, &bytes))
+                interp.raise_exc("FormatException", "invalid Guid format");
+            return cs_guid(bytes);
+        });
+        putfn(gd, "TryParse", [](interpreter& interp, const cs_args& args) {
+            if (args.pos.size() != 1)
+                interp.raise_exc(
+                    "ArgumentException",
+                    "csmini Guid.TryParse(string) expects one argument");
+            std::array<uint8_t, 16> bytes{};
+            return cs_bool(as_str(args.pos[0]) &&
+                           cs_guid_parse(as_str(args.pos[0])->v, &bytes));
         });
         inject("Guid", gd);
     }
@@ -627,6 +811,8 @@ void csmini_install_builtins(interpreter& i) {
         link("NotSupportedException", "NotSupportedException");
         link("ArgumentException", "ArgumentException");
         link("Guid", "Guid");
+        link("Task", "Task");
+        link("ValueTask", "ValueTask");
         link("Int32", "Int32");
         link("Int64", "Int64");
         link("Double", "Double");
@@ -646,6 +832,15 @@ void csmini_install_builtins(interpreter& i) {
             cs_native("System.Collections.Generic.KeyValuePair`2", false));
         put(coll, "Generic", gen);
         put(sys, "Collections", coll);
+        CsRef linq = cs_native("System.Linq", false);
+        put(linq, "Enumerable", dict_get(g, cs_str("Enumerable")));
+        put(sys, "Linq", linq);
+        CsRef threading = cs_native("System.Threading", false);
+        CsRef tasks = cs_native("System.Threading.Tasks", false);
+        put(tasks, "Task", dict_get(g, cs_str("Task")));
+        put(tasks, "ValueTask", dict_get(g, cs_str("ValueTask")));
+        put(threading, "Tasks", tasks);
+        put(sys, "Threading", threading);
         CsRef text = cs_native("System.Text", false);
         CsRef json = cs_native("System.Text.Json", false);
         put(text, "Json", json);

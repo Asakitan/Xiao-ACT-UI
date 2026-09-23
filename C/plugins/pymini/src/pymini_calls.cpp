@@ -4,9 +4,10 @@
 namespace sao::plugins::pymini {
 
 // ── call ──────────────────────────────────────────────────────────────────
-PyRef interpreter::call(const PyRef& callable, const py_args& args,
+PyRef interpreter::call(const PyRef& borrowed_callable, const py_args& args,
                         src_pos pos) {
     gil_guard g(*this);
+    const PyRef callable = borrowed_callable;
     if (callable == nullptr)
         raise_exc("TypeError", "NoneType object is not callable", pos);
     switch (callable->kind) {
@@ -37,6 +38,9 @@ PyRef interpreter::call(const PyRef& callable, const py_args& args,
         cf.caller = cur_frame;
         collect_scope_decls(fn->body, cf);
         bind_param_frame(cf, fn, args, pos);
+        std::vector<PyRef> yielded;
+        if (fn->is_generator)
+            cf.yield_sink = &yielded;
         frame* saved = cur_frame;
         cur_frame = &cf;
         struct fr_guard {
@@ -47,8 +51,12 @@ PyRef interpreter::call(const PyRef& callable, const py_args& args,
         try {
             exec_body(fn->body, cf);
         } catch (const sig_return& r) {
+            if (fn->is_generator)
+                return iter(py_list(std::move(yielded)));
             return r.value;
         }
+        if (fn->is_generator)
+            return iter(py_list(std::move(yielded)));
         return py_none();
     }
     case py_kind::staticmethod_: {

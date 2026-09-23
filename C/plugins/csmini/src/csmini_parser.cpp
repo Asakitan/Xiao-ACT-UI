@@ -11,6 +11,7 @@
 //                 → primary (literal/name/this/new/cast/typeof/interp)
 #include "csmini_parser.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace sao::plugins::csmini {
@@ -39,7 +40,7 @@ struct parser {
     std::size_t p = 0;
 
     const token& cur() const { return toks[p]; }
-    const token& at(std::size_t k) const { return toks[(std::min)(p + k, toks.size() - 1)]; }
+    const token& at(std::size_t k) const { return toks[p + (std::min)(k, toks.size() - 1 - p)]; }
     bool eof() const { return cur().kind == tok_kind::eof_; }
     src_pos pos() const { return cur().pos; }
     bool is(tok_kind k) const { return cur().kind == k; }
@@ -47,7 +48,17 @@ struct parser {
         return cur().kind == tok_kind::keyword && cur().text == w;
     }
     bool is_name(std::string_view w) const {
-        return cur().kind == tok_kind::name && cur().text == w;
+        return identifier(cur()) && cur().text == w;
+    }
+    static bool identifier(const token& t) {
+        static const std::unordered_set<std::string_view> contextual = {
+            "var", "dynamic", "nameof", "partial", "async", "await",
+            "get", "set", "init", "value", "where", "select", "from",
+            "join", "orderby", "group", "into", "let", "yield", "record",
+            "required", "nint", "nuint", "scoped", "file",
+        };
+        return t.kind == tok_kind::name ||
+               (t.kind == tok_kind::keyword && contextual.count(t.text));
     }
     void adv() { if (!eof()) ++p; }
     [[noreturn]] void fail(const std::string& msg, src_pos pos = {}) {
@@ -66,6 +77,16 @@ struct parser {
                     return;
             flags->unsupported.push_back(std::move(f));
         }
+    }
+    [[noreturn]] void unsupported(const char* feature) {
+        note_feature(feature);
+        cs_error e;
+        e.kind = "UnsupportedFeature";
+        e.message = std::string("unsupported C# subset feature: ") + feature;
+        e.file = file;
+        e.pos = pos();
+        e.features.push_back(feature);
+        throw e;
     }
     bool take(tok_kind k) {
         if (is(k)) {
@@ -86,7 +107,7 @@ struct parser {
             fail(std::string("expected ") + what);
     }
     const token& expect_name(const char* what = "identifier") {
-        if (!is(tok_kind::name))
+        if (!identifier(cur()))
             fail(std::string("expected ") + what);
         const token& t = cur();
         adv();
@@ -112,7 +133,7 @@ struct parser {
     // don't form one.  Used by decl detection and casts.
     bool type_token_start(std::size_t k) const {
         const token& t = at(k);
-        if (t.kind == tok_kind::name)
+        if (identifier(t))
             return true;
         if (t.kind == tok_kind::keyword) {
             static const std::unordered_set<std::string_view> type_kws = {
@@ -240,19 +261,22 @@ struct parser {
             adv();
             note_feature("using_static");
         }
-        if (is(tok_kind::name) && at(1).kind == tok_kind::assign) {
+        if (identifier(cur()) && at(1).kind == tok_kind::assign) {
             // using X = Y.Z — alias
             adv();
             adv();
             std::string path = dotted_name();
+            if (path.empty())
+                fail("expected using alias target");
             prog.using_aliases.push_back(std::move(path));
             note_feature("using_alias");
             expect(tok_kind::semicolon, "';'");
             return;
         }
         std::string path = dotted_name();
-        if (!path.empty())
-            prog.usings.push_back(path);
+        if (path.empty())
+            fail("expected namespace after using");
+        prog.usings.push_back(path);
         expect(tok_kind::semicolon, "';' after using");
     }
 
@@ -275,6 +299,8 @@ struct parser {
     void ns_decl(ast_program& prog, const std::string& outer) {
         adv();  // namespace
         std::string ns = dotted_name();
+        if (ns.empty())
+            fail("expected namespace name");
         if (!outer.empty())
             ns = outer + (ns.empty() ? "" : ".") + ns;
         if (take(tok_kind::semicolon)) {
@@ -298,13 +324,71 @@ struct parser {
         expect(tok_kind::rbrace, "'}' after namespace");
     }
 
-    // attribute list — record feature + skip `[...]` (multiple allowed).
+    static bool metadata_only_attribute(std::string_view name) {
+        const auto dot = name.rfind('.');
+        if (dot != std::string_view::npos)
+            name.remove_prefix(dot + 1);
+        constexpr std::string_view suffix = "Attribute";
+        if (name.size() > suffix.size() && name.ends_with(suffix))
+            name.remove_suffix(suffix.size());
+        static const std::unordered_set<std::string_view> allowed = {
+            "Browsable", "Category", "CompilerGenerated", "DebuggerDisplay",
+            "DebuggerNonUserCode", "DebuggerStepThrough", "Description",
+            "DisplayName", "EditorBrowsable", "ExcludeFromCodeCoverage",
+            "GeneratedCode", "Obsolete", "Serializable", "SuppressMessage",
+        };
+        return allowed.count(name) != 0;
+    }
+
     void skip_attributes() {
         while (is(tok_kind::lbracket)) {
-            // attribute lists occur at member/decl level — an `[` that is
-            // array-index syntax never reaches this spot (this is only
-            // called where a member/decl starts).
-            note_feature("attributes");
+            std::size_t scan = p + 1;
+            int square = 1;
+            int paren = 0;
+            int brace = 0;
+            bool expect_name = true;
+            while (scan < toks.size() && square > 0) {
+                const token& current = toks[scan];
+                if (square == 1 && paren == 0 && brace == 0 && expect_name) {
+                    if (!identifier(current))
+                        fail("expected attribute name", current.pos);
+                    std::string name = current.text;
+                    ++scan;
+                    while (scan + 1 < toks.size() &&
+                           toks[scan].kind == tok_kind::dot &&
+                           identifier(toks[scan + 1])) {
+                        name += "." + toks[scan + 1].text;
+                        scan += 2;
+                    }
+                    if (scan < toks.size() &&
+                        toks[scan].kind == tok_kind::colon)
+                        unsupported("attribute_targets");
+                    if (!metadata_only_attribute(name))
+                        unsupported("runtime_attributes");
+                    expect_name = false;
+                    continue;
+                }
+                if (current.kind == tok_kind::eof_)
+                    fail("unterminated attribute list", current.pos);
+                if (current.kind == tok_kind::lbracket)
+                    ++square;
+                else if (current.kind == tok_kind::rbracket)
+                    --square;
+                else if (current.kind == tok_kind::lparen)
+                    ++paren;
+                else if (current.kind == tok_kind::rparen && paren > 0)
+                    --paren;
+                else if (current.kind == tok_kind::lbrace)
+                    ++brace;
+                else if (current.kind == tok_kind::rbrace && brace > 0)
+                    --brace;
+                else if (current.kind == tok_kind::comma && square == 1 &&
+                         paren == 0 && brace == 0)
+                    expect_name = true;
+                ++scan;
+            }
+            if (square != 0)
+                fail("unterminated attribute list");
             int depth = 0;
             do {
                 if (is(tok_kind::lbracket))
@@ -318,42 +402,52 @@ struct parser {
         }
     }
 
-    // declaration-level modifiers: public/private/protected/internal are
-    // consumed silently; sealed/abstract/partial are out-of-subset feature
-    // notes but still consumed; `static class` is also a feature.
-    void skip_decl_modifiers() {
+    bool skip_decl_modifiers() {
+        bool partial = false;
         for (;;) {
             if (take_kw("public") || take_kw("private") ||
                 take_kw("protected") || take_kw("internal"))
                 continue;
-            if (is_kw("sealed") || is_kw("abstract") || is_kw("static") ||
-                is_kw("partial") || is_kw("extern") || is_kw("volatile")) {
+            if (take_kw("static"))
+                continue;
+            if (take_kw("partial")) {
+                partial = true;
+                continue;
+            }
+            if (take_kw("unsafe")) {
+                note_feature("unsafe");
+                continue;
+            }
+            if (take_kw("sealed") || take_kw("abstract"))
+                continue;
+            if (is_kw("extern") || is_kw("volatile")) {
                 note_feature("modifiers");
                 adv();
                 continue;
             }
             break;
         }
+        return partial;
     }
 
     // ── class members ─────────────────────────────────────────────────
     void class_decl(ast_program& prog, const std::string& ns) {
         skip_attributes();
-        skip_decl_modifiers();
+        const bool partial = skip_decl_modifiers();
         bool is_class = take_kw("class");
         if (!is_class) {
             if (is_kw("interface") || is_kw("enum") || is_kw("struct") ||
                 is_kw("record"))
-                note_feature("type_kinds");
+                unsupported("type_kinds");
             else if (is_kw("delegate"))
-                note_feature("delegates");
+                unsupported("delegate_declarations");
             else
                 fail("expected 'class'");
-            adv();
         }
         ast_class cls;
         cls.ns = ns;
         cls.pos = pos();
+        cls.is_partial = partial;
         cls.name = expect_name("class name").text;
         // skip generic params <T,...>
         if (is(tok_kind::lt))
@@ -362,7 +456,8 @@ struct parser {
         if (take(tok_kind::colon)) {
             note_feature("inheritance");
             for (;;) {
-                (void)dotted_name();
+                if (dotted_name().empty())
+                    fail("expected base type");
                 if (is(tok_kind::lt))
                     skip_angle();
                 if (!take(tok_kind::comma))
@@ -370,11 +465,18 @@ struct parser {
             }
         }
         if (is_kw("where"))
-            note_feature("generics");   // where T : constraint
+            unsupported("generics");
         expect(tok_kind::lbrace, "'{' after class name");
         while (!is(tok_kind::rbrace) && !eof())
             member(cls);
         expect(tok_kind::rbrace, "'}' after class body");
+        for (const auto& existing : prog.classes) {
+            if (existing.name == cls.name && existing.ns == cls.ns) {
+                if (existing.is_partial || cls.is_partial)
+                    unsupported("partial_multiple_declarations");
+                fail("duplicate class declaration");
+            }
+        }
         prog.classes.push_back(std::move(cls));
     }
 
@@ -426,26 +528,50 @@ struct parser {
                 continue;
             if (take_kw("new"))
                 continue;
-            if (is_kw("abstract") || is_kw("virtual") || is_kw("override") ||
-                is_kw("sealed") || is_kw("extern") || is_kw("volatile")) {
+            if (take_kw("virtual") || take_kw("override") ||
+                take_kw("sealed"))
+                continue;
+            if (take_kw("abstract")) {
+                m.is_abstract = true;
+                continue;
+            }
+            if (take_kw("extern")) {
+                m.is_extern = true;
+                note_feature("extern_methods");
+                continue;
+            }
+            if (is_kw("volatile")) {
                 note_feature("modifiers");
                 adv();
                 continue;
             }
-            if (take_kw("partial")) {
-                note_feature("partial");
+            if (is_kw("partial") && type_token_start(1) &&
+                type_end(1) != std::string::npos &&
+                identifier(at(type_end(1)))) {
+                adv();
                 continue;
             }
             if (take_kw("unsafe")) {
                 note_feature("unsafe");
                 continue;
             }
-            if (take_kw("async")) {
-                note_feature("async");
+            if (is_kw("async") && type_token_start(1) &&
+                type_end(1) != std::string::npos &&
+                identifier(at(type_end(1)))) {
+                adv();
+                m.is_async = true;
                 continue;
             }
             break;
         }
+        if (is_kw("event"))
+            unsupported("events");
+        if (is_kw("delegate"))
+            unsupported("delegate_declarations");
+        if (is_kw("implicit") || is_kw("explicit"))
+            unsupported("operators");
+        if (is_kw("ref"))
+            unsupported("ref_out_in");
         // ctor: name matches class, no return type
         if (is_name(cls.name) && at(1).kind == tok_kind::lparen) {
             m.kind = member_kind::ctor;
@@ -481,11 +607,50 @@ struct parser {
             fail("expected member type");
         m.type_name = type_text(0, tend);
         p += tend;
+        if (m.is_async) {
+            std::string async_type = m.type_name;
+            if (const auto angle = async_type.find('<');
+                angle != std::string::npos)
+                async_type.erase(angle);
+            if (const auto dot = async_type.rfind('.');
+                dot != std::string::npos)
+                async_type.erase(0, dot + 1);
+            if (async_type != "void" && async_type != "Task" &&
+                async_type != "ValueTask")
+                note_feature("async_return_type");
+        }
+        if (is(tok_kind::star))
+            unsupported("unsafe");
+        if (is_kw("operator"))
+            unsupported("operators");
         m.name = expect_name("member name").text;
+        if (is(tok_kind::lt))
+            unsupported("generics");
         if (is(tok_kind::lparen)) {
             m.kind = member_kind::method;
             parse_params(m);
             method_body(m);
+            cls.members.push_back(std::move(m));
+            return;
+        }
+        if (take(tok_kind::arrow)) {
+            m.kind = member_kind::property;
+            m.property_has_get = true;
+            auto ret = ms(st::return_, m.pos);
+            ret->value = assign_expr();
+            m.property_get_body.push_back(std::move(ret));
+            expect(tok_kind::semicolon, "';' after expression property");
+            cls.members.push_back(std::move(m));
+            return;
+        }
+        if (is(tok_kind::lbrace)) {
+            parse_property(m);
+            if (take(tok_kind::assign)) {
+                m.init = assign_expr();
+                expect(tok_kind::semicolon, "';' after property initializer");
+            } else {
+                take(tok_kind::semicolon);
+            }
             cls.members.push_back(std::move(m));
             return;
         }
@@ -494,26 +659,6 @@ struct parser {
         for (;;) {
             if (take(tok_kind::assign))
                 m.init = assign_expr();
-            if (take(tok_kind::arrow)) {
-                // property with expression body `Type Name => expr` — treat
-                // as computed member (method-like, evaluated per access).
-                m.kind = member_kind::method;
-                m.expr_body = assign_expr();
-            } else if (is(tok_kind::lbrace)) {
-                // `{ get; set; }` property — out-of-subset; consume block.
-                note_feature("properties");
-                adv();
-                int depth = 1;
-                while (depth > 0 && !eof()) {
-                    if (is(tok_kind::lbrace))
-                        ++depth;
-                    else if (is(tok_kind::rbrace))
-                        --depth;
-                    adv();
-                }
-                cls.members.push_back(std::move(m));
-                return;
-            }
             if (take(tok_kind::comma)) {
                 // `int a = 1, b = 2;` — push current then start a sibling
                 cls.members.push_back(std::move(m));
@@ -533,9 +678,63 @@ struct parser {
         cls.members.push_back(std::move(m));
     }
 
+    void parse_property(ast_member& m) {
+        m.kind = member_kind::property;
+        expect(tok_kind::lbrace, "'{' in property");
+        while (!is(tok_kind::rbrace) && !eof()) {
+            skip_attributes();
+            while (take_kw("public") || take_kw("private") ||
+                   take_kw("protected") || take_kw("internal")) {
+            }
+            const bool getter = take_kw("get");
+            const bool setter = !getter && (take_kw("set") || take_kw("init"));
+            if (!getter && !setter) {
+                fail("expected get or set accessor");
+            }
+            if (getter ? m.property_has_get : m.property_has_set)
+                fail("duplicate property accessor");
+            if (getter)
+                m.property_has_get = true;
+            else
+                m.property_has_set = true;
+            if (take(tok_kind::semicolon)) {
+                if (getter)
+                    m.property_auto_get = true;
+                else
+                    m.property_auto_set = true;
+                continue;
+            }
+            std::vector<stmt_ptr> body;
+            if (take(tok_kind::arrow)) {
+                if (getter) {
+                    auto ret = ms(st::return_, pos());
+                    ret->value = assign_expr();
+                    body.push_back(std::move(ret));
+                } else {
+                    auto expr_stmt = ms(st::expr_stmt, pos());
+                    expr_stmt->value = assign_expr();
+                    body.push_back(std::move(expr_stmt));
+                }
+                expect(tok_kind::semicolon, "';' after property accessor");
+            } else {
+                body = block_stmt()->body;
+            }
+            if (getter)
+                m.property_get_body = std::move(body);
+            else
+                m.property_set_body = std::move(body);
+        }
+        expect(tok_kind::rbrace, "'}' after property");
+        if (!m.property_has_get && !m.property_has_set)
+            fail("property requires an accessor");
+        if (m.is_abstract && (m.property_auto_get || m.property_auto_set))
+            unsupported("abstract_without_body");
+    }
+
     void parse_params(ast_member& m) {
         expect(tok_kind::lparen, "'('");
         while (!is(tok_kind::rparen) && !eof()) {
+            skip_attributes();
             // param modifiers
             if (is_kw("this")) {
                 note_feature("extensions");
@@ -543,7 +742,10 @@ struct parser {
             }
             for (;;) {
                 if (is_kw("ref") || is_kw("out") || is_kw("in") ||
-                    is_kw("params") || is_kw("scoped")) {
+                                        is_kw("params") || (is_kw("scoped") &&
+                                        ((type_token_start(1) && type_end(1) != std::string::npos &&
+                                            identifier(at(type_end(1)))) ||
+                                         (at(1).kind == tok_kind::keyword && at(1).text == "ref")))) {
                     note_feature("ref_out_in");
                     adv();
                     continue;
@@ -560,6 +762,8 @@ struct parser {
             } else {
                 pa.type = type_text(0, tend);
                 p += tend;
+                if (is(tok_kind::star))
+                    unsupported("unsafe");
                 pa.name = expect_name("param name").text;
             }
             if (take(tok_kind::assign))
@@ -577,8 +781,13 @@ struct parser {
             expect(tok_kind::semicolon, "';' after expression body");
             return;
         }
-        if (take(tok_kind::semicolon))
-            return;                       // abstract/extern — no body
+        if (take(tok_kind::semicolon)) {
+            if (m.is_abstract)
+                unsupported("abstract_without_body");
+            if (m.is_extern)
+                unsupported("extern_methods");
+            unsupported("method_without_body");
+        }
         m.body = block_stmt()->body;
     }
 
@@ -594,12 +803,14 @@ struct parser {
 
     // try a local-decl start: type_end then `name`/`[`/`(` check.
     bool looks_like_local_decl() const {
+        if (is_kw("await") && unary_starts(1))
+            return false;
         if (!type_token_start(0))
             return false;
         const std::size_t e = type_end(0);
         if (e == std::string::npos)
             return false;
-        return e < toks.size() && at(e).kind == tok_kind::name;
+        return e < toks.size() && identifier(at(e));
     }
 
     stmt_ptr statement() {
@@ -632,26 +843,19 @@ struct parser {
             return try_stmt();
         if (is_kw("throw"))
             return throw_stmt();
-        if (is_kw("switch") || is_kw("goto") || is_kw("lock")) {
-            note_feature("statements");
-            adv();
-            // consume the statement best-effort (matched braces or to ';')
-            if (is(tok_kind::lbrace)) {
-                int depth = 0;
-                do {
-                    if (is(tok_kind::lbrace))
-                        ++depth;
-                    else if (is(tok_kind::rbrace))
-                        --depth;
-                    adv();
-                } while (depth > 0 && !eof());
-            } else {
-                while (!is(tok_kind::semicolon) && !eof())
-                    adv();
-                take(tok_kind::semicolon);
-            }
-            return ms(st::block, here);
-        }
+        if (is_kw("switch"))
+            return switch_stmt();
+        if (is_kw("goto"))
+            unsupported("goto");
+        if (is_kw("lock"))
+            return lock_stmt();
+        if (is_kw("yield") && at(1).kind == tok_kind::keyword &&
+            (at(1).text == "return" || at(1).text == "break"))
+            unsupported("generators");
+        if (is_kw("using"))
+            unsupported("using_statement");
+        if (is_kw("ref"))
+            unsupported("ref_out_in");
         if (is_kw("checked") || is_kw("unchecked")) {
             adv();
             note_feature("checked");
@@ -660,7 +864,9 @@ struct parser {
             auto s = statement();
             return s;
         }
-        if (is_kw("unsafe") || is_kw("fixed")) {
+        if (is_kw("fixed"))
+            unsupported("unsafe");
+        if (is_kw("unsafe")) {
             adv();
             note_feature("unsafe");
             return statement();
@@ -673,6 +879,17 @@ struct parser {
         if (looks_like_local_decl())
             return local_decl_stmt();
         return expr_or_assign_stmt();
+    }
+
+    stmt_ptr lock_stmt() {
+        const src_pos here = pos();
+        adv();
+        expect(tok_kind::lparen, "'(' after lock");
+        auto s = ms(st::lock_, here);
+        s->value = assign_expr();
+        expect(tok_kind::rparen, "')' after lock expression");
+        s->body = stmt_or_block();
+        return s;
     }
 
     stmt_ptr local_decl_stmt() {
@@ -810,6 +1027,58 @@ struct parser {
         return s;
     }
 
+    static bool switch_literal(const ast_expr* value) {
+        if (!value)
+            return false;
+        if (value->tag == et::literal)
+            return true;
+        return value->tag == et::unop &&
+               (value->op == tok_kind::plus || value->op == tok_kind::minus) &&
+               switch_literal(value->base.get());
+    }
+
+    stmt_ptr switch_stmt() {
+        const src_pos here = pos();
+        adv();
+        expect(tok_kind::lparen, "'(' after switch");
+        auto s = ms(st::switch_, here);
+        s->value = assign_expr();
+        expect(tok_kind::rparen, "')' after switch value");
+        expect(tok_kind::lbrace, "'{' after switch");
+        bool saw_default = false;
+        while (!is(tok_kind::rbrace) && !eof()) {
+            switch_arm arm;
+            bool saw_label = false;
+            while (is_kw("case") || is_kw("default")) {
+                saw_label = true;
+                if (take_kw("default")) {
+                    if (saw_default)
+                        fail("duplicate default label");
+                    saw_default = true;
+                    arm.is_default = true;
+                    expect(tok_kind::colon, "':' after default");
+                    continue;
+                }
+                adv();
+                if (is_kw("var") || is_kw("when") || is_name("_"))
+                    unsupported("switch_patterns");
+                expr_ptr label = assign_expr();
+                if (!switch_literal(label.get()) || !is(tok_kind::colon))
+                    unsupported("switch_patterns");
+                adv();
+                arm.labels.push_back(std::move(label));
+            }
+            if (!saw_label)
+                fail("expected case or default label");
+            while (!is(tok_kind::rbrace) && !is_kw("case") &&
+                   !is_kw("default"))
+                arm.body.push_back(statement());
+            s->switch_arms.push_back(std::move(arm));
+        }
+        expect(tok_kind::rbrace, "'}' after switch");
+        return s;
+    }
+
     stmt_ptr return_stmt() {
         const src_pos here = pos();
         adv();  // return
@@ -831,15 +1100,17 @@ struct parser {
                 // catch (Type e) / catch (Type) / catch when-tagged? (skip `when`)
                 if (!is(tok_kind::rparen)) {
                     const std::size_t tend = type_end(0);
-                    arm.type_name =
-                        tend == std::string::npos ? "" : type_text(0, tend);
+                    if (tend == std::string::npos)
+                        fail("expected catch type");
+                    arm.type_name = type_text(0, tend);
                     p += tend;
-                    if (is(tok_kind::name))
+                    if (identifier(cur()))
                         arm.name = cur().text, adv();
                 }
                 expect(tok_kind::rparen, "')' after catch type");
             }
-            if (take_kw("when")) {
+            if (is_kw("when") || is_name("when")) {
+                adv();
                 note_feature("exception_filters");
                 expect(tok_kind::lparen, "'('");
                 arm.filter = assign_expr();   // evaluated at match time
@@ -848,9 +1119,10 @@ struct parser {
             arm.body = block_stmt()->body;
             s->catches.push_back(std::move(arm));
         }
-        if (take_kw("finally"))
+        const bool has_finally = take_kw("finally");
+        if (has_finally)
             s->final = block_stmt()->body;
-        if (s->catches.empty() && s->final.empty())
+        if (s->catches.empty() && !has_finally)
             fail("try requires catch or finally");
         return s;
     }
@@ -869,7 +1141,11 @@ struct parser {
     expr_ptr expr() { return assign_expr(); }
 
     expr_ptr assign_expr() {
+        if (lambda_start())
+            return lambda_expr();
         expr_ptr lhs = cond_expr();
+        if (is_kw("switch"))
+            unsupported("switch_expressions");
         const tok_kind k = cur().kind;
         if (is_assign_op(k)) {
             adv();
@@ -881,6 +1157,62 @@ struct parser {
             return n;
         }
         return lhs;
+    }
+
+    bool lambda_start() const {
+        if (identifier(cur()) && at(1).kind == tok_kind::arrow)
+            return true;
+        if (!is(tok_kind::lparen))
+            return false;
+        int depth = 0;
+        for (std::size_t k = 0; at(k).kind != tok_kind::eof_; ++k) {
+            if (at(k).kind == tok_kind::lparen)
+                ++depth;
+            else if (at(k).kind == tok_kind::rparen && --depth == 0)
+                return at(k + 1).kind == tok_kind::arrow;
+        }
+        return false;
+    }
+
+    expr_ptr lambda_expr() {
+        const src_pos here = pos();
+        auto lambda = mk(et::lambda_, here);
+        if (take(tok_kind::lparen)) {
+            while (!is(tok_kind::rparen) && !eof()) {
+                if (is_kw("ref") || is_kw("out") || is_kw("in") ||
+                    is_kw("params") || is_kw("scoped"))
+                    unsupported("lambda_parameter_modifiers");
+                ast_lambda_param param;
+                const std::size_t tend = type_end(0);
+                if (tend != std::string::npos && tend > 0 &&
+                    identifier(at(tend)) &&
+                    (at(tend + 1).kind == tok_kind::comma ||
+                     at(tend + 1).kind == tok_kind::rparen)) {
+                    param.type = type_text(0, tend);
+                    p += tend;
+                }
+                param.name = expect_name("lambda parameter").text;
+                if (take(tok_kind::assign))
+                    unsupported("lambda_parameter_defaults");
+                lambda->lambda_params.push_back(std::move(param));
+                if (!take(tok_kind::comma))
+                    break;
+            }
+            expect(tok_kind::rparen, "')' after lambda parameters");
+        } else {
+            ast_lambda_param param;
+            param.name = expect_name("lambda parameter").text;
+            lambda->lambda_params.push_back(std::move(param));
+        }
+        expect(tok_kind::arrow, "'=>' after lambda parameters");
+        if (is(tok_kind::lbrace)) {
+            lambda->lambda_body = block_stmt()->body;
+        } else {
+            auto ret = ms(st::return_, here);
+            ret->value = assign_expr();
+            lambda->lambda_body.push_back(std::move(ret));
+        }
+        return lambda;
     }
 
     expr_ptr cond_expr() {
@@ -952,6 +1284,14 @@ struct parser {
 
     expr_ptr unary() {
         const src_pos here = pos();
+        if (is_kw("await") && unary_starts(1) &&
+            at(1).kind != tok_kind::plus && at(1).kind != tok_kind::minus &&
+            at(1).kind != tok_kind::plus2 && at(1).kind != tok_kind::minus2) {
+            adv();
+            auto e = mk(et::await_, here);
+            e->base = unary();
+            return e;
+        }
         if (take(tok_kind::bang)) {
             auto e = mk(et::unop, here);
             e->op = tok_kind::bang;
@@ -1009,6 +1349,8 @@ struct parser {
 
     bool unary_starts(std::size_t k) const {
         const token& t = at(k);
+        if (identifier(t))
+            return true;
         switch (t.kind) {
         case tok_kind::name: case tok_kind::number: case tok_kind::string:
         case tok_kind::char_: case tok_kind::interp_string:
@@ -1123,11 +1465,13 @@ struct parser {
         expect(tok_kind::lparen, "'('");
         while (!is(tok_kind::rparen) && !eof()) {
             // named args `name:` — parse but discard the name (positional)
-            if (is(tok_kind::name) && at(1).kind == tok_kind::colon &&
+            if (identifier(cur()) && at(1).kind == tok_kind::colon &&
                 at(2).kind != tok_kind::colon) {
                 adv();
                 adv();
             }
+            if (is_kw("ref") || is_kw("out") || is_kw("in"))
+                unsupported("ref_out_in");
             args.push_back(assign_expr());
             if (!take(tok_kind::comma))
                 break;
@@ -1176,6 +1520,8 @@ struct parser {
                         lex_source(part.text, file);
                     parser sub_p{sub, file, flags, 0};
                     e->parts.push_back(sub_p.assign_expr());
+                    if (!sub_p.eof())
+                        sub_p.fail("unexpected token after interpolation expression");
                 }
             }
             return e;
@@ -1231,7 +1577,7 @@ struct parser {
             }
             if (t.text == "new")
                 return new_expr();
-            if (t.text == "typeof" || t.text == "nameof" ||
+            if (t.text == "typeof" || (t.text == "nameof" && at(1).kind == tok_kind::lparen) ||
                 t.text == "default" || t.text == "sizeof")
                 return special_expr();
             if (t.text == "checked" || t.text == "unchecked") {
@@ -1242,20 +1588,8 @@ struct parser {
                 expect(tok_kind::rparen, "')'");
                 return inner;
             }
-            if (t.text == "switch") {
-                // switch expression `x switch { ... }` — out-of-subset
-                note_feature("switch_expr");
-                adv();
-                auto e = mk(et::literal, here);
-                e->const_value = cs_null();
-                return e;
-            }
-            if (t.text == "await") {
-                note_feature("async");
-                adv();
-                return unary();
-            }
             if (t.text == "throw") {
+                note_feature("throw_expr");
                 auto n = mk(et::throw_unsupported, here);
                 n->name = "throw_expr";
                 adv();
@@ -1264,7 +1598,20 @@ struct parser {
             }
             // primitive type keywords usable as expression roots
             // (string.Format / int.Parse / object etc.)
-            if (is_type_keyword(t.text)) {
+            if (t.text == "stackalloc")
+                unsupported("unsafe");
+            if (t.text == "delegate")
+                unsupported("anonymous_delegates");
+            if (t.text == "from" && identifier(at(1)) &&
+                at(2).kind == tok_kind::keyword && at(2).text == "in")
+                unsupported("query_syntax");
+            if (t.text == "from" && type_token_start(1)) {
+                const auto end = type_end(1);
+                if (end != std::string::npos && identifier(at(end)) &&
+                    at(end + 1).kind == tok_kind::keyword && at(end + 1).text == "in")
+                    unsupported("query_syntax");
+            }
+            if (is_type_keyword(t.text) || identifier(t)) {
                 auto e = mk(et::name, here);
                 e->name = t.text;
                 adv();
@@ -1342,14 +1689,16 @@ struct parser {
             auto e = mk(et::default_, here);
             if (take(tok_kind::lparen)) {
                 const std::size_t tend = type_end(0);
-                e->name =
-                    tend == std::string::npos ? "" : type_text(0, tend);
+                if (tend == std::string::npos)
+                    fail("expected type in default expression");
+                e->name = type_text(0, tend);
                 p += tend;
                 expect(tok_kind::rparen, "')'");
             }
             return e;
         }
         if (take_kw("sizeof")) {
+            note_feature("unsafe");
             auto e = mk(et::throw_unsupported, here);
             e->name = "sizeof";
             expect(tok_kind::lparen, "'('");
@@ -1371,8 +1720,10 @@ struct parser {
             p += tend;
         }
         if (is(tok_kind::lbracket) && e->name.empty()) {
-            // `new[] {a, b}` / `new[]` handled below via init block
+            // inferred array `new[] {a, b}`
             adv();
+            expect(tok_kind::rbracket, "']' after new[");
+            e->name = "[]";
         }
         if (is(tok_kind::lparen)) {
             // sized array `new T[n]` handled when `[` follows a type
@@ -1409,7 +1760,7 @@ struct parser {
                     expect(tok_kind::assign, "'='");
                     e->init_names.push_back("@val");
                     e->parts.push_back(assign_expr());
-                } else if (is(tok_kind::name) && at(1).kind == tok_kind::assign) {
+                } else if (identifier(cur()) && at(1).kind == tok_kind::assign) {
                     // member init `{ Name = v }`
                     e->init_names.push_back(cur().text);
                     adv();
@@ -1429,6 +1780,217 @@ struct parser {
     }
 };
 
+struct subset_classifier {
+    feature_flags& flags;
+    std::unordered_set<std::string> bindings;
+    std::unordered_set<std::string> classes;
+
+    void note(const std::string& feature) {
+        if (std::find(flags.unsupported.begin(), flags.unsupported.end(), feature) ==
+            flags.unsupported.end())
+            flags.unsupported.push_back(feature);
+    }
+    bool path_feature(std::string_view path) {
+        if (path == "System.Runtime.CompilerServices.Unsafe" ||
+            path.starts_with("System.Runtime.CompilerServices.Unsafe.")) {
+            note("unsafe");
+            return true;
+        }
+        if (path == "System.Threading" || path == "System.Threading.Tasks" ||
+            path == "System.Runtime.CompilerServices")
+            return false;
+        const auto task_surface = [&](std::string_view short_name,
+                                      std::string_view qualified_name,
+                                      bool value_task) -> int {
+            std::string_view member;
+            if (path == short_name || path == qualified_name)
+                return 0;
+            if (path.starts_with(short_name) &&
+                path.size() > short_name.size() &&
+                path[short_name.size()] == '.')
+                member = path.substr(short_name.size() + 1);
+            else if (path.starts_with(qualified_name) &&
+                     path.size() > qualified_name.size() &&
+                     path[qualified_name.size()] == '.')
+                member = path.substr(qualified_name.size() + 1);
+            else
+                return -1;
+            const bool supported =
+                member == "CompletedTask" ||
+                member.starts_with("CompletedTask.") ||
+                member == "FromResult" ||
+                (!value_task && (member == "Delay" || member == "WhenAll"));
+            if (!supported)
+                note("async_continuations");
+            return supported ? 0 : 1;
+        };
+        const int task = task_surface("Task", "System.Threading.Tasks.Task", false);
+        if (task >= 0)
+            return task != 0;
+        const int value_task = task_surface(
+            "ValueTask", "System.Threading.Tasks.ValueTask", true);
+        if (value_task >= 0)
+            return value_task != 0;
+        static constexpr std::pair<std::string_view, std::string_view> prefixes[] = {
+            {"System.IO", "io"}, {"System.Net", "net"},
+            {"System.Reflection", "reflection"},
+            {"System.Runtime.InteropServices", "interop"},
+            {"System.Threading", "threading"}, {"System.Diagnostics", "diagnostics"},
+            {"System.Windows", "ui"},
+            {"Microsoft", "interop"}, {"Newtonsoft", "external"},
+        };
+        for (const auto& [prefix, feature] : prefixes) {
+            if (path == prefix || (path.starts_with(prefix) &&
+                path.size() > prefix.size() && path[prefix.size()] == '.')) {
+                note(std::string(feature));
+                return true;
+            }
+        }
+        if (path.starts_with("System."))
+            path.remove_prefix(7);
+        const auto leaf = path.substr(0, path.find('.'));
+        if (leaf == "ParallelEnumerable") note("parallel_linq");
+        else if (leaf == "TaskCompletionSource" || leaf == "TaskFactory" ||
+                 leaf == "SynchronizationContext") note("async_continuations");
+        else if (leaf == "Marshal" || leaf == "GCHandle" || leaf == "IntPtr" ||
+                 leaf == "UIntPtr") note("unsafe");
+        else return false;
+        return true;
+    }
+    void type_feature(std::string_view type) {
+        static const std::unordered_set<std::string_view> generic_types = {
+            "List", "Dictionary", "SortedList", "SortedDictionary",
+            "HashSet", "Queue", "Stack", "KeyValuePair", "Tuple", "Nullable",
+            "Action", "Func", "Predicate", "Converter", "Comparison",
+            "IEnumerable", "IEnumerator", "ICollection", "IList", "ISet",
+            "IReadOnlyCollection", "IReadOnlyList", "IReadOnlySet",
+            "Task", "ValueTask", "Lazy", "IComparable", "IEquatable",
+        };
+        while (!type.empty()) {
+            const auto end = type.find_first_of("<>,[]?");
+            const auto name = type.substr(0, end);
+            if (!name.empty() && !classes.count(std::string(name)))
+                path_feature(name);
+            if (end == std::string_view::npos)
+                break;
+            if (type[end] == '<') {
+                const auto dot = name.rfind('.');
+                const auto leaf = dot == std::string_view::npos ? name : name.substr(dot + 1);
+                if (!generic_types.count(leaf) &&
+                    !classes.count(std::string(name)) &&
+                    !classes.count(std::string(leaf)))
+                    note("generics");
+            }
+            type.remove_prefix(end + 1);
+        }
+    }
+    void expression(const ast_expr* e) {
+        if (!e)
+            return;
+        if (e->tag == et::new_expr || e->tag == et::cast ||
+            e->tag == et::default_ || e->tag == et::typeof_)
+            type_feature(e->name);
+        if (e->tag == et::member || e->tag == et::name) {
+            std::string path;
+            const ast_expr* root = e;
+            while (root && root->tag == et::member) {
+                path = "." + root->name + path;
+                root = root->base.get();
+            }
+            if (root && root->tag == et::name && !bindings.count(root->name))
+                path_feature(root->name + path);
+        }
+        expression(e->base.get());
+        expression(e->index.get());
+        expression(e->orelse.get());
+        for (const auto& part : e->parts) expression(part.get());
+        for (const auto& arg : e->call_args) expression(arg.get());
+        if (e->tag == et::lambda_) {
+            const auto outer = bindings;
+            for (const auto& param : e->lambda_params) {
+                type_feature(param.type);
+                bindings.insert(param.name);
+            }
+            statements(e->lambda_body);
+            bindings = outer;
+        }
+    }
+    void statements(const std::vector<stmt_ptr>& body) {
+        const auto outer = bindings;
+        for (const auto& s : body)
+            for (const auto& entry : s->names)
+                bindings.insert(entry.first);
+        for (const auto& s : body) {
+            const auto enclosing = bindings;
+            for (const auto& init : s->init)
+                for (const auto& entry : init->names)
+                    bindings.insert(entry.first);
+            type_feature(s->type_name);
+            expression(s->value.get());
+            expression(s->value2.get());
+            for (const auto& entry : s->names) expression(entry.second.get());
+            if (!s->name.empty()) bindings.insert(s->name);
+            statements(s->body);
+            statements(s->orelse);
+            statements(s->iter);
+            statements(s->init);
+            statements(s->final);
+            for (const auto& arm : s->catches) {
+                const auto before_catch = bindings;
+                if (!arm.name.empty()) bindings.insert(arm.name);
+                type_feature(arm.type_name);
+                expression(arm.filter.get());
+                statements(arm.body);
+                bindings = before_catch;
+            }
+            for (const auto& arm : s->switch_arms) {
+                for (const auto& label : arm.labels) expression(label.get());
+                statements(arm.body);
+            }
+            bindings = enclosing;
+        }
+        bindings = outer;
+    }
+    void program(const ast_program& prog) {
+        static const std::unordered_set<std::string> allowed_usings = {
+            "System", "System.Text", "System.Text.Json", "System.Collections",
+            "System.Collections.Generic", "System.ComponentModel", "System.Buffers",
+            "System.Linq", "System.Threading.Tasks",
+            "System.Runtime.CompilerServices", "csmini",
+        };
+        for (const auto& path : prog.usings) {
+            flags.using_roots.push_back(path.substr(0, path.find('.')));
+            if (!path_feature(path) && !allowed_usings.count(path))
+                note("namespace_" + path.substr(0, path.find('.')));
+        }
+        for (const auto& cls : prog.classes) {
+            bindings.insert(cls.name);
+            classes.insert(cls.name);
+            if (!cls.ns.empty()) classes.insert(cls.ns + "." + cls.name);
+        }
+        const auto global_bindings = bindings;
+        for (const auto& cls : prog.classes) {
+            bindings = global_bindings;
+            for (const auto& m : cls.members) bindings.insert(m.name);
+            const auto class_bindings = bindings;
+            for (const auto& m : cls.members) {
+                bindings = class_bindings;
+                for (const auto& param : m.params) bindings.insert(param.name);
+                type_feature(m.type_name);
+                expression(m.init.get());
+                expression(m.expr_body.get());
+                statements(m.property_get_body);
+                statements(m.property_set_body);
+                for (const auto& param : m.params) {
+                    type_feature(param.type);
+                    expression(param.default_value.get());
+                }
+                statements(m.body);
+            }
+        }
+    }
+};
+
 } // namespace
 
 ast_program parse_source(std::string_view source, const std::string& file,
@@ -1438,207 +2000,44 @@ ast_program parse_source(std::string_view source, const std::string& file,
         flags = &local;
     const std::vector<token> toks = lex_source(source, file);
     parser p{toks, file, flags, 0};
-    return p.program();
+    std::vector<tok_kind> closers;
+    for (const auto& t : toks) {
+        if (t.kind == tok_kind::lparen) closers.push_back(tok_kind::rparen);
+        else if (t.kind == tok_kind::lbracket) closers.push_back(tok_kind::rbracket);
+        else if (t.kind == tok_kind::lbrace) closers.push_back(tok_kind::rbrace);
+        else if (t.kind == tok_kind::rparen || t.kind == tok_kind::rbracket ||
+                 t.kind == tok_kind::rbrace) {
+            if (closers.empty() || closers.back() != t.kind)
+                p.fail("mismatched closing delimiter", t.pos);
+            closers.pop_back();
+        }
+    }
+    if (!closers.empty())
+        p.fail("unclosed delimiter", toks.back().pos);
+    ast_program prog = p.program();
+    subset_classifier classifier{*flags, {}, {}};
+    classifier.program(prog);
+    return prog;
 }
 
-// ── subset preflight (shared by bridge + loader adapter) ─────────────
-// Cheap token scan: false when the source reaches outside the subset —
-// unsafe/pointers, ref/out/in param mods, generics beyond List/Dictionary,
-// LINQ, async, partial, extension methods, attributes, out-of-subset usings.
 bool csmini_preflight_subset(std::string_view src, std::string* out_reason) {
-    auto fail = [&](std::string why) {
-        if (out_reason)
-            *out_reason = std::move(why);
-        return false;
-    };
-    std::vector<token> toks;
+    if (out_reason)
+        out_reason->clear();
+    feature_flags flags;
     try {
-        toks = lex_source(src, "<preflight>");
+        (void)parse_source(src, "<preflight>", &flags);
     } catch (const cs_error& e) {
-        return fail(std::string("lex: ") + e.message);
+        if (e.kind != "UnsupportedFeature" || e.features.empty())
+            throw;
+        if (out_reason)
+            *out_reason = e.features.front();
+        return false;
     }
-    auto& T = toks;
-    const auto is_kw = [&](std::size_t k, std::string_view w) {
-        return T[k].kind == tok_kind::keyword && T[k].text == w;
-    };
-    // allowed `using` roots (everything else → namespace_<seg>)
-    static const std::unordered_set<std::string> allowed_usings = {
-        "",                                          // global
-        "System",
-        "System.Text",
-        "System.Text.Json",
-        "System.Collections",
-        "System.Collections.Generic",
-        "System.ComponentModel",
-        "System.Buffers",
-        "csmini",
-    };
-    static const std::unordered_map<std::string, std::string> ns_features = {
-        {"System.IO", "io"},
-        {"System.Net", "net"},
-        {"System.Reflection", "reflection"},
-        {"System.Runtime", "interop"},
-        {"System.Threading", "threading"},
-        {"System.Diagnostics", "diagnostics"},
-        {"Microsoft", "interop"},
-        {"System.Windows", "ui"},
-        {"Newtonsoft", "external"},
-        {"System.Runtime.InteropServices", "interop"},
-    };
-    for (std::size_t k = 0; k < T.size(); ++k) {
-        const token& t = T[k];
-        if (t.kind != tok_kind::keyword && t.kind != tok_kind::lbracket &&
-            t.kind != tok_kind::name)
-            continue;
-        const std::string_view w = t.text;
-        if (t.kind == tok_kind::keyword) {
-            if (w == "unsafe" || w == "fixed" || w == "stackalloc")
-                return fail("unsafe");
-            if (w == "async" || w == "await")
-                return fail("async");
-            if (w == "partial")
-                return fail("partial");
-            if (w == "yield")
-                return fail("generators");
-            if (w == "delegate" || w == "event")
-                return fail("delegates");
-            if (w == "switch")
-                return fail("switch");
-            if (w == "goto")
-                return fail("goto");
-            if (w == "lock")
-                return fail("lock");
-            if (w == "checked" || w == "unchecked")
-                return fail("checked");
-            if (w == "interface" || w == "enum" || w == "struct" ||
-                w == "record")
-                return fail("type_kinds");
-            if (w == "abstract" || w == "virtual" || w == "override" ||
-                w == "sealed" || w == "extern" || w == "volatile")
-                return fail("modifiers");
-            if (w == "operator" || w == "implicit" || w == "explicit")
-                return fail("operators");
-            if (w == "is" || w == "as")
-                return fail("type_test");
-            if (w == "ref" || w == "out" || w == "params" || w == "scoped")
-                return fail("ref_out_in");
-            if (w == "in") {
-                // `in` is legit inside `foreach (T x in y)` only — walk back
-                // to the nearest `(` and require `foreach` before it.
-                int depth = 1;
-                bool ok_in = false;
-                for (std::size_t b = k; b-- > 0;) {
-                    if (T[b].kind == tok_kind::rparen ||
-                        T[b].kind == tok_kind::rbracket)
-                        ++depth;
-                    else if (T[b].kind == tok_kind::lparen ||
-                             T[b].kind == tok_kind::lbracket) {
-                        if (--depth == 0) {
-                            if (b > 0 && is_kw(b - 1, "foreach"))
-                                ok_in = true;
-                            break;
-                        }
-                    }
-                }
-                if (!ok_in)
-                    return fail("ref_out_in");
-            }
-            if (w == "select" || w == "join" || w == "orderby" ||
-                w == "group" || w == "into" || w == "let" || w == "from" ||
-                w == "where")
-                return fail("linq");
-            if (w == "this") {
-                // `this` as the first param of a static method → extension
-                if (k + 1 < T.size() && is_kw(k + 1, "this"))
-                    continue;
-                if (k > 0 && T[k - 1].kind == tok_kind::lparen) {
-                    // cheap extension check: `(` then `this` directly
-                    return fail("extensions");
-                }
-            }
-            if (w == "using") {
-                // using X.Y.Z; — check the dotted path
-                std::size_t j = k + 1;
-                std::string path;
-                while (j < T.size() &&
-                       (T[j].kind == tok_kind::name ||
-                        T[j].kind == tok_kind::keyword ||
-                        T[j].kind == tok_kind::dot)) {
-                    if (T[j].kind == tok_kind::dot)
-                        path.push_back('.');
-                    else
-                        path += T[j].text;
-                    ++j;
-                }
-                if (path.empty() || path.back() == '.')
-                    path.pop_back();
-                if (auto it = ns_features.find(path); it != ns_features.end())
-                    return fail(it->second);
-                if (path.substr(0, 7) == "System." &&
-                    ns_features.count(path.substr(0, path.rfind('.')))) {
-                    // nested System.X.Y where System.X is flagged
-                    std::string seg = path.substr(0, path.rfind('.'));
-                    if (auto it2 = ns_features.find(seg); it2 != ns_features.end())
-                        return fail(it2->second);
-                }
-                if (!allowed_usings.count(path))
-                    return fail(std::string("namespace_") +
-                                path.substr(0, path.find('.')));
-            }
-            if (w == "new") {
-                // `new X<T>` where X ∉ {List,Dictionary} → generics
-                std::size_t j = k + 1;
-                if (j < T.size() && T[j].kind == tok_kind::name) {
-                    const std::string tn = T[j].text;
-                    if (j + 1 < T.size() && T[j + 1].kind == tok_kind::lt &&
-                        tn != "List" && tn != "Dictionary" &&
-                        tn != "SortedList" && tn != "SortedDictionary" &&
-                        tn != "HashSet" && tn != "Queue" && tn != "Stack" &&
-                        tn != "KeyValuePair" && tn != "Tuple" &&
-                        tn != "Nullable")
-                        return fail("generics");
-                }
-            }
-            if (w == "this") {
-                // `this.X` member access is fine — skip the marker above;
-                // only param-position `this` flags extensions (handled).
-            }
-            continue;
-        }
-        if (t.kind == tok_kind::lbracket) {
-            // attribute list `[Name]`/`[Name(...)]` at decl/member level:
-            // heuristic — `[` when previous token ends a declaration scope.
-            if (k + 1 < T.size() &&
-                (T[k + 1].kind == tok_kind::name ||
-                 T[k + 1].kind == tok_kind::keyword)) {
-                const std::string& w2 = T[k + 1].text;
-                const bool attr_name =
-                    !w2.empty() && (w2[0] >= 'A' && w2[0] <= 'Z');
-                const tok_kind pk = k > 0 ? T[k - 1].kind : tok_kind::eof_;
-                const bool decl_ctx =
-                    pk == tok_kind::rbrace || pk == tok_kind::semicolon ||
-                    pk == tok_kind::eof_ || pk == tok_kind::rparen ||
-                    pk == tok_kind::gt || pk == tok_kind::lbrace;
-                if (attr_name && decl_ctx)
-                    return fail("attributes");
-            }
-            continue;
-        }
-        if (t.kind == tok_kind::name) {
-            if (t.text == "Enumerable" || t.text == "ParallelEnumerable")
-                return fail("linq");
-            if (t.text == "unsafe" || t.text == "Marshal" ||
-                t.text == "GCHandle" || t.text == "IntPtr" ||
-                t.text == "UIntPtr")
-                return fail("unsafe");
-            if (t.text == "Task" || t.text == "ValueTask")
-                return fail("async");
-            if (t.text == "Guid")
-                return fail("guid");
-            continue;
-        }
-    }
-    return true;
+    if (flags.unsupported.empty())
+        return true;
+    if (out_reason)
+        *out_reason = flags.unsupported.front();
+    return false;
 }
 
 } // namespace sao::plugins::csmini

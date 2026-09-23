@@ -75,12 +75,16 @@ CsRef interpreter::invoke_func(CsFuncObj* fn, CsRef this_ref,
                   "call depth exceeded in " + fn->name, pos);
     }
     frame callee{};
-    callee.scope = alloc_scope(global_scope_);
-    callee.this_ref = std::move(this_ref);
-    callee.class_ref = find_owner_class(fn->owner_class);
+    callee.scope = alloc_scope(fn->is_lambda && fn->closure_scope
+                                   ? fn->closure_scope
+                                   : global_scope_);
+    callee.this_ref = this_ref ? std::move(this_ref) : fn->closure_this;
+    callee.class_ref = fn->owner_class ? find_owner_class(fn->owner_class)
+                                       : fn->closure_class;
     callee.fn_name = fn->name;
     callee.file = cur_frame ? cur_frame->file : "";
     callee.caller = cur_frame;
+    callee.anchor = fn->anchor;
     bind_param_frame(callee, fn, args, pos);
     frame* prev = cur_frame;
     cur_frame = &callee;
@@ -100,11 +104,25 @@ CsRef interpreter::invoke_func(CsFuncObj* fn, CsRef this_ref,
     }
     cur_frame = prev;
     --call_depth;
-    return out ? out : cs_null();
+    CsRef result = out ? out : cs_null();
+    if (fn->is_async) {
+        const bool value_task = fn->return_type.rfind("ValueTask", 0) == 0 ||
+                                fn->return_type.rfind(
+                                    "System.Threading.Tasks.ValueTask", 0) == 0;
+        const bool task = value_task ||
+                          fn->return_type.rfind("Task", 0) == 0 ||
+                          fn->return_type.rfind(
+                              "System.Threading.Tasks.Task", 0) == 0;
+        if (task)
+            return csmini_make_task(std::move(result), value_task);
+        return cs_null();
+    }
+    return result;
 }
 
-CsRef interpreter::call(const CsRef& callable, const cs_args& args,
+CsRef interpreter::call(const CsRef& borrowed_callable, const cs_args& args,
                         src_pos pos) {
+    const CsRef callable = borrowed_callable;
     if (!callable) {
         raise_exc("NullReferenceException", "call on null", pos);
     }

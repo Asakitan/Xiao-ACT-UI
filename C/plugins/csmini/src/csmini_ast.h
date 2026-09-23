@@ -33,7 +33,14 @@ enum class et : uint8_t {
     this_,          // this
     typeof_,        // typeof(type_name) — placeholder-safe
     default_,       // default / default(type_name)
+    lambda_,        // (params) => expr / (params) => { statements }
+    await_,         // synchronous async-lite await
     throw_unsupported, // `is`/`as`/`nameof` etc — evaluated via base
+};
+
+struct ast_lambda_param {
+    std::string type;
+    std::string name;
 };
 
 struct ast_expr {
@@ -48,6 +55,8 @@ struct ast_expr {
     std::vector<expr_ptr> parts;                // binop rhs / interp parts / init
     std::vector<expr_ptr> call_args;
     std::vector<std::string> init_names;        // object-init member names (may be "")
+    std::vector<ast_lambda_param> lambda_params;
+    std::vector<stmt_ptr> lambda_body;
     bool post = false;                          // postfix ++/-- vs prefix
 };
 
@@ -69,12 +78,20 @@ enum class st : uint8_t {
     block,
     try_,
     throw_,
+    switch_,
+    lock_,
 };
 
 struct catch_arm {
     std::string type_name;                      // "Exception" or "" (bare)
     std::string name;                           // bound variable or ""
     expr_ptr filter;                            // `when (expr)` — may be null
+    std::vector<stmt_ptr> body;
+};
+
+struct switch_arm {
+    std::vector<expr_ptr> labels;
+    bool is_default = false;
     std::vector<stmt_ptr> body;
 };
 
@@ -94,6 +111,7 @@ struct ast_stmt {
     std::vector<stmt_ptr> init;                 // for-init (block variant)
     std::vector<catch_arm> catches;
     std::vector<stmt_ptr> final;                // finally
+    std::vector<switch_arm> switch_arms;
 };
 
 // ── declarations ──────────────────────────────────────────────────────────
@@ -103,7 +121,7 @@ struct ast_param {
     expr_ptr default_value;                     // may be null
 };
 
-enum class member_kind : uint8_t { field, method, ctor };
+enum class member_kind : uint8_t { field, method, ctor, property };
 
 struct ast_member {
     member_kind kind = member_kind::field;
@@ -113,12 +131,21 @@ struct ast_member {
     bool is_static = false;
     bool is_const = false;
     bool is_readonly = false;
+    bool is_async = false;
+    bool is_abstract = false;
+    bool is_extern = false;
     std::string type_name;                      // return/field type text
     std::string name;
     expr_ptr init;                              // field initializer
     std::vector<ast_param> params;
     std::vector<stmt_ptr> body;                 // method body (empty → expression body / none)
     expr_ptr expr_body;                         // `=> expr` member body
+    bool property_has_get = false;
+    bool property_has_set = false;
+    bool property_auto_get = false;
+    bool property_auto_set = false;
+    std::vector<stmt_ptr> property_get_body;
+    std::vector<stmt_ptr> property_set_body;
 };
 
 struct ast_class {
@@ -126,6 +153,7 @@ struct ast_class {
     std::string ns;                             // enclosing namespace dotted
     std::vector<ast_member> members;
     src_pos pos{};
+    bool is_partial = false;
 };
 
 struct ast_program {

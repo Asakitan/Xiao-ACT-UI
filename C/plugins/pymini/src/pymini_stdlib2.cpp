@@ -11,13 +11,18 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <bcrypt.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <deque>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <thread>
 
@@ -75,7 +80,10 @@ void put_c(PyRef m, const char* name, PyRef v) {
 }
 // 非 noreturn 包装：调用点 raise 之后的 return 保持可达（消 C4702）。
 void raise_system_exit(interpreter& i) {
-    i.raise_exc("SystemExit", "sys.exit", {});
+    std::function<void()> raise = [&i] {
+        i.raise_exc("SystemExit", "sys.exit", {});
+    };
+    raise();
 }
 PyRef arg_at(interpreter& i, const py_args& a, std::size_t n,
              const char* fn) {
@@ -83,6 +91,34 @@ PyRef arg_at(interpreter& i, const py_args& a, std::size_t n,
         return a.pos[n];
     i.raise_exc("TypeError",
                 std::string(fn) + " missing positional argument", {});
+}
+
+std::string system_random_bytes(interpreter& i, std::size_t count) {
+    constexpr std::size_t kMaxRandomBytes = 1024 * 1024;
+    if (count > kMaxRandomBytes)
+        i.raise_exc("MemoryError", "secure random byte limit exceeded", {});
+    std::string out(count, '\0');
+    if (count != 0 &&
+        BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(out.data()),
+                        static_cast<ULONG>(out.size()),
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+        i.raise_exc("RuntimeError", "system random generator failed", {});
+    return out;
+}
+
+uint64_t system_random_u64(interpreter& i) {
+    const std::string bytes = system_random_bytes(i, sizeof(uint64_t));
+    uint64_t value = 0;
+    std::memcpy(&value, bytes.data(), sizeof(value));
+    return value;
+}
+
+int64_t integer_arg(interpreter& i, const PyRef& value, const char* fn) {
+    bool ok = false;
+    const int64_t result = py_to_int(value, &ok);
+    if (!ok)
+        i.raise_exc("TypeError", std::string(fn) + " expects an integer", {});
+    return result;
 }
 
 // local member_fn (receiver bound into arg0)
@@ -517,12 +553,11 @@ PyRef m_rename(interpreter& i, const py_args& a) {
     return py_none();
 }
 PyRef m_urandom(interpreter& i, const py_args& a) {
-    bool ok = false;
-    const int64_t n = py_to_int(arg_at(i, a, 0, "urandom"), &ok);
-    std::string out(static_cast<std::size_t>(n), '\0');
-    for (auto& c : out)
-        c = static_cast<char>(rand());
-    return py_bytes(out);
+    const int64_t count = integer_arg(i, arg_at(i, a, 0, "urandom"),
+                                      "urandom");
+    if (count < 0)
+        i.raise_exc("ValueError", "negative argument not allowed", {});
+    return py_bytes(system_random_bytes(i, static_cast<std::size_t>(count)));
 }
 PyRef m_chdir(interpreter& i, const py_args& a) {
     i.raise_exc("OSError", "os.chdir is not permitted in pymini", {});
@@ -715,6 +750,334 @@ PyRef mod_os(interpreter& i) {
     }());
     // os.getenv reads the real environment (read-only is harmless)
     return m;
+}
+
+namespace uuid_impl {
+
+int hex_value(char c) {
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+
+std::string bytes_to_hex(std::string_view bytes) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (const unsigned char value : bytes) {
+        out.push_back(kHex[value >> 4]);
+        out.push_back(kHex[value & 0x0f]);
+    }
+    return out;
+}
+
+std::string hex_to_bytes(interpreter& i, std::string_view hex) {
+    std::string out;
+    out.reserve(hex.size() / 2);
+    for (std::size_t pos = 0; pos < hex.size(); pos += 2) {
+        const int high = hex_value(hex[pos]);
+        const int low = hex_value(hex[pos + 1]);
+        if (high < 0 || low < 0)
+            i.raise_exc("ValueError", "badly formed hexadecimal UUID string", {});
+        out.push_back(static_cast<char>((high << 4) | low));
+    }
+    return out;
+}
+
+std::string normalize(interpreter& i, const PyRef& value) {
+    if (const auto* bytes = as_bytes(value)) {
+        if (bytes->v.size() != 16)
+            i.raise_exc("ValueError", "bytes is not a 16-char string", {});
+        return bytes_to_hex(bytes->v);
+    }
+    if (value && value->kind == py_kind::instance) {
+        if (const PyRef attr = i.getattr(value, "hex")) {
+            if (const auto* text = as_str(attr))
+                return normalize(i, py_str(text->v));
+        }
+    }
+    const auto* text = as_str(value);
+    if (text == nullptr)
+        i.raise_exc("TypeError", "UUID requires a string, bytes, or UUID", {});
+    if (text->v.size() > 128)
+        i.raise_exc("ValueError", "badly formed hexadecimal UUID string", {});
+    std::string source = text->v;
+    std::string lower = source;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower.rfind("urn:uuid:", 0) == 0)
+        source.erase(0, 9);
+    if (source.size() >= 2 && source.front() == '{' && source.back() == '}')
+        source = source.substr(1, source.size() - 2);
+    std::string compact;
+    compact.reserve(32);
+    for (const char c : source)
+        if (c != '-')
+            compact.push_back(c);
+    if (compact.size() != 32)
+        i.raise_exc("ValueError", "badly formed hexadecimal UUID string", {});
+    for (char& c : compact) {
+        if (hex_value(c) < 0)
+            i.raise_exc("ValueError", "badly formed hexadecimal UUID string", {});
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return compact;
+}
+
+std::string canonical(std::string_view hex) {
+    return std::string(hex.substr(0, 8)) + "-" +
+           std::string(hex.substr(8, 4)) + "-" +
+           std::string(hex.substr(12, 4)) + "-" +
+           std::string(hex.substr(16, 4)) + "-" +
+           std::string(hex.substr(20, 12));
+}
+
+PyRef make_uuid(interpreter& i, const PyRef& klass, std::string hex) {
+    const std::string text = canonical(hex);
+    const std::string bytes = hex_to_bytes(i, hex);
+    const int variant_nibble = hex_value(hex[16]);
+    const char* variant = (variant_nibble & 0x8) == 0
+        ? "reserved for NCS compatibility"
+        : (variant_nibble & 0xc) == 0x8
+            ? "specified in RFC 4122"
+            : (variant_nibble & 0xe) == 0xc
+                ? "reserved for Microsoft compatibility"
+                : "reserved for future definition";
+    auto instance = std::make_shared<PyInstanceObj>(klass, py_dict());
+    auto* attrs = as_dict(instance->attrs);
+    dict_set(attrs, py_str("hex"), py_str(hex));
+    dict_set(attrs, py_str("bytes"), py_bytes(bytes));
+    dict_set(attrs, py_str("version"), py_int(hex_value(hex[12])));
+    dict_set(attrs, py_str("variant"), py_str(variant));
+    dict_set(attrs, py_str("urn"), py_str("urn:uuid:" + text));
+    dict_set(attrs, py_str("__str__"),
+             py_builtin("__str__", [text](interpreter&, const py_args&) {
+                 return py_str(text);
+             }));
+    dict_set(attrs, py_str("__repr__"),
+             py_builtin("__repr__", [text](interpreter&, const py_args&) {
+                 return py_str("UUID('" + text + "')");
+             }));
+    dict_set(attrs, py_str("__eq__"),
+             py_builtin("__eq__", [hex](interpreter& i2, const py_args& a) {
+                 if (a.pos.empty())
+                     return py_false();
+                 const PyRef other_hex = i2.getattr(a.pos[0], "hex");
+                 const auto* other = as_str(other_hex);
+                 return py_bool(other != nullptr && other->v == hex);
+             }));
+    return instance;
+}
+
+PyRef construct(interpreter& i, const PyRef& klass, const py_args& a) {
+    if (a.pos.size() > 1)
+        i.raise_exc("TypeError", "UUID() takes at most one positional argument", {});
+    PyRef source = a.pos.empty() ? PyRef{} : a.pos[0];
+    for (const auto& [name, value] : a.kw) {
+        if (name != "hex" && name != "bytes")
+            i.raise_exc("TypeError", "UUID() got an unexpected keyword argument", {});
+        if (source)
+            i.raise_exc("TypeError", "UUID() received multiple input values", {});
+        source = value;
+    }
+    if (!source)
+        i.raise_exc("TypeError", "UUID() requires a hex or bytes value", {});
+    return make_uuid(i, klass, normalize(i, source));
+}
+
+} // namespace uuid_impl
+
+PyRef mod_uuid(interpreter& i) {
+    PyRef module = mk_mod("uuid");
+    auto klass = std::make_shared<PyClassObj>();
+    klass->name = "UUID";
+    klass->attrs = py_dict();
+    put_c(module, "UUID",
+          py_builtin("UUID", [klass](interpreter& i2, const py_args& a) {
+              return uuid_impl::construct(i2, klass, a);
+          }));
+    put_fn(module, "uuid4", [klass](interpreter& i2, const py_args& a) {
+        if (!a.pos.empty() || !a.kw.empty())
+            i2.raise_exc("TypeError", "uuid4() takes no arguments", {});
+        std::string bytes = system_random_bytes(i2, 16);
+        bytes[6] = static_cast<char>((static_cast<unsigned char>(bytes[6]) & 0x0f) | 0x40);
+        bytes[8] = static_cast<char>((static_cast<unsigned char>(bytes[8]) & 0x3f) | 0x80);
+        return uuid_impl::make_uuid(i2, klass, uuid_impl::bytes_to_hex(bytes));
+    });
+    return module;
+}
+
+namespace secrets_impl {
+
+std::size_t byte_count(interpreter& i, const py_args& a, const char* fn) {
+    PyRef value;
+    if (a.pos.size() > 1)
+        i.raise_exc("TypeError", std::string(fn) + "() takes at most one argument", {});
+    if (!a.pos.empty())
+        value = a.pos[0];
+    for (const auto& [name, item] : a.kw) {
+        if (name != "nbytes")
+            i.raise_exc("TypeError", std::string(fn) + "() got an unexpected keyword", {});
+        if (value)
+            i.raise_exc("TypeError", std::string(fn) + "() received nbytes twice", {});
+        value = item;
+    }
+    if (!value || py_is_none(value))
+        return 32;
+    const int64_t count = integer_arg(i, value, fn);
+    if (count < 0)
+        i.raise_exc("ValueError", "negative argument not allowed", {});
+    return static_cast<std::size_t>(count);
+}
+
+uint64_t randbelow(interpreter& i, uint64_t bound) {
+    if (bound == 0)
+        i.raise_exc("ValueError", "Upper bound must be positive", {});
+    const uint64_t threshold = (uint64_t{0} - bound) % bound;
+    for (;;) {
+        const uint64_t value = system_random_u64(i);
+        if (value >= threshold)
+            return value % bound;
+    }
+}
+
+PyRef m_token_bytes(interpreter& i, const py_args& a) {
+    return py_bytes(system_random_bytes(i, byte_count(i, a, "token_bytes")));
+}
+
+PyRef m_token_hex(interpreter& i, const py_args& a) {
+    return py_str(uuid_impl::bytes_to_hex(
+        system_random_bytes(i, byte_count(i, a, "token_hex"))));
+}
+
+PyRef m_randbelow(interpreter& i, const py_args& a) {
+    const int64_t bound = integer_arg(i, arg_at(i, a, 0, "randbelow"),
+                                      "randbelow");
+    if (a.pos.size() != 1 || !a.kw.empty())
+        i.raise_exc("TypeError", "randbelow() takes exactly one argument", {});
+    if (bound <= 0)
+        i.raise_exc("ValueError", "Upper bound must be positive", {});
+    return py_int(static_cast<int64_t>(randbelow(i, static_cast<uint64_t>(bound))));
+}
+
+PyRef m_choice(interpreter& i, const py_args& a) {
+    if (a.pos.size() != 1 || !a.kw.empty())
+        i.raise_exc("TypeError", "choice() takes exactly one argument", {});
+    std::vector<PyRef> items;
+    i.for_each(a.pos[0], [&](PyRef item) {
+        if (items.size() >= 1024 * 1024)
+            i.raise_exc("MemoryError", "choice sequence limit exceeded", {});
+        items.push_back(std::move(item));
+        return true;
+    });
+    if (items.empty())
+        i.raise_exc("IndexError", "Cannot choose from an empty sequence", {});
+    return items[static_cast<std::size_t>(randbelow(i, items.size()))];
+}
+
+} // namespace secrets_impl
+
+PyRef mod_secrets(interpreter& i) {
+    PyRef module = mk_mod("secrets");
+    put_fn(module, "token_bytes", secrets_impl::m_token_bytes);
+    put_fn(module, "token_hex", secrets_impl::m_token_hex);
+    put_fn(module, "randbelow", secrets_impl::m_randbelow);
+    put_fn(module, "choice", secrets_impl::m_choice);
+    return module;
+}
+
+namespace statistics_impl {
+
+std::vector<double> values(interpreter& i, const PyRef& iterable,
+                           const char* fn) {
+    std::vector<double> out;
+    i.for_each(iterable, [&](PyRef value) {
+        if (out.size() >= 1024 * 1024)
+            i.raise_exc("MemoryError", "statistics input limit exceeded", {});
+        bool ok = false;
+        const double number = py_to_float(value, &ok);
+        if (!ok)
+            i.raise_exc("TypeError", std::string(fn) + " requires numeric data", {});
+        out.push_back(number);
+        return true;
+    });
+    if (out.empty())
+        i.raise_exc("ValueError", std::string(fn) + " requires at least one data point", {});
+    return out;
+}
+
+PyRef m_mean(interpreter& i, const py_args& a) {
+    if (a.pos.size() != 1 || !a.kw.empty())
+        i.raise_exc("TypeError", "mean() takes exactly one argument", {});
+    auto data = values(i, arg_at(i, a, 0, "mean"), "mean");
+    double total = 0.0;
+    for (const double value : data)
+        total += value;
+    return py_float(total / static_cast<double>(data.size()));
+}
+
+PyRef m_median(interpreter& i, const py_args& a) {
+    if (a.pos.size() != 1 || !a.kw.empty())
+        i.raise_exc("TypeError", "median() takes exactly one argument", {});
+    auto data = values(i, arg_at(i, a, 0, "median"), "median");
+    std::sort(data.begin(), data.end());
+    const std::size_t middle = data.size() / 2;
+    if ((data.size() & 1U) != 0)
+        return py_float(data[middle]);
+    return py_float((data[middle - 1] + data[middle]) / 2.0);
+}
+
+} // namespace statistics_impl
+
+PyRef mod_statistics(interpreter& i) {
+    PyRef module = mk_mod("statistics");
+    put_fn(module, "mean", statistics_impl::m_mean);
+    put_fn(module, "fmean", statistics_impl::m_mean);
+    put_fn(module, "median", statistics_impl::m_median);
+    put_c(module, "StatisticsError",
+          dict_get(as_dict(i.builtins_dict), py_str("ValueError")));
+    return module;
+}
+
+PyRef mod_importlib(interpreter& i) {
+    PyRef module = mk_mod("importlib");
+    put_fn(module, "import_module", [](interpreter& i2, const py_args& a) {
+        if (a.pos.empty() || a.pos.size() > 2)
+            i2.raise_exc("TypeError", "import_module() takes one or two arguments", {});
+        const auto* name = as_str(arg_at(i2, a, 0, "import_module"));
+        if (name == nullptr)
+            i2.raise_exc("TypeError", "import_module() name must be str", {});
+        PyRef package_value = a.pos.size() > 1 ? a.pos[1] : PyRef{};
+        for (const auto& [key, value] : a.kw) {
+            if (key != "package")
+                i2.raise_exc("TypeError", "import_module() got an unexpected keyword", {});
+            if (package_value)
+                i2.raise_exc("TypeError", "import_module() received package twice", {});
+            package_value = value;
+        }
+        std::size_t level = 0;
+        while (level < name->v.size() && name->v[level] == '.')
+            ++level;
+        if (level == 0)
+            return i2.import_dotted(name->v, i2.cur_frame, 0);
+        const auto* package = as_str(package_value);
+        if (package == nullptr || package->v.empty())
+            i2.raise_exc("TypeError", "relative import requires the package argument", {});
+        frame relative;
+        relative.locals = py_dict();
+        relative.globals = relative.locals;
+        relative.file = i2.cur_frame ? i2.cur_frame->file : "<importlib>";
+        relative.line = i2.cur_frame ? i2.cur_frame->line : 1;
+        dict_set(as_dict(relative.globals), py_str("__package__"),
+                 py_str(package->v));
+        return i2.import_dotted(name->v.substr(level), &relative,
+                                static_cast<int>(level));
+    });
+    return module;
 }
 
 // ═══ sys ═══
@@ -2492,6 +2855,10 @@ PyRef pymini_extra_member(interpreter& i, const PyRef& obj,
 void pymini_register_stdlib_factories_2(interpreter& i) {
     i.stdlib_factories["os"] = mod_os;
     i.stdlib_factories["os.path"] = mod_ospath;
+    i.stdlib_factories["uuid"] = mod_uuid;
+    i.stdlib_factories["secrets"] = mod_secrets;
+    i.stdlib_factories["statistics"] = mod_statistics;
+    i.stdlib_factories["importlib"] = mod_importlib;
     i.stdlib_factories["sys"] = mod_sys;
     i.stdlib_factories["io"] = mod_io;
     i.stdlib_factories["threading"] = mod_threading;

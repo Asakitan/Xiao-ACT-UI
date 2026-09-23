@@ -12,6 +12,7 @@
 #include "pymini_interp.h"
 
 #include "sao/plugins/loader/plugin_context.h"
+#include "sao/plugins/loader/plugin_context_lifetime_internal.h"
 #include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_manifest.h"
@@ -341,10 +342,10 @@ std::string mini_menu_json(interpreter& i, const PyRef& value) {
         auto& out = *frame.output;
         if (!v || py_is_none(v)) out = nullptr;
         else if (auto* b = as_bool(v)) out = b->v;
-        else if (auto* n = as_int(v)) out = n->v;
-        else if (auto* n = as_float(v)) {
-            if (!std::isfinite(n->v)) i.raise_exc("ValueError", "non-finite menu JSON", {});
-            out = n->v;
+        else if (auto* integer = as_int(v)) out = integer->v;
+        else if (auto* number = as_float(v)) {
+            if (!std::isfinite(number->v)) i.raise_exc("ValueError", "non-finite menu JSON", {});
+            out = number->v;
         } else if (auto* s = as_str(v)) {
             if (s->v.size() > menu_nav::max_text_bytes - bytes) i.raise_exc("ValueError", "menu JSON byte budget exceeded", {});
             bytes += s->v.size();
@@ -703,6 +704,9 @@ void SAO_PLUGINS_CALL tr_engine_channel(const char* channel,
                                         std::size_t payload_size, void* ud) {
     auto* b = static_cast<cb_box*>(ud);
     if (!b || !b->i || !b->fn || !as_dict(b->fn))
+        return;
+    loader::context_runtime_lease invocation(b->i->context_lifetime.lock());
+    if (b->i->cfg.ctx && !invocation)
         return;
     gil_guard g(*b->i);
     try {
@@ -1622,6 +1626,9 @@ struct ctx_builder {
         return r;
     }
     PyRef m_load_local(interpreter&, const py_args& a) {
+        if (a.pos.size() != 1 || !a.kw.empty() || !as_str(a.pos[0]) ||
+            as_str(a.pos[0])->v.find('\0') != std::string::npos)
+            i.raise_exc("TypeError", "load_local expects one path string without NUL", {});
         const std::string rel = pos_str(i, a, 0);
         script::load_local_result kind{};
         std::shared_ptr<script::script_module> mod;
@@ -1632,7 +1639,8 @@ struct ctx_builder {
             i.cfg.plugin_root.c_str(), rel.c_str(), &kind, &mod, &abs,
             &diag);
         if (r != 0)
-            return py_none();
+            i.raise_exc("RuntimeError", "load_local failed with status " +
+                        std::to_string(r) + ": " + diag, {});
         switch (kind) {
         case script::load_local_result::module:
             if (mod)
@@ -2024,8 +2032,11 @@ struct ctx_builder {
         for (const auto& mname : mod->member_names()) {
             script::script_value_ptr v;
             std::string err;
-            if (mod->get(mname, &v, &err) == 0 && v &&
-                v->k == script::script_value::kind::function) {
+            const int32_t status = mod->get(mname, &v, &err);
+            if (status != SAO_OK)
+                i.raise_exc("RuntimeError", "load_local member " + mname +
+                            " failed with status " + std::to_string(status) + ": " + err, {});
+            if (v && v->k == script::script_value::kind::function) {
                 dict_set(as_dict(proxy->dict), py_str(mname),
                          py_builtin(mname,
                                     [this, mod, mname](interpreter& i2,
@@ -2352,6 +2363,10 @@ const char* const k_surface_names[] = {
 
 // ── public entry: build ctx object bound to interpreter cfg ───────────
 PyRef pymini_make_ctx(interpreter& i) {
+    loader::context_runtime_lease invocation(i.cfg.ctx);
+    if (i.cfg.ctx && !invocation)
+        i.raise_exc("RuntimeError", "plugin context is retired", {});
+    i.context_lifetime = invocation.state();
     // heap-allocated + anchored: the method lambdas in build() capture the
     // raw `this`, so the builder must outlive the ctx dict.
     auto b = std::make_shared<ctx_builder>(

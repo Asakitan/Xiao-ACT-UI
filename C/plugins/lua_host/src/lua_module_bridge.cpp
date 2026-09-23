@@ -22,10 +22,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -56,6 +58,13 @@ namespace {
 using loader_context_t = sao::plugins::loader::plugin_context_t;
 
 struct bridge_state;
+class lua_local_module;
+
+struct local_path_less {
+    bool operator()(const std::wstring& left, const std::wstring& right) const noexcept {
+        return _wcsicmp(left.c_str(), right.c_str()) < 0;
+    }
+};
 
 namespace menu_navigation = sao::plugins::script_ctx::menu_navigation;
 using menu_row = menu_navigation::Row;
@@ -144,6 +153,7 @@ struct bridge_state {
     std::unordered_map<uint32_t, std::shared_ptr<event_callback_record>> render_hooks;
     std::unordered_map<std::string, std::shared_ptr<panel_callback_record>> panels;
     std::unordered_map<std::string, int> engines;
+    std::map<std::wstring, std::shared_ptr<lua_local_module>, local_path_less> local_modules;
     // FULL reflective engine surface: per-bridge SaoSdkContext bound at
     // register_ctx time plus the channel map for ctx.engine.on().  The
     // dedicated mutex keeps provider-thread channel lookups off the state
@@ -1282,6 +1292,7 @@ bridge_state* checked_bridge(lua_State* state) {
 struct method_failure final {
     const char* operation = "ctx method";
     int32_t status = SAO_ERR_OS_CALL_FAILED;
+    std::string diagnostic;
 };
 
 [[noreturn]] int push_status_error(lua_State*, const char* operation, int32_t status) {
@@ -1741,7 +1752,6 @@ int script_module_gc(lua_State* state) noexcept {
 
 void ensure_script_value_metatable(lua_State* state) {
     if (luaL_newmetatable(state, "SaoScriptValue") == 0) {
-        lua_pop(state, 1);
         return;
     }
     lua_pushcfunction(state, script_value_dispatch);
@@ -1754,7 +1764,6 @@ void ensure_script_value_metatable(lua_State* state) {
 
 void ensure_script_module_metatable(lua_State* state) {
     if (luaL_newmetatable(state, "SaoScriptModule") == 0) {
-        lua_pop(state, 1);
         return;
     }
     lua_pushcfunction(state, script_module_index);
@@ -2040,6 +2049,13 @@ class lua_local_module final
         return id_;
     }
 
+    void invalidate(lua_State* state) noexcept {
+        if (table_ref_ != LUA_NOREF && table_ref_ != LUA_REFNIL)
+            luaL_unref(state, LUA_REGISTRYINDEX, table_ref_);
+        table_ref_ = LUA_NOREF;
+        state_ = nullptr;
+    }
+
     std::vector<std::string> member_names() const override {
         std::vector<std::string> names;
         if (state_ == nullptr)
@@ -2200,9 +2216,47 @@ class lua_local_module final
 };
 
 // ── runtime_bridge provider (lua engine, priority 50) ────────────────────
-bool lua_engine_probe(loader_context_t*, const wchar_t*, std::string&,
-                      void* /*user_data*/) noexcept {
-    return true;
+int32_t lua_engine_probe(loader_context_t* ctx, const wchar_t*, std::string& note,
+                      void* /*user_data*/) noexcept try {
+    if (find_state_for_context(ctx) == nullptr) {
+        note = "lua engine has no live state for this context";
+        return SAO_ERR_HANDLE_INVALID;
+    }
+    return SAO_OK;
+} catch (...) {
+    return SAO_ERR_OS_CALL_FAILED;
+}
+
+struct local_chunk_data {
+    const std::string& source;
+    const std::string& name;
+    int context_ref = LUA_NOREF;
+    int table_ref = LUA_NOREF;
+    int32_t status = SAO_ERR_OS_CALL_FAILED;
+};
+
+int load_local_chunk_body(lua_State* state) {
+    auto* data = static_cast<local_chunk_data*>(lua_touserdata(state, 1));
+    if (luaL_loadbufferx(state, data->source.data(), data->source.size(),
+                        data->name.c_str(), "t") != LUA_OK) {
+        data->status = SAO_ERR_INVALID_ARGUMENT;
+        return lua_error(state);
+    }
+    lua_newtable(state);
+    lua_rawgeti(state, LUA_REGISTRYINDEX, data->context_ref);
+    lua_setfield(state, -2, "ctx");
+    lua_newtable(state);
+    lua_rawgeti(state, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
+    lua_setfield(state, -2, "__index");
+    lua_setmetatable(state, -2);
+    lua_pushvalue(state, -1);
+    lua_setupvalue(state, -3, 1);
+    lua_pushvalue(state, -2);
+    lua_call(state, 0, 1);
+    if (!lua_istable(state, -1))
+        lua_pop(state, 1);
+    data->table_ref = luaL_ref(state, LUA_REGISTRYINDEX);
+    return 0;
 }
 
 int32_t SAO_PLUGINS_CALL lua_engine_load_module(
@@ -2233,67 +2287,84 @@ int32_t SAO_PLUGINS_CALL lua_engine_load_module(
         }
         state = operation.state();
 
+        bridge_state* bridge = nullptr;
+        {
+            std::lock_guard lock(g_bridge_map_mutex);
+            const auto found = g_bridge_map.find(state);
+            if (found != g_bridge_map.end())
+                bridge = found->second.get();
+        }
+        if (bridge == nullptr || bridge->closing || bridge->context != ctx ||
+            bridge->context_ref == LUA_NOREF || bridge->context_ref == LUA_REFNIL) {
+            if (out_error != nullptr)
+                *out_error = "lua module caller context is unavailable";
+            return SAO_ERR_HANDLE_INVALID;
+        }
+        const auto path = std::filesystem::weakly_canonical(std::filesystem::path(abs_path));
+        auto [entry, inserted] = bridge->local_modules.try_emplace(path.wstring());
+        if (!inserted) {
+            if (entry->second) {
+                *out_module = entry->second;
+                return SAO_OK;
+            }
+            if (out_error != nullptr)
+                *out_error = "lua cyclic load_local: " + wide_to_utf8(abs_path);
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        struct pending_module_guard {
+            bridge_state& bridge;
+            decltype(bridge_state::local_modules)::iterator entry;
+            ~pending_module_guard() {
+                if (!entry->second)
+                    bridge.local_modules.erase(entry);
+            }
+        } pending{*bridge, entry};
+
         std::ifstream input(std::filesystem::path(abs_path), std::ios::binary);
         if (!input) {
             if (out_error != nullptr)
-                *out_error = "lua load_module: cannot open file";
-            return SAO_ERR_HANDLE_INVALID;
+                *out_error = "lua load_module: cannot open file: " + wide_to_utf8(abs_path);
+            return SAO_ERR_OS_CALL_FAILED;
         }
         std::string source{std::istreambuf_iterator<char>(input),
                            std::istreambuf_iterator<char>()};
         if (!input.eof() && input.fail()) {
             if (out_error != nullptr)
-                *out_error = "lua load_module: read failed";
+                *out_error = "lua load_module: read failed: " + wide_to_utf8(abs_path);
             return SAO_ERR_OS_CALL_FAILED;
         }
 
         const int base = lua_gettop(state);
+        struct stack_guard {
+            lua_State* state;
+            int base;
+            ~stack_guard() { lua_settop(state, base); }
+        } stack{state, base};
         const std::string chunk_name = "@" + wide_to_utf8(abs_path);
-        if (luaL_loadbufferx(state, source.data(), source.size(), chunk_name.c_str(),
-                            "t") != LUA_OK) {
+        local_chunk_data data{source, chunk_name, bridge->context_ref};
+        if (detail::protected_trampoline(state, load_local_chunk_body, &data, 0) != LUA_OK) {
             const char* message = lua_tostring(state, -1);
             if (out_error != nullptr) {
-                *out_error = message == nullptr ? "lua chunk load failed"
+                *out_error = message == nullptr ? "lua chunk failed: " + chunk_name
                                               : std::string(message);
             }
             detail::capture_state_error_locked(state, -1);
-            lua_settop(state, base);
-            return SAO_ERR_INVALID_ARGUMENT;
+            return data.status;
         }
-        // stack: [chunk]; add isolated _ENV = setmetatable({}, {__index=_G})
-        lua_newtable(state);                                   // chunk, env
-        lua_newtable(state);                                   // chunk, env, env_mt
-        lua_rawgeti(state, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
-        lua_setfield(state, -2, "__index");
-        lua_setmetatable(state, -2);
-        lua_pushvalue(state, -1);                              // chunk, env, env
-        lua_setupvalue(state, -3, 1);                          // chunk._ENV=env → chunk, env
-        if (lua_pcall(state, 0, 1, 0) != LUA_OK) {
-            const char* message = lua_tostring(state, -1);
-            if (out_error != nullptr) {
-                *out_error = message == nullptr ? "lua chunk exec failed"
-                                              : std::string(message);
-            }
-            detail::capture_state_error_locked(state, -1);
-            lua_settop(state, base);
-            return SAO_ERR_OS_CALL_FAILED;
+        try {
+            entry->second = std::make_shared<lua_local_module>(state, data.table_ref,
+                                                              logical_name);
+        } catch (...) {
+            luaL_unref(state, LUA_REGISTRYINDEX, data.table_ref);
+            throw;
         }
-        // stack: env, result.  Module table = returned table, else env.
-        int module_ref = LUA_NOREF;
-        if (lua_istable(state, -1)) {
-            module_ref = luaL_ref(state, LUA_REGISTRYINDEX);  // refs result table
-        } else {
-            lua_pop(state, 1);                    // drop non-table result
-            module_ref = luaL_ref(state, LUA_REGISTRYINDEX);  // refs env table
-        }
-        lua_settop(state, base);
-        auto module = std::make_shared<lua_local_module>(state, module_ref,
-                                                         logical_name);
-        *out_module = std::move(module);
+        *out_module = entry->second;
         return SAO_OK;
     } catch (...) {
-        if (out_error != nullptr)
-            *out_error = "lua load_module: internal error";
+        if (out_error != nullptr) {
+            try { *out_error = "lua load_module: internal error"; }
+            catch (...) { out_error->clear(); }
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }
@@ -3225,8 +3296,9 @@ int ctx_ensure_requirements(lua_State* state) {
 
 int ctx_load_local(lua_State* state) {
     auto* bridge = checked_bridge(state);
-    const char* rel = luaL_checkstring(state, 2);
-    if (rel == nullptr || rel[0] == '\0') {
+    size_t length = 0;
+    const char* rel = luaL_checklstring(state, 2, &length);
+    if (rel == nullptr || length == 0 || std::strlen(rel) != length || lua_gettop(state) != 2) {
         return push_status_error(state, "load_local", SAO_ERR_INVALID_ARGUMENT);
     }
     const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge->context);
@@ -3239,7 +3311,7 @@ int ctx_load_local(lua_State* state) {
         bridge->context, plugin_id == nullptr ? "" : plugin_id, root_dir, rel, &kind,
         &module, &abs_path, &diag);
     if (status != SAO_OK) {
-        return push_status_error(state, "load_local", status);
+        throw method_failure{"load_local", status, diag};
     }
     switch (kind) {
     case script_ctx::load_local_result::module:
@@ -4089,16 +4161,19 @@ const char* const kCtxSurfaceNames[] = {
 
 template <int (*Function)(lua_State*)> int safe_method(lua_State* state) noexcept {
     const char* operation = nullptr;
+    char diagnostic[2048]{};
     int32_t status = SAO_ERR_OS_CALL_FAILED;
     try {
         return Function(state);
     } catch (const method_failure& failure) {
         operation = failure.operation;
         status = failure.status;
+        std::snprintf(diagnostic, sizeof(diagnostic), "%s", failure.diagnostic.c_str());
     } catch (...) {
         operation = "ctx method crossed C++ exception boundary";
     }
-    return luaL_error(state, "%s failed with status %d", operation, status);
+    return luaL_error(state, "%s failed with status %d%s%s", operation, status,
+                      diagnostic[0] == '\0' ? "" : ": ", diagnostic);
 }
 
 // Legacy compat: scripts written for the Python-style surface call
@@ -4758,6 +4833,12 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
             luaL_unref(state, LUA_REGISTRYINDEX, reference);
         }
         bridge->engines.clear();
+        for (const auto& [path, module] : bridge->local_modules) {
+            (void)path;
+            if (module)
+                module->invalidate(state);
+        }
+        bridge->local_modules.clear();
         for (auto& menu : bridge->menus) {
             menu->closing = true;
             if (menu->builder_ref != LUA_NOREF && menu->builder_ref != LUA_REFNIL) {

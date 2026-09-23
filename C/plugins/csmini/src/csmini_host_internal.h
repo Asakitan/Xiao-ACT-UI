@@ -15,14 +15,15 @@ namespace sao::plugins::csmini {
 // nlohmann::json → CsRef (dict/array/scalars) — defined in csmini_stdlib2.cpp.
 CsRef csmini_json_to_cs(const nlohmann::json& j);
 
-// load returns: 0 ok / -1 bad args / -2 already loaded / -3 entry unreadable
-// / -4 script error / -5 internal error
+std::string csmini_read_file(const std::wstring& path);
+
+// out_owned remains true on partial failure until explicit unload succeeds.
 int csmini_host_load_plugin(loader::plugin_context_t* ctx,
                             const char* plugin_id,
                             const wchar_t* plugin_root,
                             const wchar_t* entry_rel,
                             const std::vector<std::wstring>& extra_dirs,
-                            std::string* out_err);
+                            std::string* out_err, bool* out_owned = nullptr);
 
 // hook invoke — 0 ok / 1 hook absent / <0 raised.  `out_ret` variant captures
 // the hook's return value (adapter on_unload needs the veto bool).

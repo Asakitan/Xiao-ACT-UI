@@ -16,7 +16,7 @@ enum class tok_kind : uint8_t {
     // operators
     plus, minus, star, dstar, slash, dslash, percent, tilde, caret, amp, pipe,
     lshift, rshift,
-    assign, plus_eq, minus_eq, star_eq, dstar_eq, slash_eq, dslash_eq,
+    assign, walrus, plus_eq, minus_eq, star_eq, dstar_eq, slash_eq, dslash_eq,
     percent_eq, amp_eq, pipe_eq, caret_eq, lshift_eq, rshift_eq, at_eq,
     eq, ne, lt, le, gt, ge,
 };

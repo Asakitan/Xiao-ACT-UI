@@ -40,6 +40,7 @@ enum class py_kind : uint8_t {
     class_, instance, super_, module, exception_,
     file_, thread_, lock_, event_, queue_, deque_, counter_,
     module_proxy, range_, map_, filter_, zip_, enumerate_, reversed_,
+    ellipsis_,
 };
 
 struct PyObj {
@@ -52,6 +53,7 @@ struct PyObj {
 
 // ── scalar objects ────────────────────────────────────────────────────────
 struct PyNoneObj : PyObj { PyNoneObj() : PyObj(py_kind::none_) {} };
+struct PyEllipsisObj : PyObj { PyEllipsisObj() : PyObj(py_kind::ellipsis_) {} };
 struct PyBoolObj : PyObj { bool v; explicit PyBoolObj(bool x) : PyObj(py_kind::boolean), v(x) {} };
 struct PyIntObj : PyObj { int64_t v; explicit PyIntObj(int64_t x) : PyObj(py_kind::integer), v(x) {} };
 struct PyFloatObj : PyObj { double v; explicit PyFloatObj(double x) : PyObj(py_kind::number), v(x) {} };
@@ -134,6 +136,8 @@ struct PyFuncObj : PyObj {
     std::vector<PyRef> closure;                           // captured cells
     PyRef globals_dict;                                   // module dict at def time
     PyRef docstring;                                      // str or none
+    bool is_async = false;
+    bool is_generator = false;
     PyFuncObj() : PyObj(py_kind::func) {}
 };
 
@@ -249,6 +253,7 @@ struct PyCounterObj : PyObj {               // collections.Counter
 
 // ── singletons + factories ────────────────────────────────────────────────
 PyRef py_none();
+PyRef py_ellipsis();
 PyRef py_true();
 PyRef py_false();
 PyRef py_bool(bool v);

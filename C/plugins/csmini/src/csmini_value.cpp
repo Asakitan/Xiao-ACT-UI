@@ -25,8 +25,21 @@ CsRef cs_float(double v) { return std::make_shared<CsFloatObj>(v); }
 CsRef cs_str(std::string_view v) { return std::make_shared<CsStrObj>(std::string(v)); }
 CsRef cs_str(const char* v) { return std::make_shared<CsStrObj>(std::string(v ? v : "")); }
 CsRef cs_char(int64_t v) { return std::make_shared<CsCharObj>(v); }
-CsRef cs_array(std::vector<CsRef> v) { return std::make_shared<CsArrayObj>(std::move(v)); }
+CsRef cs_array(std::vector<CsRef> v) {
+    return std::make_shared<CsArrayObj>(std::move(v),
+                                        cs_array_semantics::sequence);
+}
+CsRef cs_set(std::vector<CsRef> v) {
+    auto out = std::make_shared<CsArrayObj>(cs_array_semantics::set);
+    out->v.reserve(v.size());
+    for (CsRef& value : v)
+        (void)cs_set_add(out.get(), std::move(value));
+    return out;
+}
 CsRef cs_dict() { return std::make_shared<CsDictObj>(); }
+CsRef cs_guid(const std::array<uint8_t, 16>& bytes) {
+    return std::make_shared<CsGuidObj>(bytes);
+}
 CsRef cs_builtin(std::string name, cs_native_fn fn) {
     return std::make_shared<CsBuiltinObj>(std::move(name), std::move(fn));
 }
@@ -186,6 +199,8 @@ std::string cs_to_str(interpreter&, const CsRef& r) {
         }
         return out + "}";
     }
+    case cs_kind::guid:
+        return cs_guid_format(as_guid(r)->bytes);
     case cs_kind::exception_: {
         auto* e = as_exc(r);
         return e->type_name + (e->message.empty() ? "" : ": " + e->message);
@@ -196,6 +211,8 @@ std::string cs_to_str(interpreter&, const CsRef& r) {
         return "<native " + as_builtin(r)->name + ">";
     case cs_kind::bound_method:
         return "<bound method>";
+    case cs_kind::property:
+        return "<property " + as_property(r)->name + ">";
     case cs_kind::class_:
         return as_class(r)->name;
     case cs_kind::instance:
@@ -215,12 +232,14 @@ const char* cs_type_name(const CsRef& r) {
     case cs_kind::number: return "double";
     case cs_kind::char_: return "char";
     case cs_kind::string: return "string";
-    case cs_kind::array: return "array";
+    case cs_kind::array: return as_array(r)->is_set() ? "HashSet" : "array";
     case cs_kind::dict: return "Dictionary";
+    case cs_kind::guid: return "Guid";
     case cs_kind::exception_: return "Exception";
     case cs_kind::func:
     case cs_kind::builtin:
     case cs_kind::bound_method: return "method";
+    case cs_kind::property: return "property";
     case cs_kind::class_: return "class";
     case cs_kind::instance: return "object";
     case cs_kind::native_obj: return "native";
@@ -245,12 +264,115 @@ bool cs_eq(const CsRef& a, const CsRef& b) {
     switch (a->kind) {
     case cs_kind::string:
         return as_str(a)->v == as_str(b)->v;
+    case cs_kind::guid:
+        return as_guid(a)->bytes == as_guid(b)->bytes;
     case cs_kind::dict:
     case cs_kind::array:
         return a.get() == b.get();
     default:
         return a.get() == b.get();
     }
+}
+
+bool cs_sequence_contains(const CsArrayObj* sequence, const CsRef& value) {
+    if (!sequence)
+        return false;
+    for (const CsRef& current : sequence->v)
+        if (cs_eq(current, value))
+            return true;
+    return false;
+}
+
+bool cs_set_add(CsArrayObj* set, CsRef value) {
+    if (!set || !set->is_set() || cs_sequence_contains(set, value))
+        return false;
+    set->v.push_back(std::move(value));
+    return true;
+}
+
+namespace {
+
+int hex_digit(char ch) {
+    if (ch >= '0' && ch <= '9')
+        return ch - '0';
+    if (ch >= 'a' && ch <= 'f')
+        return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F')
+        return ch - 'A' + 10;
+    return -1;
+}
+
+} // namespace
+
+bool cs_guid_parse(std::string_view text, std::array<uint8_t, 16>* out) {
+    if (!out)
+        return false;
+    if ((text.size() == 38 && text.front() == '{' && text.back() == '}') ||
+        (text.size() == 38 && text.front() == '(' && text.back() == ')'))
+        text = text.substr(1, text.size() - 2);
+    if (text.size() != 32 && text.size() != 36)
+        return false;
+    if (text.size() == 36) {
+        for (std::size_t index = 0; index < text.size(); ++index) {
+            const bool separator = index == 8 || index == 13 || index == 18 ||
+                                   index == 23;
+            if ((text[index] == '-') != separator)
+                return false;
+        }
+    } else if (text.find('-') != std::string_view::npos) {
+        return false;
+    }
+    std::array<uint8_t, 16> value{};
+    std::size_t nibble = 0;
+    int high = -1;
+    for (char ch : text) {
+        if (ch == '-')
+            continue;
+        const int digit = hex_digit(ch);
+        if (digit < 0 || nibble >= 32)
+            return false;
+        if (high < 0) {
+            high = digit;
+        } else {
+            value[nibble / 2] = static_cast<uint8_t>((high << 4) | digit);
+            high = -1;
+        }
+        ++nibble;
+    }
+    if (nibble != 32 || high >= 0)
+        return false;
+    *out = value;
+    return true;
+}
+
+std::string cs_guid_format(const std::array<uint8_t, 16>& bytes,
+                           std::string_view format) {
+    char kind = format.empty() ? 'D' : format.front();
+    if (kind >= 'a' && kind <= 'z')
+        kind = static_cast<char>(kind - ('a' - 'A'));
+    const bool dashed = kind != 'N';
+    const bool braced = kind == 'B';
+    const bool parenthesized = kind == 'P';
+    if (kind != 'D' && kind != 'N' && kind != 'B' && kind != 'P')
+        return {};
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(dashed ? 38 : 32);
+    if (braced)
+        out.push_back('{');
+    else if (parenthesized)
+        out.push_back('(');
+    for (std::size_t index = 0; index < bytes.size(); ++index) {
+        if (dashed && (index == 4 || index == 6 || index == 8 || index == 10))
+            out.push_back('-');
+        out.push_back(hex[(bytes[index] >> 4) & 0x0f]);
+        out.push_back(hex[bytes[index] & 0x0f]);
+    }
+    if (braced)
+        out.push_back('}');
+    else if (parenthesized)
+        out.push_back(')');
+    return out;
 }
 
 CsRef dict_get(const CsDictObj* d, const CsRef& key) {

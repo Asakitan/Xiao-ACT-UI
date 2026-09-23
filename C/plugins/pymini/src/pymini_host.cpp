@@ -13,6 +13,7 @@
 #include "pymini_interp.h"
 
 #include "sao/plugins/loader/plugin_context.h"
+#include "../../loader/src/plugin_internal.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -20,6 +21,7 @@
 #include <windows.h>
 
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <unordered_map>
 
@@ -35,6 +37,7 @@ struct host_state {
     std::uint64_t entry_size = 0;
     std::int64_t entry_mtime = 0;
     bool unload_hook_fired = false;  // veto call already ran on_unload
+    bool failed_load_cleanup_pending = false;
 };
 
 std::mutex g_hosts_mu;
@@ -82,18 +85,25 @@ std::string read_all(const std::wstring& path, bool* ok = nullptr) {
     if (h == INVALID_HANDLE_VALUE)
         return {};
     LARGE_INTEGER sz{};
-    GetFileSizeEx(h, &sz);
-    std::string out(static_cast<std::size_t>(sz.QuadPart), '\0');
-    DWORD rd = 0;
-    const bool r =
-        sz.QuadPart <= 0 ||
-        ReadFile(h, out.data(), static_cast<DWORD>(sz.QuadPart), &rd, nullptr);
-    CloseHandle(h);
-    if (!r)
+    if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0 || sz.QuadPart > 1024 * 1024) {
+        CloseHandle(h);
         return {};
-    if (ok)
-        *ok = true;
-    return out;
+    }
+    try {
+        std::string out(static_cast<std::size_t>(sz.QuadPart), '\0');
+        DWORD rd = 0;
+        const bool complete = ReadFile(h, out.data(), static_cast<DWORD>(sz.QuadPart),
+                                       &rd, nullptr) && rd == sz.QuadPart;
+        CloseHandle(h);
+        if (!complete)
+            return {};
+        if (ok)
+            *ok = true;
+        return out;
+    } catch (...) {
+        CloseHandle(h);
+        throw;
+    }
 }
 bool file_info(const std::wstring& p, std::uint64_t* size,
                std::int64_t* mtime) {
@@ -309,78 +319,59 @@ int pymini_host_load_plugin(loader::plugin_context_t* ctx,
     auto s = std::make_unique<host_state>();
     s->interp = std::make_unique<interpreter>(interpreter::config{});
     interpreter& i = *s->interp;
-    i.cfg.ctx = ctx;
-    i.cfg.plugin_id = plugin_id;
-    i.cfg.plugin_root = plugin_root;
-    i.cfg.module_dirs.push_back(plugin_root);
-    // vendored / bundled python dirs — probing searches each for `x.py` or
-    // `x/__init__.py`.
-    const wchar_t* const sub[] = {L"", L"vendor", L"vendors", L"libs",
-                                  L"lib",   L"site-packages",
-                                  L"python"};
-    for (const wchar_t* sdir : sub) {
-        std::wstring d = plugin_root;
-        if (*sdir) {
-            d += L'\\';
-            d += sdir;
+    auto failed_load = [&] {
+        const int32_t cleanup = loader::plugin_context_release_resources(ctx);
+        if (cleanup != SAO_OK) {
+            s->unload_hook_fired = true;
+            s->failed_load_cleanup_pending = true;
+            s->entry_globals = nullptr;
+            g_hosts[plugin_id] = std::move(s);
+            if (out_err)
+                *out_err += "; callback cleanup pending: " + std::to_string(cleanup);
+        } else {
+            pymini_drop_callbacks(i);
         }
-        i.cfg.module_dirs.push_back(d);
-    }
-    for (const auto& d : extra_dirs)
-        i.cfg.module_dirs.push_back(d);
-    i.cfg.log_hook = [ctx](const std::string& msg) {
-        if (ctx)
-            sao_plugins_ctx_log(ctx, msg.c_str());
     };
-    i.on_log = i.cfg.log_hook;
-
-    pymini_register_stdlib(i);
-
-    // compat shims registered into sys_modules (and stdlib_factories) so
-    // `import act_platform` / `import sao_sdk` resolve.
-    s->ctx_obj = pymini_make_ctx(i);
-    {
-        PyRef ap = build_compat_module(i, s->ctx_obj, "act_platform");
-        dict_set(as_dict(i.sys_modules), py_str("act_platform"), ap);
-        PyRef sdk = build_compat_module(i, s->ctx_obj, "sao_sdk");
-        dict_set(as_dict(i.sys_modules), py_str("sao_sdk"), sdk);
-    }
-
-    // entry source
-    std::wstring abs = plugin_root;
-    abs += L'\\';
-    abs += entry_rel;
-    for (auto& ch : abs)
-        if (ch == L'/')
-            ch = L'\\';
-    s->entry_abs = abs;
-    file_info(abs, &s->entry_size, &s->entry_mtime);
-    bool read_ok = false;
-    const std::string src = read_all(abs, &read_ok);
-    if (!read_ok) {
-        if (out_err)
-            *out_err = "entry file unreadable: " + narrow(abs);
-        return -3;
-    }
-
-    std::string logical = narrow(entry_rel);
-    for (auto& ch : logical)
-        if (ch == '\\' || ch == '/')
-            ch = '.';
-    while (!logical.empty() && logical.back() == '.')
-        logical.pop_back();
-
-    gil_guard gg(i);
     try {
-        PyRef mod = i.exec_module_source(logical, narrow(abs), src);
+        i.cfg.ctx = ctx;
+        i.cfg.plugin_id = plugin_id;
+        const auto logical = pymini_configure_imports(i.cfg, plugin_root, entry_rel, extra_dirs);
+        i.cfg.log_hook = [ctx](const std::string& msg) {
+            if (ctx) sao_plugins_ctx_log(ctx, msg.c_str());
+        };
+        i.on_log = i.cfg.log_hook;
+        pymini_register_stdlib(i);
+
+        const auto abs = (std::filesystem::path(i.cfg.plugin_root) / entry_rel).lexically_normal().wstring();
+        s->entry_abs = abs;
+        file_info(abs, &s->entry_size, &s->entry_mtime);
+        bool read_ok = false;
+        const std::string src = read_all(abs, &read_ok);
+        if (!read_ok) {
+            if (out_err) *out_err = "entry file unreadable: " + narrow(abs);
+            return -3;
+        }
+
+        gil_guard gg(i);
+        s->ctx_obj = pymini_make_ctx(i);
+        {
+            PyRef ap = build_compat_module(i, s->ctx_obj, "act_platform");
+            dict_set(as_dict(i.sys_modules), py_str("act_platform"), ap);
+            PyRef sdk = build_compat_module(i, s->ctx_obj, "sao_sdk");
+            dict_set(as_dict(i.sys_modules), py_str("sao_sdk"), sdk);
+        }
+        PyRef prepared = i.create_module_object(logical, narrow(abs));
+        dict_set(as_dict(as_module(prepared)->dict), py_str("ctx"), s->ctx_obj);
+        dict_set(as_dict(as_module(prepared)->dict), py_str("act_ctx"), s->ctx_obj);
+        i.register_module(prepared);
+        PyRef parent;
+        const auto dot = logical.rfind('.');
+        if (dot != std::string::npos)
+            parent = i.import_dotted(logical.substr(0, dot), nullptr);
+        PyRef mod = i.exec_module_source(logical, narrow(abs), src, prepared);
+        if (parent) i.setattr(parent, logical.substr(dot + 1), mod);
         if (auto* m = as_module(mod)) {
             s->entry_globals = m->dict;
-            // post-inject `ctx` + shortcut names into module globals
-            if (as_dict(m->dict)) {
-                dict_set(as_dict(m->dict), py_str("ctx"), s->ctx_obj);
-                dict_set(as_dict(m->dict), py_str("act_ctx"),
-                         s->ctx_obj);
-            }
         } else {
             s->entry_globals = mod;
         }
@@ -389,17 +380,21 @@ int pymini_host_load_plugin(loader::plugin_context_t* ctx,
             *out_err = e.kind + ": " + e.message + " (" + e.file + ":" +
                        std::to_string(e.pos.line) + ":" +
                        std::to_string(e.pos.col) + ")";
-        g_hosts.erase(plugin_id);
+        failed_load();
         return -4;
     } catch (const sig_raise& sig) {
         if (out_err)
             *out_err = describe_sig(sig, &i);
-        g_hosts.erase(plugin_id);
+        failed_load();
         return -4;
     } catch (const std::exception& e) {
         if (out_err)
             *out_err = exception_tag(e) + " " + e.what();
-        g_hosts.erase(plugin_id);
+        failed_load();
+        return SAO_ERR_UNKNOWN;
+    } catch (...) {
+        if (out_err) *out_err = "entry load raised an unknown exception";
+        failed_load();
         return SAO_ERR_UNKNOWN;
     }
     g_hosts[plugin_id] = std::move(s);
@@ -475,6 +470,13 @@ int pymini_host_unload_plugin(const char* plugin_id,
     auto it = g_hosts.find(plugin_id);
     if (it == g_hosts.end())
         return -2;
+    if (it->second->failed_load_cleanup_pending) {
+        const auto status = loader::plugin_context_release_resources(it->second->interp->cfg.ctx);
+        if (status != SAO_OK) {
+            if (out_err) *out_err = "callback cleanup pending: " + std::to_string(status);
+            return status;
+        }
+    }
     std::unique_ptr<host_state> s = std::move(it->second);
     g_hosts.erase(it);
     // fire on_unload best-effort (skipped when the veto call already ran

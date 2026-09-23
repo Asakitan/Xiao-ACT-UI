@@ -144,6 +144,7 @@ struct sdk_bridge_session {
     uintptr_t handle = 0;
     int32_t callback_release_status = SAO_OK;
     std::string last_error;
+    std::vector<std::shared_ptr<script_ctx::script_module>> load_local_modules;
     std::vector<managed_callback*> callbacks;
     std::vector<entity_registration> entities;
     std::vector<std::string> pending_entity_ids;
@@ -2018,10 +2019,11 @@ int32_t dispatch_loader_method(sdk_bridge_session* session, sdk_method_id method
         }
 
         case sdk_method_id::method_load_local: {
+            remember_error(session, SAO_ERR_INVALID_ARGUMENT, "load_local");
             std::string rel = arg_utf8(args, "path");
             if (rel.empty())
                 rel = arg_utf8(args, "rel");
-            if (rel.empty())
+            if (rel.empty() || rel.find('\0') != std::string::npos)
                 return SAO_ERR_INVALID_ARGUMENT;
             const char* plugin_id = loader::sao_plugins_ctx_plugin_id(ctx);
             const wchar_t* root_dir = loader::sao_plugins_ctx_path(ctx);
@@ -2033,8 +2035,16 @@ int32_t dispatch_loader_method(sdk_bridge_session* session, sdk_method_id method
             std::string diag;
             const int32_t status = script_ctx::runtime_bridge_load_local(
                 ctx, plugin_id, root_dir, rel.c_str(), &kind, &module, &abs_path, &diag);
-            if (status != SAO_OK)
+            if (status != SAO_OK) {
+                std::lock_guard lock(session->mutex);
+                session->last_error = "load_local failed with status " +
+                    std::to_string(status) + ": " + diag;
                 return status;
+            }
+            {
+                std::lock_guard lock(session->mutex);
+                session->last_error.clear();
+            }
             ordered_json result;
             switch (kind) {
             case script_ctx::load_local_result::module:
@@ -2042,6 +2052,10 @@ int32_t dispatch_loader_method(sdk_bridge_session* session, sdk_method_id method
                 result["path"] = utf8_from_wide(abs_path);
                 result["module_id"] = module != nullptr ? module->module_id() : "";
                 result["diag"] = nullptr;
+                {
+                    std::lock_guard lock(session->mutex);
+                    session->load_local_modules.push_back(std::move(module));
+                }
                 break;
             case script_ctx::load_local_result::path_only:
                 result["kind"] = "path";
@@ -2185,7 +2199,8 @@ int32_t SAO_PLUGINS_CALL table_dispatch(cs_managed_sdk_session_t opaque,
         status = dispatch_loader_method(session, static_cast<sdk_method_id>(call->method_id),
                                         loader_args, call);
         if (status != kDispatchFallthrough) {
-            remember_error(session, status, "loader dispatch");
+            if (static_cast<sdk_method_id>(call->method_id) != sdk_method_id::method_load_local)
+                remember_error(session, status, "loader dispatch");
             return status;
         }
     }
@@ -3282,6 +3297,7 @@ int32_t cshost_sdk_session_finish(sdk_bridge_session* session) noexcept {
             if (found != g_session_handles.end() && found->second == session)
                 g_session_handles.erase(found);
         }
+        session->load_local_modules.clear();
         if (session->context_lease) {
             loader::plugin_context_release_host_lease(session->loader_context);
             session->context_lease = false;

@@ -20,6 +20,7 @@ struct parser {
     std::string file;
     feature_flags* flags = nullptr;
     std::size_t pos = 0;
+    int function_depth = 0;
 
     const token& peek(std::size_t off = 0) const {
         const std::size_t idx = pos + off;
@@ -34,6 +35,9 @@ struct parser {
     bool at_kw(const char* kw) const { return is_keyword(peek(), kw); }
     bool at_kw(const char* kw, std::size_t off) const {
         return is_keyword(peek(off), kw);
+    }
+    bool at_comp_for() const {
+        return at_kw("for") || (at_kw("async") && at_kw("for", 1));
     }
 
     [[noreturn]] void fail(const std::string& msg) {
@@ -105,6 +109,87 @@ struct parser {
         return e;
     }
 
+    static bool expr_has_yield(const ast_expr* e) {
+        if (e == nullptr)
+            return false;
+        if (e->tag == et::yield_ || e->tag == et::yield_from)
+            return true;
+        if (e->tag == et::lambda_) {
+            for (const auto& param : e->params)
+                if (expr_has_yield(param.default_value.get()))
+                    return true;
+            return false;
+        }
+        if (expr_has_yield(e->base.get()) || expr_has_yield(e->index.get()) ||
+            expr_has_yield(e->orelse.get()) || expr_has_yield(e->step.get()))
+            return true;
+        for (const auto& part : e->parts)
+            if (expr_has_yield(part.get()))
+                return true;
+        for (const auto& arg : e->call_args)
+            if (expr_has_yield(arg.value.get()))
+                return true;
+        for (const auto& clause : e->generators) {
+            if (expr_has_yield(clause.target.get()) ||
+                expr_has_yield(clause.iter.get()))
+                return true;
+            for (const auto& cond : clause.ifs)
+                if (expr_has_yield(cond.get()))
+                    return true;
+        }
+        return false;
+    }
+
+    static bool stmt_has_yield(const ast_stmt* s) {
+        if (s == nullptr)
+            return false;
+        if (s->tag == st::funcdef || s->tag == st::classdef) {
+            for (const auto& decorator : s->decorators)
+                if (expr_has_yield(decorator.get()))
+                    return true;
+            for (const auto& base : s->bases)
+                if (expr_has_yield(base.get()))
+                    return true;
+            for (const auto& [name, base] : s->kw_bases) {
+                (void)name;
+                if (expr_has_yield(base.get()))
+                    return true;
+            }
+            for (const auto& param : s->params)
+                if (expr_has_yield(param.default_value.get()))
+                    return true;
+            return false;
+        }
+        if (expr_has_yield(s->value.get()) || expr_has_yield(s->value2.get()))
+            return true;
+        for (const auto& target : s->targets)
+            if (expr_has_yield(target.get()))
+                return true;
+        for (const auto& item : s->with_items)
+            if (expr_has_yield(item.ctx_expr.get()) ||
+                expr_has_yield(item.target.get()))
+                return true;
+        for (const auto& arm : s->except_arms) {
+            if (expr_has_yield(arm.type.get()))
+                return true;
+            for (const auto& child : arm.body)
+                if (stmt_has_yield(child.get()))
+                    return true;
+        }
+        for (const auto* body : {&s->body, &s->orelse, &s->final})
+            for (const auto& child : *body)
+                if (stmt_has_yield(child.get()))
+                    return true;
+        return false;
+    }
+
+    static bool body_has_yield(const std::vector<stmt_ptr>& body) {
+        for (const auto& s : body)
+            if (stmt_has_yield(s.get()))
+                return true;
+        return false;
+    }
+
     // ── modules / statements ──────────────────────────────────────────────
     ast_module parse_module() {
         ast_module m;
@@ -128,14 +213,21 @@ struct parser {
             return parse_decorated();
         if (at_kw("if")) return parse_if();
         if (at_kw("while")) return parse_while();
-        if (at_kw("for")) return parse_for();
+        if (at_kw("for")) return parse_for(false);
         if (at_kw("try")) return parse_try();
-        if (at_kw("with")) return parse_with();
-        if (at_kw("def")) return parse_funcdef({});
+        if (at_kw("with")) return parse_with(false);
+        if (at_kw("def")) return parse_funcdef({}, false);
         if (at_kw("class")) return parse_classdef();
         if (at_kw("async")) {
-            if (at_kw("def", 1) || at_kw("for", 1) || at_kw("with", 1))
-                unsupported("async/await");
+            if (flags)
+                flags->uses_async = true;
+            get();
+            if (at_kw("def"))
+                return parse_funcdef({}, true);
+            if (at_kw("for"))
+                return parse_for(true);
+            if (at_kw("with"))
+                return parse_with(true);
             fail("unexpected 'async'");
         }
         if (at_kw("match"))
@@ -236,12 +328,6 @@ struct parser {
                 flags->uses_nonlocal = true;
             return s;
         }
-        if (at_kw("yield") || (at_kw("await") && at(TK::name, 0))) {
-            if (flags)
-                flags->uses_yield = true;
-            unsupported("yield/await");
-        }
-
         // expr / assignment family
         auto lhs = parse_expr_or_tuple_or_star();
         if (at(TK::assign)) {
@@ -349,10 +435,11 @@ struct parser {
         return s;
     }
 
-    stmt_ptr parse_for() {
+    stmt_ptr parse_for(bool is_async) {
         const src_pos atpos = here();
         get();
         auto s = ms(st::for_, atpos);
+        s->is_async = is_async;
         s->targets.push_back(parse_target_list());
         if (!eat_kw("in"))
             fail("expected 'in' after for target");
@@ -413,12 +500,13 @@ struct parser {
         return s;
     }
 
-    stmt_ptr parse_with() {
+    stmt_ptr parse_with(bool is_async) {
         const src_pos atpos = here();
         get();
         if (flags)
             flags->uses_with = true;
         auto s = ms(st::with_, atpos);
+        s->is_async = is_async;
         while (true) {
             with_item item{};
             item.ctx_expr = parse_expr();
@@ -491,19 +579,24 @@ struct parser {
             if (at(TK::newline))
                 get();
         }
-        if (at_kw("async") && at_kw("def", 1))
-            unsupported("async def");
+        if (at_kw("async") && at_kw("def", 1)) {
+            if (flags)
+                flags->uses_async = true;
+            get();
+            return parse_funcdef(std::move(decorators), true);
+        }
         if (at_kw("def"))
-            return parse_funcdef(std::move(decorators));
+            return parse_funcdef(std::move(decorators), false);
         if (at_kw("class"))
             return parse_classdef(std::move(decorators));
         fail("expected 'def' or 'class' after decorator");
     }
 
-    stmt_ptr parse_funcdef(std::vector<expr_ptr> decorators) {
+    stmt_ptr parse_funcdef(std::vector<expr_ptr> decorators, bool is_async) {
         const src_pos atpos = here();
         get(); // def
         auto s = ms(st::funcdef, atpos);
+        s->is_async = is_async;
         s->name = expect_name("function name");
         s->decorators = std::move(decorators);
         expect(TK::lparen, "'('");
@@ -511,7 +604,10 @@ struct parser {
         expect(TK::rparen, "')'");
         if (eat(TK::arrow))
             (void)parse_expr();          // return annotation — ignored
+        ++function_depth;
         s->body = parse_suite();
+        --function_depth;
+        s->is_generator = body_has_yield(s->body);
         return s;
     }
 
@@ -542,7 +638,10 @@ struct parser {
             }
             expect(TK::rparen, "')'");
         }
+        const int saved_function_depth = function_depth;
+        function_depth = 0;
         s->body = parse_suite();
+        function_depth = saved_function_depth;
         return s;
     }
 
@@ -575,8 +674,14 @@ struct parser {
         get(); // from
         auto s = ms(st::import_from, atpos);
         int level = 0;
-        while (eat(TK::dot))
-            ++level;
+        while (at(TK::dot) || at(TK::ellipsis)) {
+            if (eat(TK::ellipsis))
+                level += 3;
+            else {
+                get();
+                ++level;
+            }
+        }
         s->from_level = level;
         if (level > 0 && flags)
             flags->uses_relative_import = true;
@@ -690,6 +795,8 @@ struct parser {
     expr_ptr parse_expr_list_allow_star() { return parse_expr_or_tuple_or_star(); }
 
     expr_ptr parse_expr() {
+        if (at_kw("yield"))
+            return parse_yield_expr();
         if (at_kw("lambda"))
             return parse_lambda();
         auto cond = parse_or();
@@ -703,9 +810,41 @@ struct parser {
             e->base = std::move(cond);      // true value
             e->index = std::move(test);     // condition
             e->orelse = std::move(els);
-            return e;
+            cond = std::move(e);
+        }
+        if (eat(TK::walrus)) {
+            if (cond->tag != et::name)
+                fail("assignment expression target must be a name");
+            auto named = mk(et::named_expr, cond->pos);
+            named->name = cond->name;
+            named->base = parse_expr();
+            if (flags)
+                flags->uses_walrus = true;
+            return named;
         }
         return cond;
+    }
+
+    expr_ptr parse_yield_expr() {
+        const src_pos atpos = here();
+        get();
+        if (function_depth == 0)
+            fail("'yield' outside function");
+        if (flags)
+            flags->uses_yield = true;
+        auto e = mk(et::yield_, atpos);
+        if (eat_kw("from")) {
+            e->tag = et::yield_from;
+            if (flags)
+                flags->uses_yield_from = true;
+            e->base = parse_expr();
+            return e;
+        }
+        if (!at(TK::newline) && !at(TK::semicolon) && !at(TK::dedent) &&
+            !at(TK::eof_) && !at(TK::rparen) && !at(TK::rbracket) &&
+            !at(TK::rbrace))
+            e->base = parse_expr_or_tuple();
+        return e;
     }
 
     expr_ptr parse_lambda() {
@@ -736,7 +875,10 @@ struct parser {
                 break;
         }
         expect(TK::colon, "':' after lambda");
+        ++function_depth;
         e->base = parse_expr();
+        --function_depth;
+        e->is_generator = expr_has_yield(e->base.get());
         return e;
     }
 
@@ -906,6 +1048,15 @@ struct parser {
         return left;
     }
     expr_ptr parse_factor() {
+        if (at_kw("await")) {
+            const src_pos atpos = here();
+            get();
+            if (flags)
+                flags->uses_async = true;
+            auto e = mk(et::await_, atpos);
+            e->base = parse_factor();
+            return e;
+        }
         if (at(TK::plus) || at(TK::minus) || at(TK::tilde)) {
             const src_pos atpos = here();
             const TK op = get().kind;
@@ -981,7 +1132,7 @@ struct parser {
             } else {
                 a.value = parse_expr();
                 // genexp: f(x for x in y) — detect trailing `for`
-                if (genexp_allowed && at_kw("for")) {
+                if (genexp_allowed && at_comp_for()) {
                     auto g = mk(et::comprehension, a.value->pos);
                     g->base = std::move(a.value);
                     g->generators = parse_comp_for();
@@ -1047,11 +1198,15 @@ struct parser {
     // comprehension: for target in iter [for ...] [if cond]* — returns clauses
     std::vector<comp_clause> parse_comp_for() {
         std::vector<comp_clause> out;
-        while (at_kw("for")) {
-            get();
-            if (at_kw("async"))
-                unsupported("async comprehension");
+        while (at_comp_for()) {
             comp_clause cl{};
+            if (eat_kw("async")) {
+                cl.is_async = true;
+                if (flags)
+                    flags->uses_async = true;
+            }
+            if (!eat_kw("for"))
+                fail("expected 'for' in comprehension");
             cl.target = parse_target_list();
             if (!eat_kw("in"))
                 fail("expected 'in' in comprehension");
@@ -1101,7 +1256,7 @@ struct parser {
         }
         case TK::ellipsis: {
             get();
-            return mk_lit(py_str("..."), atpos);   // Ellipsis placeholder
+            return mk(et::ellipses_, atpos);
         }
         case TK::lparen: {
             get();
@@ -1111,7 +1266,7 @@ struct parser {
             }
             auto inner = parse_expr_or_tuple_or_star();
             // genexp inside bare parens: (x for x in y)
-            if (inner->tag != et::tuple_lit && at_kw("for")) {
+            if (inner->tag != et::tuple_lit && at_comp_for()) {
                 auto g = mk(et::comprehension, atpos);
                 g->base = std::move(inner);
                 g->generators = parse_comp_for();
@@ -1137,7 +1292,7 @@ struct parser {
                 } else {
                     first = parse_expr();
                 }
-                if (at_kw("for")) {
+                if (at_comp_for()) {
                     lst->tag = et::comprehension;
                     lst->base = std::move(first);
                     lst->generators = parse_comp_for();
@@ -1179,7 +1334,7 @@ struct parser {
                         auto v = parse_expr();
                         d->parts.push_back(std::move(first));
                         d->parts.push_back(std::move(v));
-                    } else if (at_kw("for")) {
+                    } else if (at_comp_for()) {
                         d->tag = et::comprehension;
                         d->name = "set"; // marker: set comprehension
                         d->base = std::move(first);
@@ -1190,7 +1345,7 @@ struct parser {
                         d->tag = et::set_lit;
                         d->parts.push_back(std::move(first));
                         while (eat(TK::comma)) {
-                            if (at(TK::rbrace) || at_kw("for"))
+                            if (at(TK::rbrace) || at_comp_for())
                                 break;
                             if (at(TK::star)) {
                                 get();
@@ -1201,7 +1356,7 @@ struct parser {
                                 d->parts.push_back(parse_expr());
                             }
                         }
-                        if (at_kw("for")) {
+                        if (at_comp_for()) {
                             // {a, b for x in y} is a SyntaxError — a comp
                             // has exactly one output element
                             if (d->parts.size() > 1)
@@ -1224,7 +1379,7 @@ struct parser {
                     // `{k:v for …}` comprehension follows the FIRST pair
                     // only — a `for` after 2+ pairs is a syntax error, so
                     // fall through to the comma requirement then.
-                    if (at_kw("for") && d->parts.size() == 2)
+                    if (at_comp_for() && d->parts.size() == 2)
                         break;   // dict comprehension — handled after loop
                     if (need_comma) {
                         expect(TK::comma, "',' in dict literal");
@@ -1247,7 +1402,7 @@ struct parser {
                     }
                     need_comma = true;
                 }
-                if (decided && is_dict && at_kw("for")) {
+                if (decided && is_dict && at_comp_for()) {
                     d->tag = et::comprehension;
                     d->name = "dict";
                     auto kv = mk(et::tuple_lit, atpos);
@@ -1269,11 +1424,6 @@ struct parser {
                 return mk_lit(py_true(), atpos);
             if (t.text == "False")
                 return mk_lit(py_false(), atpos);
-            if (t.text == "yield" || t.text == "await") {
-                if (flags)
-                    flags->uses_yield = true;
-                unsupported(t.text);
-            }
             return mk_name(t.text, atpos);
         default:
             fail(std::string("unexpected token '") + t.text + "'");

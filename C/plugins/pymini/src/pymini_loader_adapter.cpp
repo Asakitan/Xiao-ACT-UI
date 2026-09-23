@@ -1,18 +1,4 @@
-// pymini_loader_adapter.cpp — engine_kind::python 的 composite production
-// adapter：pymini（默认）+ pyhost 委托（py_runtime:cpython / 子集外）。
-//
-// 路由顺序（load_plugin 内决定，一次一插件）：
-//   1. manifest.py_runtime == "pymini" → pymini
-//   2. manifest.py_runtime == "cpython" → pyhost 委托（无 → UNSUPPORTED）
-//   3. 其它（auto/缺失）→ 读取 entry 源码并跑 pymini_preflight_subset：
-//        子集内 → pymini；子集外 → pyhost 委托（无 → UNSUPPORTED，错误串
-//        携带命中的特性名）。
-//
-// pyhost 委托经由本文件新增的 sao_plugins_pyhost_gil_scope_enter/leave
-// 配对包裹每次 load/hook/unload 调用，pymini TU 不接触 Python.h。
-//
-// 每条插件记录保留 {route, pyh}；hook/unload 按 route 分支到 pymini_host_*
-// 或 pyhost 对应调用。
+// Full-graph routing precedes execution; execution failures never change engines.
 #include "sao/plugins/pymini/pymini_host.h"
 
 #include "pymini_interp.h"
@@ -23,6 +9,7 @@
 #include "sao/plugins/script_ctx/ctx_surface.h"
 
 #if defined(SAO_PLUGINS_ENABLE_PYTHON)
+#include "sao/plugins/python_host/py_error.h"
 #include "sao/plugins/python_host/py_host.h"
 #include "sao/plugins/python_host/py_module_bridge.h"
 #endif
@@ -32,7 +19,10 @@
 #endif
 #include <windows.h>
 
+#include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -53,7 +43,8 @@ struct pymini_adapter_owner_s {
     struct rec {
         route_e route = route_e::pymini;
         std::string plugin_id;
-        std::string last_error;
+        bool ready = false;
+        int32_t load_status = SAO_ERR_NOT_INITIALIZED;
 #if defined(SAO_PLUGINS_ENABLE_PYTHON)
         python_host::py_plugin_handle_t pyh = nullptr;
 #endif
@@ -64,8 +55,13 @@ struct pymini_adapter_owner_s {
     std::vector<std::wstring> extra_dirs;
 #if defined(SAO_PLUGINS_ENABLE_PYTHON)
     python_host::py_host_handle_t host = nullptr;
+    bool host_init_attempted = false;
+    int32_t host_init_status = SAO_ERR_NOT_INITIALIZED;
+    std::string host_init_error;
+    DWORD host_thread = 0;
 #endif
     std::unordered_map<plugin_handle_t, rec> plugins;
+    std::unordered_map<plugin_handle_t, std::string> last_errors;
     std::string last_error;
 };
 
@@ -75,14 +71,15 @@ namespace {
 std::wstring widen_u8(const std::string& u8) {
     if (u8.empty())
         return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, u8.data(),
+    const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, u8.data(),
                                       static_cast<int>(u8.size()), nullptr,
                                       0);
     std::wstring w(static_cast<std::size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, u8.data(), static_cast<int>(u8.size()),
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, u8.data(), static_cast<int>(u8.size()),
                         w.data(), n);
     return w;
 }
+#if defined(SAO_PLUGINS_ENABLE_PYTHON)
 std::string narrow_w(const std::wstring& w) {
     if (w.empty())
         return {};
@@ -94,22 +91,7 @@ std::string narrow_w(const std::wstring& w) {
                         s.data(), n, nullptr, nullptr);
     return s;
 }
-std::string read_all(const std::wstring& p) {
-    HANDLE h = CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-        return {};
-    LARGE_INTEGER sz{};
-    GetFileSizeEx(h, &sz);
-    std::string out(static_cast<std::size_t>(sz.QuadPart), '\0');
-    DWORD rd = 0;
-    if (sz.QuadPart > 0)
-        ReadFile(h, out.data(), static_cast<DWORD>(sz.QuadPart), &rd,
-                 nullptr);
-    CloseHandle(h);
-    return out;
-}
+#endif
 
 // error-string helper owned by free via sao_plugins_pymini_free_string
 char* dup_err(const std::string& s) {
@@ -133,9 +115,11 @@ pymini_adapter_owner_s* active_owner(void* ud) {
     return static_cast<pymini_adapter_owner_s*>(ud);
 }
 
-void set_err(pymini_adapter_owner_s* o, std::string e) {
-    if (o)
-        o->last_error = std::move(e);
+void set_err(pymini_adapter_owner_s* o, plugin_handle_t plugin, const std::string& e) {
+    if (e.empty())
+        o->last_errors.erase(plugin);
+    else
+        o->last_errors[plugin] = e;
 }
 
 // ── pyhost delegate wrappers (only compiled with SAO_PLUGINS_ENABLE_PYTHON) ──
@@ -155,6 +139,70 @@ struct gil_scope {
     gil_scope& operator=(const gil_scope&) = delete;
 };
 
+int32_t cpython_thread_status(pymini_adapter_owner_s* o, std::string* err) {
+    if (o->host_thread != 0 && o->host_thread != GetCurrentThreadId()) {
+        *err = "CPython cold-init host requires its initialization thread; host bridge has no detach API";
+        return loader::SAO_PLUGINS_ERR_BUSY;
+    }
+    return SAO_OK;
+}
+
+int32_t ensure_cpython_host(pymini_adapter_owner_s* o, std::string* err) {
+    if (o->host_init_attempted) {
+        *err = o->host_init_error;
+        return o->host_init_status == SAO_OK ? cpython_thread_status(o, err)
+                                            : o->host_init_status;
+    }
+    o->host_init_error = "CPython host initialization failed before plugin execution";
+    o->host_init_status = SAO_ERR_OS_CALL_FAILED;
+    o->host_init_attempted = true;
+    if (o->python_home.empty()) {
+        o->host_init_status = loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+        o->host_init_error = "CPython required but python_home is unconfigured";
+    } else {
+        python_host::py_host_config hc{};
+        hc.python_home = o->python_home.c_str();
+        std::vector<const wchar_t*> extra_ptrs;
+        extra_ptrs.reserve(o->extra_dirs.size());
+        for (const auto& dir : o->extra_dirs)
+            extra_ptrs.push_back(dir.c_str());
+        hc.extra_module_dirs = extra_ptrs.data();
+        hc.extra_module_dirs_count = static_cast<uint32_t>(extra_ptrs.size());
+        // A cold init retains the GIL; the existing bridge only releases ensured scopes.
+        gil_scope initial_gil(true);
+        o->host_init_status = python_host::sao_plugins_pyhost_init(&hc, &o->host);
+        if (o->host_init_status == SAO_OK && !o->host)
+            o->host_init_status = SAO_ERR_OS_CALL_FAILED;
+        if (o->host_init_status == SAO_OK) {
+            if (!initial_gil.held())
+                o->host_thread = GetCurrentThreadId();
+            o->host_init_error.clear();
+        } else {
+            o->host_init_error += ": python_home=" + narrow_w(o->python_home) +
+                                  ", status=" + std::to_string(o->host_init_status);
+            char* detail = nullptr;
+            (void)python_host::sao_plugins_pyhost_take_error(&detail);
+            if (detail) {
+                o->host_init_error += ": ";
+                o->host_init_error += detail;
+                python_host::sao_plugins_pyhost_free_string(detail);
+            }
+        }
+    }
+    *err = o->host_init_error;
+    return o->host_init_status;
+}
+
+void pyh_error(rec& r, std::string* err) {
+    char* text = nullptr;
+    if (r.pyh)
+        (void)python_host::sao_plugins_pyhost_get_last_error(r.pyh, &text);
+    if (text) {
+        *err = text;
+        python_host::sao_plugins_pyhost_free_string(text);
+    }
+}
+
 int32_t pyh_load(pymini_adapter_owner_s* o, plugin_context_t* lctx,
                  const std::wstring& dir, const std::string& entry,
                  const std::string& id, rec* r, std::string* err) {
@@ -167,6 +215,7 @@ int32_t pyh_load(pymini_adapter_owner_s* o, plugin_context_t* lctx,
     python_host::py_plugin_handle_t pyh = nullptr;
     const int32_t st = python_host::sao_plugins_pyhost_load_plugin(
         o->host, dir.c_str(), entry.c_str(), id.c_str(), nullptr, &pyh);
+    r->pyh = pyh;
     if (st != SAO_OK || !pyh) {
         // pyhost keeps a published handle on load failure so last_error stays
         // introspectable — harvest it, then release the handle so
@@ -179,16 +228,17 @@ int32_t pyh_load(pymini_adapter_owner_s* o, plugin_context_t* lctx,
             if (pe)
                 python_host::sao_plugins_pyhost_free_string(pe);
         }
-        if (pyh)
-            (void)python_host::sao_plugins_pyhost_unload_plugin(pyh);
-        return st;
+        if (pyh && python_host::sao_plugins_pyhost_unload_plugin(pyh) == SAO_OK)
+            r->pyh = nullptr;
+        return st == SAO_OK ? SAO_ERR_OS_CALL_FAILED : st;
     }
     // bind the canonical loader ctx (the pyhost ctx PyObject ↔ plugin_context_t)
     const int32_t bs = python_host::sao_plugins_pyhost_ctx_bind_loader_context(
         python_host::sao_plugins_pyhost_get_ctx_pyobject(pyh),
         lctx);
     if (bs != SAO_OK) {
-        (void)python_host::sao_plugins_pyhost_unload_plugin(pyh);
+        if (python_host::sao_plugins_pyhost_unload_plugin(pyh) == SAO_OK)
+            r->pyh = nullptr;
         if (err)
             *err = "pyhost ctx_bind failed";
         return bs;
@@ -205,13 +255,16 @@ int32_t pyh_hook(rec& r, const char* which, std::string* err) {
             *err = "cannot acquire CPython GIL";
         return SAO_ERR_OS_CALL_FAILED;
     }
+    int32_t st = SAO_ERR_INVALID_ARGUMENT;
     if (std::strcmp(which, "on_load") == 0)
-        return python_host::sao_plugins_pyhost_call_on_load(r.pyh);
-    if (std::strcmp(which, "on_enable") == 0)
-        return python_host::sao_plugins_pyhost_call_on_enable(r.pyh);
-    if (std::strcmp(which, "on_disable") == 0)
-        return python_host::sao_plugins_pyhost_call_on_disable(r.pyh);
-    return SAO_ERR_INVALID_ARGUMENT;
+        st = python_host::sao_plugins_pyhost_call_on_load(r.pyh);
+    else if (std::strcmp(which, "on_enable") == 0)
+        st = python_host::sao_plugins_pyhost_call_on_enable(r.pyh);
+    else if (std::strcmp(which, "on_disable") == 0)
+        st = python_host::sao_plugins_pyhost_call_on_disable(r.pyh);
+    if (st != SAO_OK)
+        pyh_error(r, err);
+    return st;
 }
 int32_t pyh_on_unload(rec& r, bool* allow, std::string* err) {
     if (!r.pyh) {
@@ -229,6 +282,8 @@ int32_t pyh_on_unload(rec& r, bool* allow, std::string* err) {
     const int32_t st =
         python_host::sao_plugins_pyhost_call_on_unload(r.pyh, &a);
     *allow = a;
+    if (st != SAO_OK)
+        pyh_error(r, err);
     return st;
 }
 int32_t pyh_unload(rec& r, std::string* err) {
@@ -241,148 +296,233 @@ int32_t pyh_unload(rec& r, std::string* err) {
         return SAO_ERR_OS_CALL_FAILED;
     }
     const int32_t st = python_host::sao_plugins_pyhost_unload_plugin(r.pyh);
-    r.pyh = nullptr;
+    if (st == SAO_OK)
+        r.pyh = nullptr;
+    else
+        pyh_error(r, err);
     return st;
 }
 #endif
 
 // ── route decision ───────────────────────────────────────────────────
-route_t decide_route(const plugin_manifest* m,
-                     pymini_adapter_owner_s* o,
-                     const std::wstring& abs_entry,
-                     std::string* note) {
-    const std::string hint = m && !m->py_runtime.empty()
-                                 ? m->py_runtime
-                                 : std::string("auto");
-    if (hint == "pymini")
-        return route_t::pymini;
-    if (hint == "cpython") {
-#if defined(SAO_PLUGINS_ENABLE_PYTHON)
-        if (o->host)
-            return route_t::cpython;
-#endif
-        if (note)
-            *note = "py_runtime:cpython requested but no pyhost available";
-        return route_t::pymini;         // caller checks note → UNSUPPORTED
+int32_t classify_plugin(const plugin_manifest* m, const pymini_adapter_owner_s* o,
+                        route_t* route, std::string* reason) {
+    *route = route_t::pymini;
+    reason->clear();
+    if (!m || m->language != loader::engine_kind::python || !m->native_entry.empty() ||
+        m->source_path.empty() || m->entry.empty() ||
+        m->source_path.find('\0') != std::string::npos ||
+        m->entry.find('\0') != std::string::npos) {
+        *reason = "expected a Python manifest with source_path and entry";
+        return SAO_ERR_INVALID_ARGUMENT;
     }
-    // auto: read entry + preflight subset scan
-    const std::string src = read_all(abs_entry);
-    std::string why;
-    if (pymini_preflight_subset(src, &why))
-        return route_t::pymini;
-#if defined(SAO_PLUGINS_ENABLE_PYTHON)
-    if (o->host)
-        return route_t::cpython;
-#endif
-    if (note)
-        *note = "requires cpython-only feature: " + why;
-    return route_t::pymini;             // caller checks note → UNSUPPORTED
+    const auto root = widen_u8(m->source_path);
+    const auto entry = widen_u8(m->entry);
+    if (root.empty() || entry.empty()) {
+        *reason = "invalid UTF-8 in plugin path";
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    if (!m->py_runtime.empty() && m->py_runtime != "auto" &&
+        m->py_runtime != "pymini" && m->py_runtime != "cpython") {
+        *reason = "invalid py_runtime: " + m->py_runtime;
+        return SAO_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        if (m->py_runtime == "cpython") {
+            const std::filesystem::path relative(entry);
+            if (relative.has_root_path() || entry.find(L':') != std::wstring::npos) {
+                *reason = "CPython entry must be a relative path";
+                return SAO_ERR_INVALID_ARGUMENT;
+            }
+            for (const auto& part : relative)
+                if (part == L"..") {
+                    *reason = "CPython entry escapes plugin root";
+                    return SAO_ERR_INVALID_ARGUMENT;
+                }
+            const auto path = std::filesystem::path(root) / relative;
+            const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                                             nullptr);
+            if (file == INVALID_HANDLE_VALUE) {
+                *reason = m->entry + ": CPython entry read failed, win32=" +
+                          std::to_string(GetLastError());
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+            CloseHandle(file);
+            *route = route_t::cpython;
+            *reason = "py_runtime:cpython requested";
+            return SAO_OK;
+        }
+        const bool native = pymini_preflight_plugin(root, entry, o->extra_dirs, reason);
+        if (native) {
+            reason->clear();
+            return SAO_OK;
+        }
+        if (m->py_runtime == "pymini") {
+            *reason = "py_runtime:pymini does not support " + *reason;
+            return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+        }
+        *route = route_t::cpython;
+        return SAO_OK;
+    } catch (const py_error& e) {
+        *reason = (e.file.empty() ? m->entry : e.file) + ":" +
+                  std::to_string(e.pos.line) + ": " + e.kind + ": " + e.message;
+        return e.code != SAO_OK && e.code != loader::SAO_PLUGINS_ERR_UNSUPPORTED
+                   ? e.code : SAO_ERR_OS_CALL_FAILED;
+    } catch (const std::exception& e) {
+        *reason = e.what();
+        return SAO_ERR_OS_CALL_FAILED;
+    } catch (...) {
+        *reason = "plugin preflight failed";
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 // ── vtable functions ─────────────────────────────────────────────────
 int32_t SAO_PLUGINS_CALL adapter_load(
     plugin_handle_t plugin, const plugin_manifest* manifest,
-    void* host_user_data) {
+    void* host_user_data) try {
     pymini_adapter_owner_s* o = active_owner(host_user_data);
-    if (!o || !o->active)
+    std::lock_guard<std::mutex> g(g_mu);
+    if (!o || o != g_owner || !o->active)
         return SAO_ERR_NOT_INITIALIZED;
     if (!plugin || !manifest)
         return SAO_ERR_INVALID_ARGUMENT;
-
-    plugin_context_t* lctx = nullptr;
-    if (loader::sao_plugins_lifecycle_get_context(plugin, &lctx) != SAO_OK ||
-        !lctx)
-        return SAO_ERR_NOT_INITIALIZED;
-
-    sao::plugins::script_ctx::ctx_surface_advisory_check(
-        loader::engine_kind::python, lctx, manifest);
-
-    const std::wstring dir = widen_u8(manifest->source_path);
-    const std::wstring abs_entry = dir + L'\\' + widen_u8(manifest->entry);
-
-    std::string note;
-    const route_t route = decide_route(manifest, o, abs_entry, &note);
-    if (!note.empty()) {
-        // decided route wasn't genuinely available
-        set_err(o, note);
-        return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
-    }
-
-    std::lock_guard<std::mutex> g(g_mu);
     if (o->plugins.count(plugin))
         return loader::SAO_PLUGINS_ERR_ALREADY_EXISTS;
-    rec r;
-    r.route = route;
-    r.plugin_id = manifest->plugin_id;
-    o->plugins.emplace(plugin, r);
-    // copy into a stable ref we can pass by pointer without re-locking twice
-    rec& slot = o->plugins[plugin];
-
-    std::string err;
-    if (route == route_t::pymini) {
-        std::string perr;
-        const int rc = pymini_host_load_plugin(
-            lctx, manifest->plugin_id.c_str(), dir.c_str(),
-            widen_u8(manifest->entry).c_str(), o->extra_dirs, &perr);
-        if (rc != 0) {
-            o->plugins.erase(plugin);
-            set_err(o, perr);
-            return SAO_ERR_OS_CALL_FAILED;
+    try {
+        set_err(o, plugin, {});
+        route_t route;
+        std::string reason;
+        int32_t status = classify_plugin(manifest, o, &route, &reason);
+        if (status != SAO_OK) {
+            set_err(o, plugin, reason);
+            return status;
         }
-    } else {
+        if (route == route_t::cpython) {
 #if defined(SAO_PLUGINS_ENABLE_PYTHON)
-        std::string perr;
-        const int32_t st = pyh_load(o, lctx, dir, manifest->entry,
-                                    manifest->plugin_id, &slot, &perr);
-        if (st != SAO_OK) {
-            o->plugins.erase(plugin);
-            set_err(o, perr);
-            return st;
-        }
+            std::string host_error;
+            status = ensure_cpython_host(o, &host_error);
+            if (status != SAO_OK) {
+                set_err(o, plugin, reason + "; " + host_error);
+                return status;
+            }
 #else
-        o->plugins.erase(plugin);
-        set_err(o, "pyhost delegate not built (SAO_PLUGINS_ENABLE_PYTHON off)");
-        return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+            set_err(o, plugin, reason + "; CPython delegate not built");
+            return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
 #endif
+        }
+        plugin_context_t* lctx = nullptr;
+        if (loader::sao_plugins_lifecycle_get_context(plugin, &lctx) != SAO_OK || !lctx) {
+            set_err(o, plugin, "loader plugin context unavailable");
+            return SAO_ERR_NOT_INITIALIZED;
+        }
+        sao::plugins::script_ctx::ctx_surface_advisory_check(
+            loader::engine_kind::python, lctx, manifest);
+        rec candidate;
+        candidate.route = route;
+        candidate.plugin_id = manifest->plugin_id;
+        rec& slot = o->plugins.emplace(plugin, std::move(candidate)).first->second;
+        const std::wstring dir = widen_u8(manifest->source_path);
+        std::string err;
+        if (route == route_t::pymini) {
+            const int rc = pymini_host_load_plugin(
+                lctx, manifest->plugin_id.c_str(), dir.c_str(),
+                widen_u8(manifest->entry).c_str(), o->extra_dirs, &err);
+            status = rc == 0 ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
+        } else {
+#if defined(SAO_PLUGINS_ENABLE_PYTHON)
+            status = pyh_load(o, lctx, dir, manifest->entry, manifest->plugin_id, &slot, &err);
+#endif
+        }
+        if (status != SAO_OK) {
+            bool retained = route == route_t::pymini &&
+                            pymini_host_is_loaded(manifest->plugin_id.c_str());
+#if defined(SAO_PLUGINS_ENABLE_PYTHON)
+            retained = retained || slot.pyh != nullptr;
+#endif
+            if (!retained)
+                o->plugins.erase(plugin);
+            else
+                slot.load_status = status;
+            set_err(o, plugin, err.empty() ? "plugin load failed" : err);
+            // Resident failures enter on_load so lifecycle rollback owns their cleanup.
+            return retained ? SAO_OK : status;
+        }
+        slot.ready = true;
+        set_err(o, plugin, {});
+        return SAO_OK;
+    } catch (const std::exception& e) {
+        set_err(o, plugin, e.what());
+        return SAO_ERR_OS_CALL_FAILED;
+    } catch (...) {
+        set_err(o, plugin, "plugin load failed before completion");
+        return SAO_ERR_OS_CALL_FAILED;
     }
-    return SAO_OK;
+} catch (...) {
+    return SAO_ERR_OS_CALL_FAILED;
 }
 
 int32_t call_named(plugin_handle_t plugin, void* ud, const char* hook,
-                   bool* allow_unload = nullptr) {
+                   bool* allow_unload = nullptr) try {
     pymini_adapter_owner_s* o = active_owner(ud);
     if (!o)
         return SAO_ERR_NOT_INITIALIZED;
     std::lock_guard<std::mutex> g(g_mu);
+    if (o != g_owner || !o->active)
+        return SAO_ERR_NOT_INITIALIZED;
     auto it = o->plugins.find(plugin);
-    if (it == o->plugins.end())
-        return SAO_ERR_HANDLE_INVALID;
-    rec& r = it->second;
-    std::string err;
-    if (r.route == route_t::pymini) {
-        if (allow_unload) {
-            const int rc = pymini_host_call_hook_allow_unload(
-                r.plugin_id.c_str(), hook, allow_unload, &err);
-            if (rc == 0 || rc == 1)
-                return SAO_OK;
-            set_err(o, err);
-            return SAO_ERR_OS_CALL_FAILED;
-        }
-        const int rc =
-            pymini_host_call_hook(r.plugin_id.c_str(), hook, nullptr, &err);
-        if (rc == 0 || rc == 1)
+    if (it == o->plugins.end()) {
+        if (allow_unload && o->last_errors.count(plugin)) {
+            *allow_unload = true;
             return SAO_OK;
-        set_err(o, err);
-        return SAO_ERR_OS_CALL_FAILED;
+        }
+        return SAO_ERR_HANDLE_INVALID;
     }
+    rec& r = it->second;
+    if (!r.ready) {
+        if (allow_unload) {
+            *allow_unload = true;
+            return SAO_OK;
+        }
+        return r.load_status;
+    }
+    std::string err;
+    int32_t status = SAO_OK;
+    try {
+        if (r.route == route_t::pymini) {
+            int rc = 0;
+            if (allow_unload) {
+                rc = pymini_host_call_hook_allow_unload(
+                    r.plugin_id.c_str(), hook, allow_unload, &err);
+            } else {
+                rc = pymini_host_call_hook(r.plugin_id.c_str(), hook, nullptr, &err);
+            }
+            status = rc == 0 || rc == 1 ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
+        } else {
 #if defined(SAO_PLUGINS_ENABLE_PYTHON)
-    if (allow_unload)
-        return pyh_on_unload(r, allow_unload, &err);
-    return pyh_hook(r, hook, &err);
+            status = cpython_thread_status(o, &err);
+            if (status == SAO_OK)
+                status = allow_unload ? pyh_on_unload(r, allow_unload, &err)
+                                      : pyh_hook(r, hook, &err);
 #else
-    (void)allow_unload;
-    return loader::SAO_PLUGINS_ERR_UNSUPPORTED;
+            status = loader::SAO_PLUGINS_ERR_UNSUPPORTED;
 #endif
+        }
+    } catch (const std::exception& e) {
+        status = SAO_ERR_OS_CALL_FAILED;
+        err = e.what();
+    } catch (...) {
+        status = SAO_ERR_OS_CALL_FAILED;
+        err = "plugin hook failed";
+    }
+    if (status != SAO_OK && err.empty())
+        err = std::string(hook) + " failed: status=" + std::to_string(status);
+    if (status != SAO_OK || !allow_unload)
+        set_err(o, plugin, status == SAO_OK ? std::string{} : err);
+    return status;
+} catch (...) {
+    return SAO_ERR_OS_CALL_FAILED;
 }
 
 int32_t SAO_PLUGINS_CALL adapter_on_load(plugin_handle_t plugin,
@@ -399,29 +539,49 @@ int32_t SAO_PLUGINS_CALL adapter_on_disable(plugin_handle_t plugin,
 }
 int32_t SAO_PLUGINS_CALL adapter_on_unload(plugin_handle_t plugin,
                                            bool* allow, void* ud) {
+    if (!allow)
+        return SAO_ERR_INVALID_ARGUMENT;
+    *allow = false;
     return call_named(plugin, ud, "on_unload", allow);
 }
 
 int32_t SAO_PLUGINS_CALL adapter_unload(plugin_handle_t plugin,
-                                        void* ud) {
+                                        void* ud) try {
     pymini_adapter_owner_s* o = active_owner(ud);
     if (!o)
         return SAO_ERR_NOT_INITIALIZED;
     std::lock_guard<std::mutex> g(g_mu);
+    if (o != g_owner)
+        return SAO_ERR_HANDLE_INVALID;
     auto it = o->plugins.find(plugin);
     if (it == o->plugins.end())
-        return SAO_ERR_HANDLE_INVALID;
-    rec r = it->second;
-    o->plugins.erase(it);
+        return o->last_errors.count(plugin) ? SAO_OK : SAO_ERR_HANDLE_INVALID;
+    rec& r = it->second;
     std::string err;
-    if (r.route == route_t::pymini) {
-        return pymini_host_unload_plugin(r.plugin_id.c_str(), &err);
-    }
+    int32_t status = SAO_OK;
+    try {
+        if (r.route == route_t::pymini) {
+            if (pymini_host_is_loaded(r.plugin_id.c_str()))
+                status = pymini_host_unload_plugin(r.plugin_id.c_str(), &err);
+        } else {
 #if defined(SAO_PLUGINS_ENABLE_PYTHON)
-    return pyh_unload(r, &err);
-#else
-    return SAO_OK;
+            status = cpython_thread_status(o, &err);
+            if (status == SAO_OK)
+                status = pyh_unload(r, &err);
 #endif
+        }
+    } catch (...) {
+        status = SAO_ERR_OS_CALL_FAILED;
+        err = "plugin unload failed";
+    }
+    if (status == SAO_OK) {
+        o->plugins.erase(it);
+    } else {
+        set_err(o, plugin, err.empty() ? "plugin unload failed" : err);
+    }
+    return status;
+} catch (...) {
+    return SAO_ERR_OS_CALL_FAILED;
 }
 
 int32_t SAO_PLUGINS_CALL adapter_last_error(void* user_data,
@@ -467,37 +627,6 @@ sao_plugins_pymini_register_loader_adapter(
                     o->extra_dirs.emplace_back(
                         cfg->extra_module_dirs[k]);
 
-#if defined(SAO_PLUGINS_ENABLE_PYTHON)
-        // lazy init: only try to create a pyhost when the caller told us a
-        // python_home AND the distribution probes available.
-        if (!o->python_home.empty() &&
-            python_host::sao_plugins_pyhost_available(
-                o->python_home.c_str())) {
-            python_host::py_host_config hc{};
-            hc.python_home = o->python_home.c_str();
-            // Shared module roots (e.g. legacy `gui_modules`) must reach the
-            // cpython delegate too — feed the same extra dirs pymini uses.
-            std::vector<const wchar_t*> extra_ptrs;
-            extra_ptrs.reserve(o->extra_dirs.size());
-            for (const auto& dir : o->extra_dirs)
-                extra_ptrs.push_back(dir.c_str());
-            if (!extra_ptrs.empty()) {
-                hc.extra_module_dirs = extra_ptrs.data();
-                hc.extra_module_dirs_count =
-                    static_cast<uint32_t>(extra_ptrs.size());
-            }
-            // init inside a gil scope so Py_Initialize's exit state release
-            // matches pyhost's own register path.
-            gil_scope scope(true);
-            const int32_t init_st =
-                python_host::sao_plugins_pyhost_init(&hc, &o->host);
-            if (init_st != SAO_OK || o->host == nullptr) {
-                o->host = nullptr;
-                set_err(o.get(), "python_home probes available but pyhost init failed");
-            }
-        }
-#endif
-
         const auto table = make_vtable(o.get());
         const int32_t st =
             loader::sao_plugins_lifecycle_register_host_adapter(
@@ -521,28 +650,40 @@ sao_plugins_pymini_unregister_loader_adapter(
         return SAO_ERR_INVALID_ARGUMENT;
     try {
         std::lock_guard<std::mutex> g(g_mu);
-        if (owner != g_owner || !owner->active)
+        if (owner != g_owner)
             return SAO_ERR_HANDLE_INVALID;
         if (!owner->plugins.empty())
             return loader::SAO_PLUGINS_ERR_BUSY;
-        owner->active = false;
         int32_t st = SAO_OK;
+#if defined(SAO_PLUGINS_ENABLE_PYTHON)
+        if (owner->host) {
+            st = cpython_thread_status(owner, &owner->last_error);
+            if (st != SAO_OK)
+                return st;
+        }
+#endif
         if (owner->adapter_registered) {
             st = loader::sao_plugins_lifecycle_unregister_host_adapter(
                 loader::engine_kind::python);
             if (st != SAO_OK) {
-                owner->active = true;
                 return st;
             }
             owner->adapter_registered = false;
         }
+        owner->active = false;
 #if defined(SAO_PLUGINS_ENABLE_PYTHON)
         if (owner->host) {
             gil_scope scope(true);
+            if (!scope.held()) {
+                owner->last_error = "cannot acquire CPython GIL for shutdown";
+                return SAO_ERR_OS_CALL_FAILED;
+            }
             st = python_host::sao_plugins_pyhost_shutdown(owner->host);
-            owner->host = nullptr;
-            if (st != SAO_OK)
+            if (st != SAO_OK) {
+                owner->last_error = "CPython shutdown failed: status=" + std::to_string(st);
                 return st;
+            }
+            owner->host = nullptr;
         }
 #endif
         g_owner = nullptr;
@@ -555,10 +696,39 @@ sao_plugins_pymini_unregister_loader_adapter(
 
 extern "C" SAO_PLUGINS_API size_t SAO_PLUGINS_CALL
 sao_plugins_pymini_adapter_plugin_count(pymini_adapter_owner_t owner) {
-    if (!owner)
+    try {
+        std::lock_guard<std::mutex> g(g_mu);
+        return owner && owner == g_owner ? owner->plugins.size() : 0;
+    } catch (...) {
         return 0;
-    std::lock_guard<std::mutex> g(g_mu);
-    return owner->plugins.size();
+    }
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pymini_adapter_requires_python(
+    pymini_adapter_owner_t owner, const plugin_manifest* manifest,
+    bool* out_required, char** out_reason) {
+    if (out_required)
+        *out_required = false;
+    if (out_reason)
+        *out_reason = nullptr;
+    if (!owner || !manifest || !out_required || !out_reason)
+        return SAO_ERR_INVALID_ARGUMENT;
+    try {
+        std::lock_guard<std::mutex> g(g_mu);
+        if (owner != g_owner || !owner->active)
+            return SAO_ERR_HANDLE_INVALID;
+        route_t route;
+        std::string reason;
+        const int32_t status = classify_plugin(manifest, owner, &route, &reason);
+        *out_reason = dup_err(reason);
+        if (!reason.empty() && !*out_reason)
+            return SAO_ERR_OS_CALL_FAILED;
+        *out_required = status == SAO_OK && route == route_t::cpython;
+        return status;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
@@ -569,10 +739,25 @@ sao_plugins_pymini_adapter_get_last_error(
         *out_utf8 = nullptr;
     if (!owner || !out_utf8)
         return SAO_ERR_INVALID_ARGUMENT;
-    std::lock_guard<std::mutex> g(g_mu);
-    (void)loader_plugin_handle;           // errors tracked owner-globally
-    *out_utf8 = dup_err(owner->last_error);
-    return *out_utf8 ? SAO_OK : SAO_ERR_HANDLE_INVALID;
+    try {
+        std::lock_guard<std::mutex> g(g_mu);
+        if (owner != g_owner)
+            return SAO_ERR_HANDLE_INVALID;
+        const std::string* error = &owner->last_error;
+        if (loader_plugin_handle) {
+            const auto found = owner->last_errors.find(
+                static_cast<plugin_handle_t>(loader_plugin_handle));
+            if (found == owner->last_errors.end())
+                return SAO_ERR_HANDLE_INVALID;
+            error = &found->second;
+        }
+        if (error->empty())
+            return SAO_ERR_HANDLE_INVALID;
+        *out_utf8 = dup_err(*error);
+        return *out_utf8 ? SAO_OK : SAO_ERR_OS_CALL_FAILED;
+    } catch (...) {
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL

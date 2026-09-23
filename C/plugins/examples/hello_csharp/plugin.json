@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "entry": "prebuilt/HelloPlugin.dll",
   "language": "csharp",
+  "cs_runtime": "coreclr",
+  "managed_type": "SaoAuto.Plugins.HelloCsharp.HelloPlugin, HelloPlugin",
+  "runtimeconfig": "prebuilt/HelloPlugin.runtimeconfig.json",
   "description": "C# 插件宿主 lifecycle smoke — 用 hostfxr load_assembly_and_get_function_pointer 拿 OnLoad/OnTick/OnUnload 三个入口, 调 SDK 桥的 LogInfo/RegisterUiPanel/RegisterHotkey.",
   "enabled": false,
   "capabilities": [

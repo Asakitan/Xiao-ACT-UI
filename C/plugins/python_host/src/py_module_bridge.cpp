@@ -37,6 +37,7 @@
 
 #if defined(SAO_PYHOST_HAS_CTX_SURFACE)
 #include "sao/plugins/script_ctx/script_ui.h"
+#include "sao/plugins/script_ctx/runtime_bridge.h"
 #endif
 
 #if defined(SAO_HAS_PYTHON_EMBED)
@@ -54,6 +55,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -3524,12 +3526,90 @@ PyObject* PluginContext_get_engine_method(PluginContextObject* self, PyObject* a
     }
     return method;
 }
-PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) {
-    // 老插件用 ctx.load_local("engine_module.py") 载入插件目录里的模块。
-    // 简化实装: 拼路径 → 用 importlib.util.spec_from_file_location 装载。
+PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) try {
+    if (!require_active_context(self))
+        return nullptr;
     const char* rel = nullptr;
     if (!PyArg_ParseTuple(args, "s", &rel))
         return nullptr;
+    if (rel[0] == '\0' || self->base_dir == nullptr) {
+        PyErr_SetString(PyExc_ValueError, "load_local: invalid path or plugin root (status -1)");
+        return nullptr;
+    }
+    Py_ssize_t root_length = 0;
+    wchar_t* root = PyUnicode_AsWideCharString(self->base_dir, &root_length);
+    if (root == nullptr)
+        return nullptr;
+    std::wstring root_path;
+    try { root_path.assign(root, static_cast<size_t>(root_length)); }
+    catch (...) { PyMem_Free(root); throw; }
+    PyMem_Free(root);
+    if (root_path.find(L'\0') != std::wstring::npos) {
+        PyErr_SetString(PyExc_ValueError, "load_local: embedded NUL in plugin root (status -1)");
+        return nullptr;
+    }
+    std::wstring absolute;
+    bool exists = false;
+    std::string diagnostic;
+    int32_t status = SAO_OK;
+#if defined(SAO_PYHOST_HAS_CTX_SURFACE)
+    status = script_ctx::runtime_bridge_resolve_local(root_path.c_str(), rel,
+                                                     &absolute, &exists, &diagnostic);
+#else
+    const auto relative = std::filesystem::u8path(rel);
+    const auto base = std::filesystem::weakly_canonical(root_path);
+    const auto candidate = std::filesystem::weakly_canonical(base / relative);
+    const auto tail = candidate.lexically_relative(base);
+    if (root_path.empty() || relative.has_root_path() || std::strchr(rel, ':') != nullptr ||
+        tail.empty() || tail == L"." || *tail.begin() == L"..") {
+        status = SAO_ERR_INVALID_ARGUMENT;
+        diagnostic = "load_local: path escapes plugin root or is not relative";
+    } else {
+        exists = std::filesystem::exists(candidate);
+        if (exists && !std::filesystem::is_regular_file(candidate)) {
+            status = SAO_ERR_INVALID_ARGUMENT;
+            diagnostic = "load_local: path is not a regular file";
+        } else if (exists) {
+            absolute = candidate.wstring();
+        }
+    }
+#endif
+    if (status != SAO_OK) {
+        PyErr_Format(PyExc_RuntimeError, "load_local failed with status %d: %s",
+                     status, diagnostic.c_str());
+        return nullptr;
+    }
+    if (!exists)
+        Py_RETURN_NONE;
+    std::wstring extension = std::filesystem::path(absolute).extension().wstring();
+    for (auto& ch : extension)
+        if (ch >= L'A' && ch <= L'Z')
+            ch = static_cast<wchar_t>(ch - L'A' + L'a');
+    if (extension != L".py") {
+        std::string ext;
+        ext.reserve(extension.size());
+        for (const wchar_t ch : extension) {
+            if (static_cast<uint32_t>(ch) > 0x7fU) {
+                ext.clear();
+                break;
+            }
+            ext.push_back(static_cast<char>(ch));
+        }
+        if (!ext.empty())
+            ext.erase(ext.begin());
+#if defined(SAO_PYHOST_HAS_CTX_SURFACE)
+        const bool script = script_ctx::runtime_bridge_is_script_extension(ext);
+#else
+        const bool script = ext == "lua" || ext == "emma" || ext == "as" || ext == "cs";
+#endif
+        if (script) {
+            if (self->loader_context != nullptr)
+                loader::sao_plugins_ctx_log(self->loader_context,
+                    "load_local: unsupported foreign script module in CPython; no proxy adapter");
+            Py_RETURN_NONE;
+        }
+        return PyUnicode_FromWideChar(absolute.data(), static_cast<Py_ssize_t>(absolute.size()));
+    }
     if (std::strcmp(rel, "bootstrap.py") == 0) {
         PyObject* shim = PyModule_New("sao_controlled_bootstrap");
         if (shim == nullptr)
@@ -3549,23 +3629,15 @@ PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) {
         Py_DECREF(result);
         return shim;
     }
-    PyObject* base = self->base_dir;
-    if (base == nullptr)
-        Py_RETURN_NONE;
-    const char* base_c = PyUnicode_AsUTF8(base);
-    if (base_c == nullptr)
-        return nullptr;
-
-    std::string full = base_c;
-    if (!full.empty() && full.back() != '/' && full.back() != '\\')
-        full.push_back('/');
-    full += rel;
+    const auto full_u8 = std::filesystem::path(absolute).u8string();
+    const std::string full(full_u8.begin(), full_u8.end());
 
     // module 名: sao_local_<plugin_id>_<escaped_rel>
     std::string name = "sao_local_";
     const char* pid = PyUnicode_AsUTF8(self->plugin_id);
-    if (pid != nullptr)
-        name += pid;
+    if (pid == nullptr)
+        return nullptr;
+    name += pid;
     name += "_";
     for (const char* p = rel; *p; ++p) {
         char c = *p;
@@ -3624,6 +3696,13 @@ PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) {
     }
     Py_DECREF(res);
     return mod;
+} catch (const std::exception& error) {
+    PyErr_Format(PyExc_RuntimeError, "load_local failed with status %d: %s",
+                 SAO_ERR_OS_CALL_FAILED, error.what());
+    return nullptr;
+} catch (...) {
+    PyErr_SetString(PyExc_RuntimeError, "load_local: internal error (status -20)");
+    return nullptr;
 }
 // register_hotkey 老名兼容 add_hotkey
 PyObject* PluginContext_register_hotkey_alias(PluginContextObject* self, PyObject* args,

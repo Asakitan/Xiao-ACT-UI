@@ -4,7 +4,7 @@
 --   ctx:log("msg")
 --   ctx:register_ui_panel(id, meta, render, on_action)
 --
--- 老 Python 平台 (via lupa) 的 ctx.log(...) 点号调用也兼容 (compat 层)。
+-- ctx.ui 构造器使用点号，ctx userdata 方法使用冒号。
 
 local click_count = 0
 local timer_token = ""
@@ -74,9 +74,19 @@ function on_enable(ctx)
 end
 
 function on_disable(ctx)
+    if timer_running then
+        ctx:clear_timer(timer_token)
+        timer_token = ""
+        timer_running = false
+    end
     ctx:log("Lua 插件已禁用")
 end
 
 function on_unload(ctx)
+    if timer_running then
+        ctx:clear_timer(timer_token)
+        timer_token = ""
+        timer_running = false
+    end
     ctx:log("Lua 插件已卸载")
 end

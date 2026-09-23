@@ -1,6 +1,6 @@
 # plugins/ — 多引擎插件宿主 (SAO Auto C++ 平台)
 
-本目录承载**独立 C++ 平台**的插件系统骨架。5 种脚本引擎并存, 平台**不 import 任何具体
+本目录承载**独立 C++ 平台**的插件系统。5 种插件语言并存, 平台**不 import 任何具体
 插件** —— 平台代码永不引用具体插件的符号或路径, 插件通过 SDK C ABI (由 platform/sdk
 的 ``sao/sdk/*.h`` + ``sao/scripting/*.h`` 提供) 反向注册能力。
 
@@ -14,13 +14,46 @@
 | ``emma_host/`` | Emma 自研解释器 | ``scripting/emma_runtime.py`` |
 | ``angel_host/`` | AngelScript 真 SDK 嵌入 | ``scripting/angel_runtime.py`` |
 | ``lua_host/`` | Lua 5.4 真 C API 嵌入 | ``scripting/lua_runtime.py`` |
-| ``csharp_host/`` | .NET hostfxr + Roslyn | ``scripting/csharp_runtime.py`` |
+| ``csharp_host/`` | .NET hostfxr，加载预编译托管组件 | ``scripting/csharp_runtime.py`` |
+| ``pymini/`` | 原生 Python 子集 + 可选 CPython 委托 | Python 语言的 composite adapter |
+| ``csmini/`` | 原生 C# 子集 + 可选 coreclr 委托 | C# 语言的 composite adapter |
 | ``compat/`` | 旧 Python 平台插件的向下兼容层 | ``plugin_install.py`` + ``plugin_deps.py`` |
 | ``examples/`` | 5 种引擎的最小示例插件骨架 | ``python/plugins/example_*_plugin/`` |
 | ``hide_seek/`` | 首方 hide-seek 插件 (旧) | (直接 cv:: 端口) |
 | ``midi_piano/`` | 首方 MIDI piano 插件 (旧) | (手写 SMF reader) |
 
-## 关键设计:平台不 import 插件 + 旧插件零改动加载
+## 五种语言身份与运行模式
+
+| `language` | 运行模式 | 作者入口与前置条件 |
+|---|---|---|
+| `python` | `py_runtime: pymini / cpython / auto` | `.py`；pymini 原生子集，CPython 需要可用 `plugins.python_home` 与依赖模块 |
+| `lua` | Lua host | `.lua`；ctx userdata 用冒号，`ctx.ui` 构造器用点号 |
+| `emma` | 内置 Emma host | `.emma`；解释器支持的 DSL 与已绑定 ctx 方法 |
+| `angelscript` | AngelScript host | `.as`；真实静态类型，`PluginContext@`、`dictionary@` UI |
+| `csharp` | `cs_runtime: csmini / coreclr / auto` | csmini `.cs` 静态 hooks；coreclr 预编译 `.dll` + runtimeconfig + `managed_type` |
+
+Python `auto` 先进行源码/本地依赖子集预检，再按需要委托 CPython；
+C# `.cs` 使用 parser-backed 子集预检，子集外明确要求预编译，不自动源编译。
+pymini 当前原生覆盖 walrus、同步 async/await/async for/with、65,536 项上限的
+eager generator、包导入及 `uuid`/`secrets`/`statistics`/`importlib`；csmini
+原生覆盖常用 LINQ、独立 `HashSet<T>`、同步 Task/ValueTask、Guid、attribute、
+`init` 与 `lock`。两者面向不依赖二进制扩展、真实异步调度、P/Invoke 或平台专用
+第三方库的基础插件；不把这些扩展写成完整 CPython/.NET 兼容声明。
+Python composite 注册不加载 CPython；只有选中完整 Python 的插件真正加载时才初始化。
+缺少 Python 时，launcher 延期相应插件和依赖者，独立 pymini 插件仍可原生运行。
+语法/文件错误与运行期异常保留插件错误，执行后不换解释器重试。
+托管 C# 当前通用加载器只接受预编译 DLL；不存在自动 Roslyn 源编译链。
+csmini 注册只保存配置，原生 `.cs` 不加载 .NET；有效托管 DLL 实际加载才初始化。
+launcher 缺 .NET 时仅延期托管插件及依赖者；显式 `plugins.dotnet_root` 是唯一
+探测根，空根使用默认发现，available 仅表示文件布局，详见 `csmini/README.md`。
+默认 Lua/AngelScript 使用随产品构建的引擎，Emma 内置，无需安装外部语言运行库。
+session-81 Review 的 metadata 根/stream 边界补修后，定向 Debug 重建与 provider888/0
+（含新增损坏查询）、csmini 原生 fixture、Lua/Emma 真实菜单回调和正常清理均复验通过。
+完整 UI/任意语言语法、全量产品和发布矩阵不由这些探针代替。
+五个主要示例提供 `locales.zh-CN` / `locales.en-US` 名称；本地化元数据不改变语言身份或运行模式，
+也不自动翻译脚本中的硬编码文案，实际界面选择由 loader/launcher 消费方负责。
+
+## 关键设计：平台不 import 插件，兼容范围按宿主核对
 
 Python 平台里 ``PluginManager`` 用 ``importlib.util.spec_from_file_location`` 加载
 每个插件的 ``plugin.py`` (或 ``plugin.emma`` / ``.as`` / ``.lua`` / ``.cs``)。
@@ -31,28 +64,25 @@ Python 平台里 ``PluginManager`` 用 ``importlib.util.spec_from_file_location`
 - **宿主侧**: 每个 ``*_host/`` 拿到 ``plugin_context_t*``, 在自己语言里暴露 ``ctx.log``
   / ``ctx.register_ui_panel`` / ``ctx.subscribe`` 等 —— 这一步用**语言原生绑定机制**:
   - Python: 手写 ``PyModuleDef`` (``sao_sdk`` 内置模块; **不用 pybind11** —— 拉包大)
-  - Lua 5.4: ``luaL_register`` 注册 C 函数为 Lua 全局
+  - Lua 5.4: ctx userdata/metatable 方法及 `ctx.ui` 构造器绑定
   - AngelScript: ``asIScriptEngine::RegisterObjectType`` 把 ``ctx`` 注册为 AS 类型
-  - C# / .NET: ``NativeInterop`` (LibraryImport) 反向调 native
+  - C#: csmini 原生 ctx 桥，或托管组件接收带版本与大小的 SDK 函数表
   - Emma: 直接是 C++ 层的 ``_EmmaInterpreter`` 移植, ``ctx`` 就是宿主 C++ 对象引用
 
 **关键含义**: 平台二进制不需要在编译期知道 "hide_seek 插件叫什么", 也不需要
 链接任何插件符号。运行时 ``loader/plugin_scanner`` 扫 ``plugins/`` 和
 ``user_plugins/`` 目录, 按 ``plugin.json`` 的 ``language`` 字段派发给
 ``python_host``/``emma_host``/``angel_host``/``lua_host``/``csharp_host``, 每个宿主
-从对应文件加载脚本, 通过 SDK C ABI 反向调平台。
+从对应入口加载脚本或托管组件, 通过 SDK C ABI 反向调平台；Python/C# 构建了 mini
+宿主时由 composite adapter 拥有相应语言路由。
 
 **用户 goal 第 2 条 (核心)**: **"插件需要能直接读取旧的 5 种语言的插件, 可以直接
 调用我们的系统"**。落地为:
 
-1. ``plugin.json`` 的所有 Python 平台字段 (含 ``engine`` / ``runtime`` / ``deps``
-   等老别名) 都被 ``compat/py_v1_manifest.cpp`` 的手写 JSON 解析器 **原样识别**,
-   插件目录里的 ``.py`` / ``.emma`` / ``.as`` / ``.lua`` / ``.cs`` **一个字不改**。
-2. Python 老插件 ``on_load(ctx)`` 拿到的 ``ctx`` 由 ``python_host`` 用手写
-   ``sao_sdk`` 内置模块暴露, 方法名/签名/返回值与 Python 平台的
-   ``PluginContext`` (~70 方法) 完全一致。
-3. Lua / AS / C# / Emma 也同样: 各语言的 ``ctx`` 表面完全对齐 Python 侧的
-   ``_LuaProxy`` / ``_AngelScriptProxy`` / ``_CSharpProxy`` / ``_EmmaProxy``。
+1. manifest 由当前 `loader/src/plugin_manifest.cpp` 解析，兼容层保留部分旧字段归一化；
+  支持字段与别名以源码为准，不以全部旧字段原样识别为承诺。
+2. Python `on_load(ctx)` 获得选中宿主的 ctx 对象；CPython 与 pymini 的语言、导入和依赖范围不同。
+3. Lua / AS / C# / Emma 通过各自绑定提供 ctx 方法；名字相同不代表参数、返回值、回调和能力全部等价。
 4. ``compat/libs_vendor_bridge.h`` 让插件的 ``libs/`` / ``vendor/`` / ``engine/``
    目录自动前插到宿主的模块搜索路径 (对齐 ``plugin_deps.py``)。
 
@@ -72,7 +102,7 @@ lifecycle.load(handle)                       → 派发 vtable.load_plugin
   → emma_host.load_plugin(manifest, ctx)    → interpreter.execute
   → lua_host.load_plugin(manifest, ctx)     → luaL_loadfile + lua_pcall
   → angel_host.load_plugin(manifest, ctx)   → CScriptBuilder.BuildModule
-  → csharp_host.load_plugin(manifest, ctx)  → hostfxr + Roslyn.CSharpCompilation
+  → csmini.load_plugin(manifest, ctx)       → 子集解释执行，或委托预编译托管组件
 lifecycle.call_on_load(handle)               → 每 host 的 vtable.call_on_load(ctx)
 lifecycle.call_on_enable(handle)             → 用户已启用时立即激活
 ```
@@ -91,9 +121,8 @@ Emma 是 SAO Auto 平台**自研的、零依赖的、内置的**脚本语言。�
    (见 ``emma_runtime.py`` 的 ``_TOKEN_RE``, ``_Parser``, ``_EmmaInterpreter``)。C++
    版本同样零依赖 (只用 std::string / std::variant / std::unordered_map /
    std::function)。
-4. **和 PluginContext 平齐**: Emma 脚本 ``on_load(ctx)`` 拿到的 ``ctx`` 暴露和 Python
-   插件**同名同签名**的方法, 通过一个 ``_EmmaProxy`` (C++ 侧同名) 把 host 对象暴露给
-   Emma。
+4. **通过 ctx 访问平台**：Emma `on_load(ctx)` 获得宿主绑定对象；支持的参数和返回值
+  以 `emma_host` 的当前绑定为准，不由 Python 接口名称推断。
 
 **示例** (对齐 ``python/plugins/example_emma_plugin/plugin.emma``):
 
@@ -132,7 +161,7 @@ Emma 的定位是让插件作者只写 ``fn on_load(ctx) ctx.log("hi") end`` 就
 产线关键路径**, 只是一个把最低门槛做进平台的语言。想要性能 / 类型的作者选 Lua /
 AS / C# / Python。
 
-## plugin.json 格式 (1:1 兼容 Python 平台)
+## plugin.json 格式（字段示意，带注释时不是可直接解析的 JSON）
 
 ``` json
 {
@@ -175,8 +204,8 @@ AS / C# / Python。
 
 ## 旧插件迁移策略
 
-**目标**: 一个在 Python 平台跑得好好的插件, **不改一个字**, 直接放进新 C++ 平台的
-``plugins/<plugin_id>/`` 就能跑。
+迁移目标是保留旧插件，逐项验证 manifest、运行模式、依赖、ctx 方法和生命周期；
+复制目录与扫描发现成功本身不证明加载或 UI 行为兼容。
 
 - ``compat/py_v1_manifest.h``: 老字段读取器 (兼容 v1 manifest 里的 ``requires: []``
   vs ``requires: {"act_platform": ">=1.0"}``)。
@@ -207,8 +236,7 @@ AS / C# / Python。
 - ``nlohmann-json`` (plugin.json 解析)
 - ``fmt`` (日志格式化)
 
-.NET 侧 (非 vcpkg): ``hostfxr.dll`` + Roslyn 编译器 DLLs 从随包 ``vendor_note.md``
-指引的路径拉取, 不进 vcpkg 图。
+.NET 侧（非 vcpkg）使用已存在的 hostfxr/runtime 与作者预编译组件；普通示例不下载运行时。
 
 ## 构建
 
@@ -217,13 +245,14 @@ cmake -S . -B build -DSAO_BUILD_PLUGINS=ON
 cmake --build build --config Release
 ```
 
-单模块开关 (root ``CMakeLists.txt`` 定义):
+单模块开关 (`plugins/CMakeLists.txt` 定义):
 
-- ``SAO_PLUGINS_ENABLE_PYTHON`` (默认 OFF; 需要 vcpkg python3)
+- ``SAO_PLUGINS_ENABLE_PYTHON`` (默认 ON; 嵌入支持仍取决于 Python 开发依赖)
 - ``SAO_PLUGINS_ENABLE_LUA`` (默认 ON; vcpkg lua)
 - ``SAO_PLUGINS_ENABLE_ANGEL`` (默认 ON; vcpkg unofficial-angelscript)
 - ``SAO_PLUGINS_ENABLE_EMMA`` (默认 ON; 零依赖)
-- ``SAO_PLUGINS_ENABLE_CSHARP`` (默认 OFF; 需要 .NET 8.0+ runtime)
+- ``SAO_PLUGINS_ENABLE_CSHARP`` (默认 ON; 托管执行需要匹配的 .NET runtime)
+- ``SAO_PLUGINS_ENABLE_PYMINI`` / ``SAO_PLUGINS_ENABLE_CSMINI`` (默认 ON; 原生子集解释器)
 
 ## 关键 ABI 版本
 
@@ -233,9 +262,8 @@ v2 是新的多宿主分层布局)。任何插件 manifest 声明 ``abi_version`
 
 ## 当前状态
 
-**头文件深化完成**: 每个模块 header 都已扩展到能编译过的深度, 每个 host 的
-SDK 暴露函数数量 ≥ 20 (Python 65+, Lua 55+, AS 45+, C# 60+, Emma 通过 host_impl
-表, 全数覆盖 ``sdk_method_id`` 枚举)。
+以下为接口导览，声明存在不等于所有运行模式均可调用；实际能力、回调和生命周期
+以 host 实现与集成验证为准。
 
 **具体扩展点**:
 
@@ -255,9 +283,8 @@ SDK 暴露函数数量 ≥ 20 (Python 65+, Lua 55+, AS 45+, C# 60+, Emma 通过 
 - 各 ``*_host/`` — load_plugin / call_on_load / call_on_enable / call_on_disable /
   call_on_unload 生命周期完整
 
-**唯一真实装的模块**: ``compat/py_v1_manifest.cpp`` 有零依赖手写 JSON 解析器 +
-所有 Python 平台字段 (含老 ``engine`` / ``runtime`` / ``deps`` / ``i18n`` /
-``translations`` 别名) 的规范化实装。见文件顶端注释与 ``populate_manifest_from_json``。
+**实现依据**：loader、语言宿主和 ctx 桥均有实现，能力需逐路径检查；
+头文件数量不等于已验证兼容性，旧“唯一实装 compat”的骨架描述已过期。
 
 **旧入口现状**: lua/angel/emma/csharp host 的 ``sao_plugins_*_load_script`` /
 ``call_hook`` / ``unload_script`` 均已实装, 只在对应 runtime gate 未满足时

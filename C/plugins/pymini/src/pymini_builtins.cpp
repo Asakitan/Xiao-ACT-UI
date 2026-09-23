@@ -2171,7 +2171,7 @@ void pymini_install_builtins(interpreter& i) {
     dict_set(as_dict(i.builtins_dict), py_str("True"), py_true());
     dict_set(as_dict(i.builtins_dict), py_str("False"), py_false());
     dict_set(as_dict(i.builtins_dict), py_str("None"), py_none());
-    dict_set(as_dict(i.builtins_dict), py_str("Ellipsis"), py_none());
+    dict_set(as_dict(i.builtins_dict), py_str("Ellipsis"), py_ellipsis());
     dict_set(as_dict(i.builtins_dict), py_str("NotImplemented"), py_none());
     // staticmethod/classmethod/property decorators as builtins
     dict_set(as_dict(i.builtins_dict), py_str("staticmethod"),

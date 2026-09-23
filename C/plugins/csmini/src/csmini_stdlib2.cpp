@@ -29,6 +29,8 @@ njson cs_to_json(interpreter& i, const CsRef& v) {
         return njson(as_float(v)->v);
     case cs_kind::string:
         return njson(as_str(v)->v);
+    case cs_kind::guid:
+        return njson(cs_guid_format(as_guid(v)->bytes));
     case cs_kind::array: {
         njson out = njson::array();
         for (const CsRef& x : as_array(v)->v)

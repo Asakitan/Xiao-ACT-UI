@@ -56,6 +56,16 @@ C ABI 暴露给自己的语言。这一层做**类型转换 + 异常屏障**, �
 
 ## 反射引擎面（session-57/59/60/61）
 
+### 通用分发与宿主菜单的边界
+
+`register_menu_category`、`register_action_handler` 在 CPython、pymini、Lua、Emma、
+AngelScript、managed C# 和 csmini 中走宿主本地的 Entity provider 注册及回调保活路径，
+不经过缺少菜单回调字段的通用 JSON request。通用 method ID 36/37/38 和旧
+`py_ctx_*`/`lua_ctx_*`/`angel_ctx_*` 导出保留二进制兼容，但不是这些语言的实际菜单入口；
+其 unsupported 状态不代表宿主的 `ctx.register_menu_category` 未实现。
+`register_menu_surface` 也不等同于 Entity category，当前没有通用 surface 实现。
+`ctx_surface` 记录宿主实际绑定的方法名并报告声明缺口，不替代回调生命周期或执行能力检查。
+
 - `binding_engine.h` 定义目录契约：`sdk_engine_function_desc{name, arg_names,
   arg_count, invoke, availability}` + `sdk_engine_group_table{descs, count, probe}`，
   六组 `kEngineGroup{Mem,Net,Ui,GpuHunt,Vt,Misc}` 合计 126 项，全部经

@@ -76,6 +76,7 @@ CsRef interpreter::exec_module_source(const std::string& logical_name,
     cs_guard g_(*this);
     frame* prev = cur_frame;
     root_frame_.file = file_utf8;
+    root_frame_.anchor = prog;
     cur_frame = &root_frame_;
     try {
         // hoist class declarations first (top-level order still matters for
@@ -122,7 +123,9 @@ CsRef interpreter::exec_module_source(const std::string& logical_name,
                 if (m.kind == member_kind::method) {
                     auto fn = std::make_shared<CsFuncObj>();
                     fn->name = m.name;
+                    fn->return_type = m.type_name;
                     fn->is_static = m.is_static;
+                    fn->is_async = m.is_async;
                     fn->owner_class = co;
                     fn->anchor = prog;
                     for (const ast_param& pa : m.params) {
@@ -143,6 +146,54 @@ CsRef interpreter::exec_module_source(const std::string& logical_name,
                     dict_set(g(co->attrs), cs_str(key), fn);
                     if (!m.is_static)
                         co->inst_only.insert(key);
+                    continue;
+                }
+                if (m.kind == member_kind::property) {
+                    auto property = std::make_shared<CsPropertyObj>();
+                    property->name = key;
+                    property->backing_name = "@property:" + key;
+                    property->is_static = m.is_static;
+                    property->auto_get = m.property_auto_get;
+                    property->auto_set = m.property_auto_set;
+                    const auto make_accessor = [&](const std::string& name,
+                                                   const std::vector<stmt_ptr>& body,
+                                                   bool setter) -> CsRef {
+                        if (body.empty())
+                            return {};
+                        auto fn = std::make_shared<CsFuncObj>();
+                        fn->name = name;
+                        fn->return_type = setter ? "void" : m.type_name;
+                        fn->is_static = m.is_static;
+                        fn->owner_class = co;
+                        fn->anchor = prog;
+                        if (setter) {
+                            fn->params.push_back({m.type_name, "value", false});
+                            fn->default_exprs.push_back(nullptr);
+                        }
+                        fn->body =
+                            std::make_shared<std::vector<stmt_ptr>>(body);
+                        return fn;
+                    };
+                    property->getter = make_accessor("get_" + key,
+                                                     m.property_get_body, false);
+                    property->setter = make_accessor("set_" + key,
+                                                     m.property_set_body, true);
+                    if (m.is_static) {
+                        property->static_value = cs_null();
+                        if (m.init) {
+                            frame initializer;
+                            initializer.scope = global_scope_;
+                            initializer.class_ref = cobj;
+                            initializer.fn_name = "<static-property-init>";
+                            initializer.file = file_utf8;
+                            property->static_value = eval(m.init.get(), initializer);
+                        }
+                    } else {
+                        co->inst_only.insert(key);
+                        co->inst_field_inits.emplace_back(
+                            property->backing_name, m.init.get());
+                    }
+                    dict_set(g(co->attrs), cs_str(key), property);
                     continue;
                 }
                 // field
@@ -195,6 +246,14 @@ CsRef interpreter::scope_get(const frame& f, const std::string& name,
     // class statics / methods via owner class
     if (auto* co = f.class_ref ? as_class(f.class_ref) : nullptr) {
         if (CsRef v = dict_get(g(co->attrs), cs_str(name))) {
+            if (as_property(v)) {
+                if (co->inst_only.count(name)) {
+                    if (found)
+                        *found = false;
+                    return nullptr;
+                }
+                return class_static(f.class_ref, name, found);
+            }
             if (co->inst_only.count(name)) {
                 if (f.this_ref)
                     return v;
@@ -248,6 +307,16 @@ CsRef interpreter::class_static(const CsRef& klass, const std::string& name,
         return nullptr;
     }
     if (CsRef v = dict_get(g(co->attrs), cs_str(name))) {
+        if (auto* property = as_property(v)) {
+            if (!property->is_static || (!property->auto_get && !property->getter))
+                return nullptr;
+            if (found)
+                *found = true;
+            if (property->auto_get)
+                return property->static_value ? property->static_value : cs_null();
+            cs_args args;
+            return invoke_func(as_func(property->getter), {}, args, {});
+        }
         if (found)
             *found = true;
         return v;
@@ -272,6 +341,19 @@ CsRef interpreter::instance_member(const CsRef& obj, const std::string& name,
     auto* co = as_class(inst->klass);
     if (co) {
         if (CsRef v = dict_get(g(co->attrs), cs_str(name))) {
+            if (auto* property = as_property(v)) {
+                if (!property->auto_get && !property->getter)
+                    return nullptr;
+                if (found)
+                    *found = true;
+                if (property->auto_get) {
+                    CsRef value = dict_get(g(inst->attrs),
+                                           cs_str(property->backing_name));
+                    return value ? value : cs_null();
+                }
+                cs_args args;
+                return invoke_func(as_func(property->getter), obj, args, {});
+            }
             if (v->kind == cs_kind::func && !as_func(v)->is_static) {
                 if (found)
                     *found = true;
@@ -341,10 +423,43 @@ bool interpreter::setattr(CsRef obj, const std::string& name, CsRef value) {
     if (!obj)
         return false;
     if (auto* inst = as_inst(obj)) {
+        if (auto* co = as_class(inst->klass)) {
+            if (CsRef member = dict_get(g(co->attrs), cs_str(name))) {
+                if (auto* property = as_property(member)) {
+                    if (!property->auto_set && !property->setter)
+                        return false;
+                    if (property->auto_set) {
+                        dict_set(g(inst->attrs), cs_str(property->backing_name),
+                                 std::move(value));
+                    } else {
+                        cs_args args;
+                        args.pos.push_back(std::move(value));
+                        (void)invoke_func(as_func(property->setter), obj, args,
+                                          {});
+                    }
+                    return true;
+                }
+            }
+        }
         dict_set(g(inst->attrs), cs_str(name), std::move(value));
         return true;
     }
     if (auto* co = as_class(obj)) {
+        if (CsRef member = dict_get(g(co->attrs), cs_str(name))) {
+            if (auto* property = as_property(member)) {
+                if (!property->is_static ||
+                    (!property->auto_set && !property->setter))
+                    return false;
+                if (property->auto_set) {
+                    property->static_value = std::move(value);
+                } else {
+                    cs_args args;
+                    args.pos.push_back(std::move(value));
+                    (void)invoke_func(as_func(property->setter), {}, args, {});
+                }
+                return true;
+            }
+        }
         dict_set(g(co->attrs), cs_str(name), std::move(value));
         return true;
     }
@@ -737,6 +852,43 @@ void interpreter::exec(const ast_stmt* s, frame& f) {
         } while (is_true(eval(s->value.get(), f)));
         return;
     }
+    case st::switch_: {
+        const CsRef selector = eval(s->value.get(), f);
+        const switch_arm* selected = nullptr;
+        const switch_arm* fallback = nullptr;
+        for (const auto& arm : s->switch_arms) {
+            if (arm.is_default)
+                fallback = &arm;
+            for (const auto& label : arm.labels) {
+                if (cs_eq(selector, eval(label.get(), f))) {
+                    selected = &arm;
+                    break;
+                }
+            }
+            if (selected)
+                break;
+        }
+        if (!selected)
+            selected = fallback;
+        if (!selected)
+            return;
+        try {
+            for (const auto& x : selected->body)
+                exec(x.get(), f);
+        } catch (const sig_break&) {
+        }
+        return;
+    }
+    case st::lock_: {
+        cs_guard lock(*this);
+        CsRef target = eval(s->value.get(), f);
+        if (cs_is_null(target))
+            raise_exc("ArgumentNullException", "lock expression is null",
+                      s->pos);
+        for (const auto& x : s->body)
+            exec(x.get(), f);
+        return;
+    }
     case st::return_: {
         throw sig_return(s->value ? eval(s->value.get(), f) : cs_null());
     }
@@ -884,7 +1036,25 @@ CsRef interpreter::eval(const ast_expr* e, frame& f) {
         return subscript_get(base, ix, e->pos);
     }
     case et::call: {
-        CsRef fn = eval(e->base.get(), f);
+        CsRef fn;
+        if (e->base && e->base->tag == et::member) {
+            const ast_expr* member = e->base.get();
+            CsRef receiver = eval(member->base.get(), f);
+            if (cs_is_null(receiver) && member->post)
+                return cs_null();
+            bool found = false;
+            fn = csmini_value_callable_member(*this, receiver, member->name,
+                                               &found);
+            if (!found)
+                fn = getattr(receiver, member->name, &found);
+            if (!found)
+                raise_exc("MissingMemberException",
+                          "no such member '" + member->name + "' on " +
+                              std::string(cs_type_name(receiver)),
+                          member->pos);
+        } else {
+            fn = eval(e->base.get(), f);
+        }
         if (cs_is_null(fn) && e->post)
             return cs_null();                    // ?.-chain: skip call + args
         cs_args a;
@@ -949,6 +1119,24 @@ CsRef interpreter::eval(const ast_expr* e, frame& f) {
             return eval(e->base.get(), f);
         return eval(e->orelse.get(), f);
     }
+    case et::lambda_: {
+        auto fn = std::make_shared<CsFuncObj>();
+        fn->name = "<lambda>";
+        fn->is_lambda = true;
+        fn->closure_scope = f.scope;
+        fn->closure_this = f.this_ref;
+        fn->closure_class = f.class_ref;
+        fn->anchor = f.anchor;
+        for (const auto& param : e->lambda_params) {
+            fn->params.push_back({param.type, param.name, false});
+            fn->default_exprs.push_back(nullptr);
+        }
+        fn->body =
+            std::make_shared<std::vector<stmt_ptr>>(e->lambda_body);
+        return fn;
+    }
+    case et::await_:
+        return csmini_await_value(*this, eval(e->base.get(), f), e->pos);
     case et::interp: {
         std::string out;
         for (const auto& part : e->parts) {
@@ -978,6 +1166,8 @@ CsRef interpreter::eval(const ast_expr* e, frame& f) {
             return cs_float(0.0);
         if (e->name == "bool")
             return cs_false();
+        if (e->name == "Guid" || e->name == "System.Guid")
+            return cs_guid({});
         return cs_null();
     }
     case et::new_expr: {
@@ -985,8 +1175,14 @@ CsRef interpreter::eval(const ast_expr* e, frame& f) {
         if (e->index) {
             bool ok = false;
             const int64_t n = cs_to_int(eval(e->index.get(), f), &ok);
+            if (!ok || n < 0)
+                raise_exc("ArgumentOutOfRangeException", "invalid array length",
+                          e->pos);
+            if (static_cast<uint64_t>(n) > k_max_collection_items)
+                raise_exc("InvalidOperationException",
+                          "array length exceeds csmini limit", e->pos);
             auto arr = cs_array();
-            if (ok && n > 0)
+            if (n > 0)
                 for (int64_t k = 0; k < n; ++k)
                     as_array(arr)->v.push_back(cs_null());
             return arr;
@@ -1030,7 +1226,22 @@ CsRef interpreter::eval(const ast_expr* e, frame& f) {
             }
             if (slot.empty()) {
                 if (auto* arr = as_array(obj)) {
-                    arr->v.push_back(v);
+                    if (arr->is_set()) {
+                        if (!cs_sequence_contains(arr, v) &&
+                            arr->v.size() >= k_max_collection_items)
+                            raise_exc(
+                                "InvalidOperationException",
+                                "collection initializer exceeds csmini limit",
+                                e->pos);
+                        (void)cs_set_add(arr, v);
+                    } else {
+                        if (arr->v.size() >= k_max_collection_items)
+                            raise_exc(
+                                "InvalidOperationException",
+                                "collection initializer exceeds csmini limit",
+                                e->pos);
+                        arr->v.push_back(v);
+                    }
                 } else if (auto* d = as_dict(obj)) {
                     // `{ {"k",v} }` pair-style init: 2-seq → k=v
                     if (auto* pair = as_array(v); pair && pair->v.size() == 2)
@@ -1106,12 +1317,55 @@ CsRef interpreter::new_instance_eval(const std::string& tn, cs_args& a,
         if (arr_ty)
             return cs_array();
     }
-    if (tn.rfind("List<", 0) == 0 || tn == "List")
-        return cs_array();
-    if (tn.rfind("Dictionary<", 0) == 0 || tn == "Dictionary" ||
-        tn.rfind("SortedDictionary<", 0) == 0 ||
-        tn.rfind("SortedList<", 0) == 0)
+    const auto generic_leaf = [&]() {
+        std::string leaf = tn;
+        if (const auto angle = leaf.find('<'); angle != std::string::npos)
+            leaf.erase(angle);
+        if (const auto dot = leaf.rfind('.'); dot != std::string::npos)
+            leaf.erase(0, dot + 1);
+        return leaf;
+    }();
+    if (generic_leaf == "List") {
+        if (a.pos.empty())
+            return cs_array();
+        if (auto* source = as_array(a.pos[0])) {
+            if (source->v.size() > k_max_collection_items)
+                raise_exc("InvalidOperationException", "List exceeds csmini limit",
+                          pos);
+            return cs_array(source->v);
+        }
+        if (a.pos[0] && a.pos[0]->kind == cs_kind::integer)
+            return cs_array();
+        raise_exc("ArgumentException", "List constructor expects a collection",
+                  pos);
+    }
+    if (generic_leaf == "HashSet") {
+        if (a.pos.empty())
+            return cs_set();
+        auto* source = as_array(a.pos[0]);
+        if (!source)
+            raise_exc("ArgumentException",
+                      "HashSet constructor expects a collection", pos);
+        if (source->v.size() > k_max_collection_items)
+            raise_exc("InvalidOperationException",
+                      "HashSet exceeds csmini limit", pos);
+        return cs_set(source->v);
+    }
+    if (generic_leaf == "Dictionary" || generic_leaf == "SortedDictionary" ||
+        generic_leaf == "SortedList")
         return cs_dict();
+    if (generic_leaf == "Task" || generic_leaf == "ValueTask")
+        return csmini_make_task(a.pos.empty() ? cs_null() : a.pos[0],
+                                generic_leaf == "ValueTask");
+    if (generic_leaf == "Guid") {
+        if (a.pos.empty())
+            return cs_guid({});
+        auto* text = as_str(a.pos[0]);
+        std::array<uint8_t, 16> bytes{};
+        if (!text || !cs_guid_parse(text->v, &bytes))
+            raise_exc("FormatException", "invalid Guid format", pos);
+        return cs_guid(bytes);
+    }
     if (tn == "object" || tn == "dynamic" || tn == "var")
         return cs_dict();
     if (tn == "string" || tn == "String") {
@@ -1156,8 +1410,15 @@ CsRef interpreter::new_instance_eval(const std::string& tn, cs_args& a,
         }
     }
     // declared class
+    std::string erased_type = tn;
+    if (const auto angle = erased_type.find('<'); angle != std::string::npos)
+        erased_type.erase(angle);
     if (CsRef klass = dict_get(g(globals), cs_str(tn))) {
         return instantiate(klass, a, pos);
+    }
+    if (erased_type != tn) {
+        if (CsRef klass = dict_get(g(globals), cs_str(erased_type)))
+            return instantiate(klass, a, pos);
     }
     // resolve through builtin facade types (e.g. System.Exception path)
     bool found = false;

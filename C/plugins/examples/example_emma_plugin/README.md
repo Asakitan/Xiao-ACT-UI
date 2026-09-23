@@ -35,4 +35,6 @@ import``
 
 ## 从 Python 平台迁移
 
-``python/plugins/example_emma_plugin/plugin.emma`` 一字不改可以直接用。
+本例使用内置 Emma 宿主的 `on_load(ctx)` 与无参数 enable/disable/unload hooks；
+停用和卸载时清理本例计时器。旧脚本仍须核对当前解释器语法及 ctx 方法，
+已提供同名接口不代表全部旧平台行为均兼容。

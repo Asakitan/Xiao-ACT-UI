@@ -56,6 +56,9 @@ target_link_libraries(sao_plugins_csmini PRIVATE
     sao_plugins_sdk_binding
     sao::sdk
 )
+if (WIN32)
+    target_link_libraries(sao_plugins_csmini PRIVATE bcrypt)
+endif()
 target_include_directories(sao_plugins_csmini PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../sdk_binding/include>
 )

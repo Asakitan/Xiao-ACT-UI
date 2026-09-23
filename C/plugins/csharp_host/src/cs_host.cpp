@@ -103,28 +103,41 @@ int32_t close_hostfxr_guarded(hostfxr_close_fn close, hostfxr_handle_t context) 
 // 检测 DOTNET_ROOT 或 PATH 里的 hostfxr.dll
 #if defined(_WIN32)
 std::vector<uint32_t> version_parts(const std::wstring& value) {
+    const auto suffix = value.find(L'-');
+    const auto core = value.substr(0, suffix);
+    if (core.empty() || core.back() == L'.' ||
+        (suffix != std::wstring::npos && suffix + 1 == value.size()))
+        return {};
+    if (suffix != std::wstring::npos) {
+        for (size_t index = suffix + 1; index < value.size(); ++index) {
+            const auto ch = value[index];
+            if (!((ch >= L'0' && ch <= L'9') || (ch >= L'a' && ch <= L'z') ||
+                  (ch >= L'A' && ch <= L'Z') || ch == L'.' || ch == L'-'))
+                return {};
+        }
+    }
     std::vector<uint32_t> parts;
     uint64_t current = 0;
     bool have_digit = false;
-    for (const wchar_t ch : value) {
-        if (std::iswdigit(ch) != 0) {
+    for (const wchar_t ch : core) {
+        if (ch >= L'0' && ch <= L'9') {
             have_digit = true;
-            current = std::min<uint64_t>(current * 10 + (ch - L'0'), UINT32_MAX);
-        } else if (ch == L'.' || ch == L'-') {
+            current = current * 10 + (ch - L'0');
+            if (current > UINT32_MAX)
+                return {};
+        } else if (ch == L'.') {
             if (!have_digit)
-                break;
+                return {};
             parts.push_back(static_cast<uint32_t>(current));
             current = 0;
             have_digit = false;
-            if (ch == L'-')
-                break;
         } else {
-            break;
+            return {};
         }
     }
     if (have_digit)
         parts.push_back(static_cast<uint32_t>(current));
-    return parts;
+    return parts.size() == 3 ? parts : std::vector<uint32_t>{};
 }
 
 bool version_less(const std::wstring& left, const std::wstring& right) {
@@ -134,7 +147,17 @@ bool version_less(const std::wstring& left, const std::wstring& right) {
         return std::lexicographical_compare(left_parts.begin(), left_parts.end(),
                                             right_parts.begin(), right_parts.end());
     }
+    const bool left_preview = left.find(L'-') != std::wstring::npos;
+    const bool right_preview = right.find(L'-') != std::wstring::npos;
+    if (left_preview != right_preview)
+        return left_preview;
     return left < right;
+}
+
+bool regular_file(const std::wstring& path) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+           (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
 std::wstring probe_hostfxr_under(const std::wstring& dotnet_root) {
@@ -145,6 +168,7 @@ std::wstring probe_hostfxr_under(const std::wstring& dotnet_root) {
     HANDLE h = FindFirstFileW((fxr_dir + L"\\*").c_str(), &fd);
     std::wstring best_ver;
     if (h != INVALID_HANDLE_VALUE) {
+        const std::unique_ptr<void, decltype(&FindClose)> search(h, &FindClose);
         do {
             if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
                 continue;
@@ -152,17 +176,15 @@ std::wstring probe_hostfxr_under(const std::wstring& dotnet_root) {
                 continue;
             std::wstring name = fd.cFileName;
             if (!version_parts(name).empty() &&
+                regular_file(fxr_dir + L"\\" + name + L"\\hostfxr.dll") &&
                 (best_ver.empty() || version_less(best_ver, name))) {
                 best_ver = std::move(name);
             }
         } while (FindNextFileW(h, &fd));
-        FindClose(h);
     }
     if (!best_ver.empty()) {
         std::wstring dll = fxr_dir + L"\\" + best_ver + L"\\hostfxr.dll";
-        if (GetFileAttributesW(dll.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            return dll;
-        }
+        return dll;
     }
     return {};
 }
@@ -215,6 +237,21 @@ static std::string extract_runtime_version_from_path(const std::wstring& dll_pat
 
 } // namespace
 
+std::wstring cshost_resolve_hostfxr_path(const std::wstring& dotnet_root) {
+#if defined(_WIN32)
+    if (dotnet_root.empty())
+        return probe_hostfxr_path();
+    auto candidate = probe_hostfxr_under(dotnet_root);
+    if (!candidate.empty())
+        return candidate;
+    candidate = dotnet_root + L"\\hostfxr.dll";
+    return regular_file(candidate) ? candidate : std::wstring{};
+#else
+    (void)dotnet_root;
+    return {};
+#endif
+}
+
 // ── init / shutdown / query ─────────────────────────────
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
@@ -239,7 +276,7 @@ sao_plugins_cshost_init(const cs_host_config* cfg, cs_host_handle_t* out_host) {
         if (cfg != nullptr && cfg->hostfxr_path != nullptr && cfg->hostfxr_path[0] != L'\0') {
             dll_path = cfg->hostfxr_path;
         } else {
-            dll_path = probe_hostfxr_path();
+            dll_path = cshost_resolve_hostfxr_path({});
         }
         if (dll_path.empty()) {
             impl->available = false;
@@ -403,7 +440,7 @@ sao_plugins_cshost_is_available(bool* out_available) {
     return SAO_OK;
 #else
     try {
-        const std::wstring probed = probe_hostfxr_path();
+        const std::wstring probed = cshost_resolve_hostfxr_path({});
         *out_available = !probed.empty();
         return SAO_OK;
     } catch (...) {

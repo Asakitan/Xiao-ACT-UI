@@ -38,6 +38,7 @@ struct sandbox_state final {
     uint64_t used_bytes = 0;
     uint64_t max_bytes = 0;
     int original_globals_ref = LUA_NOREF;
+    int original_loaded_ref = LUA_NOREF;
     int original_package_ref = LUA_NOREF;
     int original_package_path_ref = LUA_NOREF;
     int original_package_cpath_ref = LUA_NOREF;
@@ -269,6 +270,8 @@ int arm_body(lua_State* state) {
 
     lua_rawgeti(state, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
     sandbox->original_globals_ref = luaL_ref(state, LUA_REGISTRYINDEX);
+    lua_getfield(state, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
+    sandbox->original_loaded_ref = luaL_ref(state, LUA_REGISTRYINDEX);
 
     lua_getglobal(state, "package");
     if (lua_istable(state, -1)) {
@@ -345,6 +348,24 @@ int arm_body(lua_State* state) {
     }
     lua_pushvalue(state, environment);
     lua_rawseti(state, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
+    // require consults the registry before invoking any controlled searcher.
+    lua_newtable(state);
+    const int loaded = lua_gettop(state);
+    for (const char* name : {"_G", "coroutine", "string", "math", "table", "os", "io", "package"}) {
+        lua_getfield(state, environment, name);
+        if (lua_istable(state, -1))
+            lua_setfield(state, loaded, name);
+        else
+            lua_pop(state, 1);
+    }
+    lua_getfield(state, environment, "package");
+    if (lua_istable(state, -1)) {
+        lua_pushvalue(state, loaded);
+        lua_setfield(state, -2, "loaded");
+    }
+    lua_pop(state, 1);
+    lua_pushvalue(state, loaded);
+    lua_setfield(state, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
     return 0;
 }
 
@@ -358,6 +379,13 @@ void restore_package_ref(lua_State* state, int package_index, const char* field,
 
 int restore_body(lua_State* state) {
     auto* sandbox = static_cast<sandbox_state*>(lua_touserdata(state, 1));
+    if (sandbox->original_loaded_ref != LUA_NOREF) {
+        if (sandbox->original_loaded_ref == LUA_REFNIL)
+            lua_pushnil(state);
+        else
+            lua_rawgeti(state, LUA_REGISTRYINDEX, sandbox->original_loaded_ref);
+        lua_setfield(state, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
+    }
     if (sandbox->original_globals_ref != LUA_NOREF && sandbox->original_globals_ref != LUA_REFNIL) {
         lua_rawgeti(state, LUA_REGISTRYINDEX, sandbox->original_globals_ref);
         lua_rawseti(state, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
@@ -375,7 +403,8 @@ int restore_body(lua_State* state) {
 }
 
 void release_refs(lua_State* state, sandbox_state& sandbox) {
-    const int references[] = {sandbox.original_globals_ref, sandbox.original_package_ref,
+    const int references[] = {sandbox.original_globals_ref, sandbox.original_loaded_ref,
+                              sandbox.original_package_ref,
                               sandbox.original_package_path_ref, sandbox.original_package_cpath_ref,
                               sandbox.original_package_searchers_ref};
     for (const int reference : references) {

@@ -1,51 +1,20 @@
-# example_csharp_plugin — C# 插件示例骨架
+# example_csharp_plugin — 原生 csmini 最小示例
 
-## 需要的宿主
+manifest 固定 `language: "csharp"`、`cs_runtime: "csmini"`、`entry: "plugin.cs"`。
+需要构建 `SAO_PLUGINS_ENABLE_CSMINI=ON`；运行此示例无需 .NET、hostfxr、Roslyn 或 dotnet SDK。
 
-- ``csharp_host`` (hostfxr + Roslyn; ``SAO_PLUGINS_ENABLE_CSHARP=ON``,
-  运行时 .NET 8+ runtime)
+## 入口与生命周期
 
-## 两种入口模式
+- `Plugin` 类暴露静态 `OnLoad(PluginContext ctx)`、`OnEnable()`、`OnDisable()`、`OnUnload()`。
+- `OnLoad` 保存 ctx，读取 `greeting`（缺省 `你好`），写回该值并记录日志。
+- `OnUnload` 返回 `true` 允许卸载；返回 `false` 表示否决。
+- 本例只演示日志、设置和生命周期，不声明 UI 面板、菜单动作或计时器。
 
-### 1. 源代码模式 (推荐, 用户零编译)
+`PluginContext` 和 `dynamic` 由 csmini 子集解释器处理，不代表此源文件可直接作为普通托管项目编译。
+API 依据 `csmini/src/csmini_host.cpp` 的 hook 分派与 `csmini/src/csmini_ctx.cpp` 的方法注册；这不是完整 C#/.NET 兼容声明。
 
-```
-plugin.cs        <- Roslyn 内存编译
-plugin.json      <- language: "csharp", entry: "plugin.cs"
-```
+## 托管 C# 是独立运行模式
 
-Roslyn 编译器 DLL 随包 vendor (见 ``../../csharp_host/vendor_note.md``),
-用户不需要装 .NET SDK。
-
-### 2. 预编译 DLL 模式 (作者高级用法)
-
-```
-plugin.dll       <- 作者本地已编译
-plugin.json      <- language: "csharp", entry: "plugin.dll"
-[references/]    <- 额外引用的第三方 DLL
-```
-
-宿主直接 ``LoadAssembly``, 免 Roslyn 步骤。适合需要第三方 NuGet 包的
-复杂插件。
-
-## dynamic ctx 姿势
-
-C# 的 dynamic 让 ctx 用起来和 Python 一样:
-
-```csharp
-_ctx.log("hi");
-_ctx.register_ui_panel("id", meta, renderFn, actionFn);
-_ctx.notify("title", "msg", 3.0);
-```
-
-免大量 wrapper 类 (类型安全的 typed SDK 也提供, 见 ``SAO.Plugin`` 静态类)。
-
-## 从 Python 平台迁移
-
-``python/plugins/example_csharp_plugin/plugin.cs`` 直接搬。pythonnet 侧
-用的 dynamic 语义在 hostfxr 侧完全一致。
-
-## 依赖
-
-- ``.NET 8+ runtime`` (随包或用户系统装; 见 vendor_note.md)
-- Roslyn 编译 (源代码模式) 或 已编译 .dll (预编译模式)
+需要 CLR 的插件选择 `cs_runtime: "coreclr"`，提供真实预编译 DLL、runtimeconfig 和 assembly-qualified `managed_type`。
+相邻 `hello_csharp` 保留该模式的项目与入口示例；当前通用托管加载器不自动编译 `.cs`。
+默认 `enabled: false`；在配置的插件根中发现后，由用户启用。

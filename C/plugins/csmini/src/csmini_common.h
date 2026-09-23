@@ -5,6 +5,7 @@
 // here is in-tree only — never exported across a plugin ABI.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -16,6 +17,8 @@
 #include <vector>
 
 namespace sao::plugins::csmini {
+
+inline constexpr std::size_t k_max_collection_items = 1u << 20;
 
 // ── interned strings ──────────────────────────────────────────────────────
 // Identifier-heavy code benefits from pointer-compare interning.

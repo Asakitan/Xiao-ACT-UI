@@ -9,6 +9,10 @@
 
 - ``python_host`` (CPython 3.11+ 嵌入; ``SAO_PLUGINS_ENABLE_PYTHON=ON``)
 
+manifest 显式设置 `py_runtime: "cpython"`，并依赖 launcher 配置中可用的 `plugins.python_home`。
+`py_runtime: "pymini"` 是另一种纯 C++ Python 子集模式；缺省/`auto` 先做子集预检，
+并非固定选择 CPython，也不是完整 Python 兼容保证。
+
 ## SDK 调用一览
 
 | ctx 方法 | 语义 |
@@ -31,5 +35,5 @@
 
 ## 从 Python 平台迁移
 
-直接把老 ``python/plugins/<plugin>/`` 目录复制过来即可, ``plugin.json`` +
-``plugin.py`` 都 1:1 兼容。
+先核对 manifest、导入依赖、ctx 方法及回调签名，再经实际宿主验证；
+CPython 可用不等于旧平台专属模块与全部行为均已兼容。

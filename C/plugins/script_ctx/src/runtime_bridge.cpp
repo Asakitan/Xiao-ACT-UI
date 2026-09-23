@@ -1,5 +1,6 @@
 // runtime_bridge.cpp — provider registry + `ctx.load_local` dispatch.
 #include "sao/plugins/script_ctx/runtime_bridge.h"
+#include "sao/plugins/loader/plugin_context_lifetime_internal.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -38,6 +39,16 @@ bool provider_has_extension(const script_engine_ops* ops, const std::string& ext
     return false;
 }
 
+bool known_script_extension(const std::string& ext) {
+    return ext == "py" || ext == "lua" || ext == "emma" || ext == "as" || ext == "cs";
+}
+
+void set_diagnostic(std::string* out, const char* message) noexcept {
+    if (out != nullptr) {
+        try { *out = message; } catch (...) { out->clear(); }
+    }
+}
+
 // u8path() overloads are deprecated in C++20; construct from u8string_view.
 std::filesystem::path path_from_utf8(std::string_view utf8) {
     return std::filesystem::path(std::u8string_view(
@@ -48,17 +59,22 @@ std::filesystem::path path_from_utf8(std::string_view utf8) {
 // libs_vendor_bridge containment rules). Returns empty path on escape.
 std::filesystem::path resolve_contained(const std::filesystem::path& root,
                                         const std::filesystem::path& rel) {
-    if (rel.empty() || rel.is_absolute())
+    if (rel.empty() || rel.has_root_path())
         return {};
-    const auto base = std::filesystem::weakly_canonical(root);
+    for (const auto& part : rel)
+        if (part.native().find(L':') != std::wstring::npos)
+            return {};
+    auto base = std::filesystem::weakly_canonical(root);
+    if (base.has_relative_path() && base.filename().empty())
+        base = base.parent_path();
     const auto full = std::filesystem::weakly_canonical(base / rel);
-    const auto& bs = base.native();
-    const auto& fs = full.native();
-    if (bs.empty() || fs.size() < bs.size() + 1 ||
-        fs.compare(0, bs.size(), bs) != 0 ||
-        (fs[bs.size()] != L'\\' && fs[bs.size()] != L'/')) {
+    auto b = base.begin();
+    auto f = full.begin();
+    for (; b != base.end(); ++b, ++f)
+        if (f == full.end() || *b != *f)
+            return {};
+    if (f == full.end())
         return {};
-    }
     return full;
 }
 
@@ -80,7 +96,8 @@ std::string make_logical_name(const char* plugin_id,
 
 int32_t runtime_bridge_register(const script_engine_ops* ops) noexcept {
     try {
-        if (ops == nullptr || ops->extensions_utf8 == nullptr ||
+        if (ops == nullptr || ops->engine_name_utf8 == nullptr ||
+            *ops->engine_name_utf8 == '\0' || ops->extensions_utf8 == nullptr ||
             ops->load_module == nullptr)
             return SAO_ERR_INVALID_ARGUMENT;
         std::lock_guard lock(g_registry_mutex);
@@ -111,6 +128,8 @@ int32_t runtime_bridge_unregister(const script_engine_ops* ops) noexcept {
 bool runtime_bridge_is_script_extension(
     const std::string& ext_no_dot_lower) noexcept {
     try {
+        if (known_script_extension(ext_no_dot_lower))
+            return true;
         std::lock_guard lock(g_registry_mutex);
         for (const auto* ops : g_providers) {
             if (provider_has_extension(ops, ext_no_dot_lower))
@@ -119,6 +138,61 @@ bool runtime_bridge_is_script_extension(
     } catch (...) {
     }
     return false;
+}
+
+int32_t runtime_bridge_resolve_local(const wchar_t* plugin_root_dir,
+                                    const char* rel_path_utf8,
+                                    std::wstring* out_abs_path,
+                                    bool* out_exists,
+                                    std::string* out_diag) noexcept {
+    if (out_abs_path != nullptr)
+        out_abs_path->clear();
+    if (out_exists != nullptr)
+        *out_exists = false;
+    if (out_diag != nullptr)
+        out_diag->clear();
+    try {
+        if (out_abs_path == nullptr || out_exists == nullptr ||
+            plugin_root_dir == nullptr || *plugin_root_dir == L'\0' ||
+            rel_path_utf8 == nullptr || *rel_path_utf8 == '\0') {
+            set_diagnostic(out_diag, "load_local: invalid argument");
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        const std::filesystem::path root(plugin_root_dir);
+        const auto full = resolve_contained(root, path_from_utf8(rel_path_utf8));
+        if (full.empty()) {
+            set_diagnostic(out_diag, "load_local: path escapes plugin root or is not relative");
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        std::error_code ec;
+        const auto status = std::filesystem::status(full, ec);
+        if (status.type() == std::filesystem::file_type::not_found &&
+            (!ec || ec == std::errc::no_such_file_or_directory)) {
+            set_diagnostic(out_diag, "load_local: file not found");
+            return SAO_OK;
+        }
+        if (ec) {
+            if (out_diag != nullptr)
+                *out_diag = "load_local: path inspection failed: " + ec.message();
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        if (!std::filesystem::is_regular_file(status)) {
+            set_diagnostic(out_diag, "load_local: path is not a regular file");
+            return SAO_ERR_INVALID_ARGUMENT;
+        }
+        *out_abs_path = full.wstring();
+        *out_exists = true;
+        return SAO_OK;
+    } catch (const std::filesystem::filesystem_error& e) {
+        set_diagnostic(out_diag, e.what());
+        return SAO_ERR_OS_CALL_FAILED;
+    } catch (const std::exception& e) {
+        set_diagnostic(out_diag, e.what());
+        return SAO_ERR_OS_CALL_FAILED;
+    } catch (...) {
+        set_diagnostic(out_diag, "load_local: internal error");
+        return SAO_ERR_OS_CALL_FAILED;
+    }
 }
 
 int32_t runtime_bridge_load_local(loader::plugin_context_t* ctx,
@@ -130,33 +204,37 @@ int32_t runtime_bridge_load_local(loader::plugin_context_t* ctx,
                                   std::wstring* out_abs_path,
                                   std::string* out_diag) noexcept {
     try {
-        if (out_kind == nullptr)
-            return SAO_ERR_INVALID_ARGUMENT;
-        *out_kind = load_local_result::missing;
+        if (out_kind != nullptr)
+            *out_kind = load_local_result::failed;
         if (out_module != nullptr)
             out_module->reset();
         if (out_abs_path != nullptr)
             out_abs_path->clear();
         if (out_diag != nullptr)
             out_diag->clear();
-        if (ctx == nullptr || plugin_root_dir == nullptr ||
-            rel_path_utf8 == nullptr || *rel_path_utf8 == '\0') {
+        if (out_kind == nullptr || out_module == nullptr || ctx == nullptr) {
             if (out_diag != nullptr)
                 *out_diag = "load_local: invalid argument";
-            *out_kind = load_local_result::missing;
-            return SAO_OK;
+            return SAO_ERR_INVALID_ARGUMENT;
         }
 
-        std::filesystem::path root(plugin_root_dir);
-        const auto rel = path_from_utf8(rel_path_utf8);
-        const auto full = resolve_contained(root, rel);
-        if (full.empty() || !std::filesystem::is_regular_file(full)) {
+        loader::context_runtime_lease invocation(ctx);
+        if (!invocation) {
+            set_diagnostic(out_diag, "load_local: plugin context is retired");
+            return SAO_ERR_HANDLE_INVALID;
+        }
+
+        std::wstring absolute;
+        bool exists = false;
+        const int32_t resolved = runtime_bridge_resolve_local(
+            plugin_root_dir, rel_path_utf8, &absolute, &exists, out_diag);
+        if (resolved != SAO_OK)
+            return resolved;
+        if (!exists) {
             *out_kind = load_local_result::missing;
-            if (out_diag != nullptr)
-                *out_diag = "load_local: not found or escapes plugin root: " +
-                            std::string(rel_path_utf8);
             return SAO_OK;
         }
+        const std::filesystem::path full(absolute);
         if (out_abs_path != nullptr)
             *out_abs_path = full.wstring();
 
@@ -169,11 +247,7 @@ int32_t runtime_bridge_load_local(loader::plugin_context_t* ctx,
                     candidates.push_back(ops);
             }
         }
-        if (candidates.empty()) {
-            // Non-script payload → path form (v2 semantic). A script-family
-            // extension with zero providers also lands here?  No: a provider
-            // list is the definition of "script". Files like .json/.ini
-            // always take this branch.
+        if (candidates.empty() && !known_script_extension(ext)) {
             *out_kind = load_local_result::path_only;
             return SAO_OK;
         }
@@ -181,13 +255,15 @@ int32_t runtime_bridge_load_local(loader::plugin_context_t* ctx,
         std::string notes;
         for (const auto* ops : candidates) {
             std::string note;
-            bool ok = false;
-            if (ops->probe == nullptr) {
-                ok = true;
-            } else {
-                ok = ops->probe(ctx, full.c_str(), note, ops->user_data);
-            }
-            if (!ok) {
+            const int32_t preflight = ops->probe == nullptr ? SAO_OK :
+                ops->probe(ctx, full.c_str(), note, ops->user_data);
+            if (preflight != SAO_OK) {
+                if (preflight != SAO_ERR_NOT_IMPLEMENTED) {
+                    if (out_diag != nullptr)
+                        *out_diag = std::string(ops->engine_name_utf8) + ": " +
+                            (note.empty() ? "preflight failed" : note);
+                    return preflight;
+                }
                 if (!note.empty()) {
                     if (!notes.empty())
                         notes += "; ";
@@ -208,10 +284,10 @@ int32_t runtime_bridge_load_local(loader::plugin_context_t* ctx,
                 *out_kind = load_local_result::module;
                 return SAO_OK;
             }
-            if (!notes.empty())
-                notes += "; ";
-            notes += std::string(ops->engine_name_utf8) + ": " +
-                     (error.empty() ? std::string("load failed") : error);
+            if (out_diag != nullptr)
+                *out_diag = std::string(ops->engine_name_utf8) + ": " +
+                    (error.empty() ? "load returned no module" : error);
+            return rc == SAO_OK ? SAO_ERR_OS_CALL_FAILED : rc;
         }
 
         *out_kind = load_local_result::unsupported;
@@ -224,16 +300,14 @@ int32_t runtime_bridge_load_local(loader::plugin_context_t* ctx,
         return SAO_OK;
     } catch (const std::exception& e) {
         if (out_kind != nullptr)
-            *out_kind = load_local_result::missing;
-        if (out_diag != nullptr)
-            *out_diag = std::string("load_local: internal error: ") + e.what();
-        return SAO_OK;
+            *out_kind = load_local_result::failed;
+        set_diagnostic(out_diag, e.what());
+        return SAO_ERR_OS_CALL_FAILED;
     } catch (...) {
         if (out_kind != nullptr)
-            *out_kind = load_local_result::missing;
-        if (out_diag != nullptr)
-            *out_diag = "load_local: internal error";
-        return SAO_OK;
+            *out_kind = load_local_result::failed;
+        set_diagnostic(out_diag, "load_local: internal error");
+        return SAO_ERR_OS_CALL_FAILED;
     }
 }
 

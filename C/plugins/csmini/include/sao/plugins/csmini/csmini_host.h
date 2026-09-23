@@ -1,15 +1,4 @@
-// csmini_host.h — 纯 C++ C# 子集解释器宿主 (adapter 注册入口)。
-//
-// csmini 是 engine_kind::csharp 的默认生产适配器：legacy `plugin.cs` /
-// `ctx.*` 插件清单按其 `cs_runtime` 提示与源码子集预检路由：
-//   cs_runtime: "csmini"  → 本机解释器执行
-//   cs_runtime: "coreclr" → 委托 sao_plugins_cshost_* (当可提供时)
-//   cs_runtime 缺失/auto → 源码预检：子集内 → csmini；子集外 → coreclr 委托,
-//                          无 host → SAO_PLUGINS_ERR_UNSUPPORTED + 特性名
-//   entry 以 .dll 结尾    → 始终 coreclr REQUIRED (无 host → UNSUPPORTED)
-//
-// 卸载顺序：lifecycle 先移除全部注册项 → csmini_drop_callbacks →
-// interpreter 析构；helper/load_local 解释器归属调用方插件生命周期。
+// 原生 .cs 子集与预编译托管 .dll 的复合宿主；不提供源编译器。
 #pragma once
 #include <cstdint>
 #include "sao/plugins/loader/loader_status.h"
@@ -21,9 +10,7 @@ struct csmini_adapter_owner_s;
 using csmini_adapter_owner_t = csmini_adapter_owner_s*;
 // registration-time config
 struct csmini_adapter_config {
-    // 可选 coreclr 委托：非空时可用 sao_plugins_cshost_* 承接
-    // `cs_runtime:coreclr` / 子集外 / .dll entry 插件。空 → 该路由直接
-    // UNSUPPORTED（携带特性名）。期望 dotnet 安装根或 hostfxr 目录。
+    // 非空根为唯一探测位置；空根使用默认探测，实际托管加载才初始化 hostfxr。
     const wchar_t* dotnet_root = nullptr;
     // helper 模块解释器与 coreclr 委托的额外程序集/模块目录。
     const wchar_t* const* extra_assembly_dirs = nullptr;
@@ -38,6 +25,11 @@ sao_plugins_csmini_register_loader_adapter(
     csmini_adapter_owner_t* out_owner);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_csmini_unregister_loader_adapter(csmini_adapter_owner_t owner);
+// 无执行、仅文件布局预检；reason 用 sao_plugins_csmini_free_string 释放。
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_csmini_adapter_requires_dotnet(
+    csmini_adapter_owner_t owner, const loader::plugin_manifest* manifest,
+    bool* out_required, bool* out_available, char** out_reason);
 // 注册 `.cs` 的 script_ctx provider（runtime_bridge priority=10）。
 // 与 adapter 独立，可单独调用/注销。
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL

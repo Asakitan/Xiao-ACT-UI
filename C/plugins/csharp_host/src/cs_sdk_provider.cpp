@@ -44,11 +44,12 @@ std::unordered_map<sdk_bridge_session*, plugin_binding_handle_t> g_test_bindings
 // itself, which is exactly what the canonical ctx.load_local contract wants.
 const char* const kCsharpScriptExtensions[] = {"cs", nullptr};
 
-bool SAO_PLUGINS_CALL csharp_script_probe(loader::plugin_context_t*, const wchar_t*,
-                                         std::string& note, void*) noexcept {
-    note = "csharp source modules are not compilable in-process; "
-           "ctx.load_local returns the resolved path for managed loading";
-    return false;
+int32_t SAO_PLUGINS_CALL csharp_script_probe(loader::plugin_context_t*, const wchar_t*,
+                                            std::string& note, void*) noexcept try {
+    note = "csharp source modules require a source-capable provider; managed host accepts precompiled assemblies";
+    return SAO_ERR_NOT_IMPLEMENTED;
+} catch (...) {
+    return SAO_ERR_OS_CALL_FAILED;
 }
 
 int32_t SAO_PLUGINS_CALL csharp_script_load_module(

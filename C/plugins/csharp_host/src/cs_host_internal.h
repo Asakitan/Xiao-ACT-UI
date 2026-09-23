@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -48,5 +49,8 @@ struct cshost_runtime_api {
 
 int32_t cshost_acquire_runtime_api(cs_host_handle_t host, cshost_runtime_api& out_api) noexcept;
 void cshost_release_runtime_api(cshost_runtime_api& api) noexcept;
+
+// A nonempty root is authoritative; this resolver never loads a module.
+std::wstring cshost_resolve_hostfxr_path(const std::wstring& dotnet_root);
 
 } // namespace sao::plugins::csharp_host

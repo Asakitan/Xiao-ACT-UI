@@ -40,6 +40,10 @@ enum class et : uint8_t {
     boolop,         // `and`/`or` chain — parts; op = and/or keyword marker via boolop_and
     compare,        // base <op> parts[0] <op> parts[1] … — ops[]
     ifexp,          // base if cond else orelse
+    named_expr,     // name := base
+    await_,         // await base (synchronous compatibility)
+    yield_,         // yield [base]
+    yield_from,     // yield from base
     lambda_,        // params + body (body = base)
     list_lit, tuple_lit, set_lit,   // parts
     dict_lit,       // pairs: key/value alternating in parts (None key = **merge)
@@ -54,7 +58,7 @@ struct comp_clause {
     expr_ptr target;
     expr_ptr iter;
     std::vector<expr_ptr> ifs;
-    bool is_async = false;          // parsed but rejected at eval
+    bool is_async = false;
 };
 
 struct call_arg {
@@ -80,6 +84,7 @@ struct ast_expr {
     std::vector<comp_clause> generators;    // comprehension clauses
     std::vector<ast_param_decl> params;     // lambda params
     bool fstring_raw_flag = false;          // fstring fragment flag (unused)
+    bool is_generator = false;              // lambda contains yield in its own scope
 };
 
 // ── statements ────────────────────────────────────────────────────────────
@@ -140,6 +145,7 @@ struct ast_stmt {
     std::vector<expr_ptr> bases;
     std::vector<std::pair<std::string, expr_ptr>> kw_bases; // class k=v
     bool is_async = false;
+    bool is_generator = false;
     // import / import_from
     std::vector<std::pair<std::string, std::string>> imports; // (dotted_name, alias)
     std::string from_module;                // import_from base ("pkg.mod")

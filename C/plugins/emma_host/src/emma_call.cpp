@@ -2391,8 +2391,19 @@ using script_value_ptr = sao::plugins::script_ctx::script_value_ptr;
 
 script_value_ptr emma_value_to_script(const emma_value& value, emma_plugin_runtime* runtime);
 emma_value script_value_to_emma(const script_value_ptr& value, emma_plugin_runtime* runtime);
-script_value_ptr emma_to_script_module(const emma_value& value, emma_plugin_handle_t plugin);
+script_value_ptr emma_to_script_module(
+    const emma_value& value, emma_plugin_handle_t plugin,
+    std::shared_ptr<sao::plugins::script_ctx::script_module> owner = {});
 emma_value script_to_emma_module(const script_value_ptr& value, emma_plugin_handle_t plugin);
+
+std::string format_module_error(const emma_error& error, const std::filesystem::path& source) {
+    char* formatted = nullptr;
+    const int32_t status = sao_plugins_emma_error_format(&error, &formatted);
+    std::unique_ptr<char, decltype(&sao_plugins_emma_free_string)> owned(
+        formatted, &sao_plugins_emma_free_string);
+    return path_utf8(source) + ": " +
+           (status == SAO_OK && owned != nullptr ? std::string(owned.get()) : error.message);
+}
 
 // 卸载失败 (active ops / BUSY) 的 module handle 记到 zombie 表, 下一次
 // load_module / unload 路径重试, 避免 tombstone 泄漏。
@@ -2445,15 +2456,33 @@ int32_t with_module_runtime(emma_plugin_handle_t plugin, std::string* out_error,
         }
         auto& runtime = lease.runtime();
         std::lock_guard invocation_lock(runtime.invocation_mutex);
-        return callback(runtime);
+        try {
+            return callback(runtime);
+        } catch (const emma_exception& exception) {
+            if (out_error != nullptr)
+                *out_error = format_module_error(exception.error(), runtime.entry_path);
+            return sao_plugins_emma_error_status(&exception.error());
+        } catch (const std::exception& exception) {
+            emma_error error;
+            error.kind = error_kind::runtime_error;
+            error.message = exception.what();
+            set_error_location_from_message(error);
+            if (out_error != nullptr)
+                *out_error = format_module_error(error, runtime.entry_path);
+            return SAO_ERR_OS_CALL_FAILED;
+        }
     } catch (...) {
-        if (out_error != nullptr)
-            *out_error = "emma module invocation failed";
+        if (out_error != nullptr) {
+            try { *out_error = "emma module invocation failed"; }
+            catch (...) { out_error->clear(); }
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }
 
-script_value_ptr emma_to_script_module(const emma_value& value, emma_plugin_handle_t plugin) {
+script_value_ptr emma_to_script_module(
+    const emma_value& value, emma_plugin_handle_t plugin,
+    std::shared_ptr<sao::plugins::script_ctx::script_module> owner) {
     namespace sc = sao::plugins::script_ctx;
     if (const auto* flag = std::get_if<bool>(&value))
         return sc::script_value::make_boolean(*flag);
@@ -2468,7 +2497,7 @@ script_value_ptr emma_to_script_module(const emma_value& value, emma_plugin_hand
         if (*list != nullptr) {
             items.reserve((*list)->items.size());
             for (const auto& item : (*list)->items)
-                items.push_back(emma_to_script_module(item, plugin));
+                items.push_back(emma_to_script_module(item, plugin, owner));
         }
         return sc::script_value::make_list(std::move(items));
     }
@@ -2477,15 +2506,19 @@ script_value_ptr emma_to_script_module(const emma_value& value, emma_plugin_hand
         if (*dict != nullptr) {
             object.reserve((*dict)->items.size());
             for (const auto& [key, item] : (*dict)->items)
-                object.emplace_back(key, emma_to_script_module(item, plugin));
+                object.emplace_back(key, emma_to_script_module(item, plugin, owner));
         }
         return sc::script_value::make_map(std::move(object));
     }
     if (const auto* function = std::get_if<std::shared_ptr<callable>>(&value)) {
         auto target = function != nullptr ? *function : nullptr;
         return sc::script_value::make_function(
-            [plugin, target](const std::vector<script_value_ptr>& args,
+            [plugin, target, owner](const std::vector<script_value_ptr>& args,
                              script_value_ptr* out_value, std::string* out_error) -> int32_t {
+                if (out_error != nullptr)
+                    out_error->clear();
+                if (out_value != nullptr)
+                    *out_value = nullptr;
                 if (plugin == nullptr || target == nullptr) {
                     if (out_error != nullptr)
                         *out_error = "emma module callable is not bound";
@@ -2510,12 +2543,12 @@ script_value_ptr emma_to_script_module(const emma_value& value, emma_plugin_hand
                                 error.message = std::move(message);
                             }
                             if (out_error != nullptr)
-                                *out_error = error.message;
+                                *out_error = format_module_error(error, runtime.entry_path);
                             const int32_t status = sao_plugins_emma_error_status(&error);
                             return status == SAO_OK ? SAO_ERR_OS_CALL_FAILED : status;
                         }
                         if (out_value != nullptr)
-                            *out_value = emma_to_script_module(result, plugin);
+                            *out_value = emma_to_script_module(result, plugin, owner);
                         return SAO_OK;
                     });
             });
@@ -2675,7 +2708,8 @@ emma_value script_value_to_emma(const script_value_ptr& value, emma_plugin_runti
 
 // ── runtime_bridge provider: emma .emma module facade ─────────────────────
 
-class emma_host_script_module final : public sao::plugins::script_ctx::script_module {
+class emma_host_script_module final : public sao::plugins::script_ctx::script_module,
+                                      public std::enable_shared_from_this<emma_host_script_module> {
   public:
     emma_host_script_module(emma_plugin_handle_t plugin, std::string id,
                             std::vector<std::string> names)
@@ -2709,7 +2743,7 @@ class emma_host_script_module final : public sao::plugins::script_ctx::script_mo
                                            return SAO_ERR_HANDLE_INVALID;
                                        const emma_value member = runtime.interp->get_global(name);
                                        if (out_value != nullptr)
-                                           *out_value = emma_to_script_module(member, plugin_);
+                                           *out_value = emma_to_script_module(member, plugin_, shared_from_this());
                                        return SAO_OK;
                                    });
     }
@@ -2746,12 +2780,12 @@ class emma_host_script_module final : public sao::plugins::script_ctx::script_mo
                         error.message = std::move(message);
                     }
                     if (out_error != nullptr)
-                        *out_error = error.message;
+                        *out_error = format_module_error(error, runtime.entry_path);
                     const int32_t status = sao_plugins_emma_error_status(&error);
                     return status == SAO_OK ? SAO_ERR_OS_CALL_FAILED : status;
                 }
                 if (out_value != nullptr)
-                    *out_value = emma_to_script_module(result, plugin_);
+                    *out_value = emma_to_script_module(result, plugin_, shared_from_this());
                 return SAO_OK;
             });
     }
@@ -2762,9 +2796,9 @@ class emma_host_script_module final : public sao::plugins::script_ctx::script_mo
     std::vector<std::string> names_;
 };
 
-bool emma_bridge_probe(sao::plugins::loader::plugin_context_t*, const wchar_t*, std::string&,
+int32_t emma_bridge_probe(sao::plugins::loader::plugin_context_t*, const wchar_t*, std::string&,
                        void*) noexcept {
-    return true;
+    return SAO_OK;
 }
 
 int32_t emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx,
@@ -2804,21 +2838,16 @@ int32_t emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx,
             sao_plugins_emma_load_script_ex(root_w, relative_utf8.c_str(),
                                             plugin_id == nullptr ? "" : plugin_id, ctx, &plugin,
                                             &load_error);
+        const auto release_module = [](void* value) noexcept {
+            const auto handle = static_cast<emma_plugin_handle_t>(value);
+            if (sao_plugins_emma_unload_script(handle) != SAO_OK) {
+                try { zombie_module_handle(handle); } catch (...) {}
+            }
+        };
+        std::unique_ptr<void, decltype(release_module)> pending_module(plugin, release_module);
         if (status != SAO_OK) {
-            if (out_error != nullptr) {
-                char* formatted = nullptr;
-                if (sao_plugins_emma_error_format(&load_error, &formatted) == SAO_OK &&
-                    formatted != nullptr) {
-                    *out_error = formatted;
-                    sao_plugins_emma_free_string(formatted);
-                } else {
-                    *out_error = "emma module load failed";
-                }
-            }
-            if (plugin != nullptr) {
-                if (sao_plugins_emma_unload_script(plugin) != SAO_OK)
-                    zombie_module_handle(plugin);
-            }
+            if (out_error != nullptr)
+                *out_error = format_module_error(load_error, absolute);
             return status;
         }
         if (plugin == nullptr) {
@@ -2854,17 +2883,18 @@ int32_t emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx,
             if (out_error != nullptr)
                 *out_error = capture_error.empty() ? "module member enumeration failed"
                                                  : capture_error;
-            if (sao_plugins_emma_unload_script(plugin) != SAO_OK)
-                zombie_module_handle(plugin);
             return capture_status;
         }
 
         *out_module = std::make_shared<emma_host_script_module>(plugin, logical_name,
                                                                 std::move(names));
+        (void)pending_module.release();
         return SAO_OK;
     } catch (...) {
-        if (out_error != nullptr)
-            *out_error = "emma module load failed";
+        if (out_error != nullptr) {
+            try { *out_error = "emma module load failed"; }
+            catch (...) { out_error->clear(); }
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }
@@ -2875,7 +2905,7 @@ sao::plugins::script_ctx::script_engine_ops g_emma_bridge_ops{
     "emma",                    // engine_name_utf8
     30,                        // priority — pymini=10 之后, python_host=90 之前
     kEmmaBridgeExtensions,     // extensions_utf8
-    &emma_bridge_probe,        // probe — .emma 归 emma host, 恒 true
+    &emma_bridge_probe,        // .emma 始终由内置解释器处理。
     &emma_bridge_load_module,  // load_module
     nullptr,                   // user_data
 };
@@ -3816,15 +3846,12 @@ emma_value wrap_script_module(
                           return script_value_to_emma(result, runtime);
                       }));
     for (const auto& member_name : module->member_names()) {
-        // 数据成员 → 直接取值绑定; 成员函数/get 失败 → callable 包装。
         script_value_ptr value;
         std::string get_error;
-        bool bind_value = false;
-        if (module->get(member_name, &value, &get_error) == SAO_OK && value != nullptr &&
-            value->k != sao::plugins::script_ctx::script_value::kind::function) {
-            bind_value = true;
-        }
-        if (bind_value) {
+        const int32_t get_status = module->get(member_name, &value, &get_error);
+        if (get_status != SAO_OK)
+            throw_context_message("ctx.load_local member", get_status, get_error);
+        if (value == nullptr || value->k != sao::plugins::script_ctx::script_value::kind::function) {
             dict->items.emplace(member_name, script_value_to_emma(value, runtime));
             continue;
         }
@@ -3852,6 +3879,9 @@ emma_value wrap_script_module(
 emma_value load_local_impl(emma_plugin_runtime* runtime, std::vector<emma_value> arguments) {
     const char* method = "ctx.load_local";
     const std::string relative = require_string(arguments, 0, method);
+    if (arguments.size() != 1 || relative.find('\0') != std::string::npos)
+        throw_context_message(method, SAO_ERR_INVALID_ARGUMENT,
+                              "expected one path string without NUL");
     ensure_emma_runtime_bridge();
     namespace sc = sao::plugins::script_ctx;
     sc::load_local_result kind = sc::load_local_result::missing;
@@ -3863,7 +3893,7 @@ emma_value load_local_impl(emma_plugin_runtime* runtime, std::vector<emma_value>
         runtime->context, runtime->plugin_id.c_str(), root_w.c_str(), relative.c_str(), &kind,
         &module, &absolute, &diagnostic);
     if (status != SAO_OK)
-        throw_context_status(method, status);
+        throw_context_message(method, status, diagnostic);
     switch (kind) {
     case sc::load_local_result::module:
         return wrap_script_module(module, runtime);
@@ -3879,7 +3909,7 @@ emma_value load_local_impl(emma_plugin_runtime* runtime, std::vector<emma_value>
                                        : diagnostic;
         sao::plugins::loader::sao_plugins_ctx_log(
             runtime->context, (std::string("ctx.load_local: ") + reason).c_str());
-        return emma_value(false);
+        return emma_value(nullptr);
     }
     }
 }
@@ -5025,6 +5055,11 @@ int32_t finish_failed_load(std::unique_ptr<emma_plugin_s> plugin, int32_t failur
     if (plugin == nullptr || plugin->runtime == nullptr)
         return failure_status;
     auto& runtime = *plugin->runtime;
+    if (out_error != nullptr && !runtime.entry_path.empty()) {
+        const auto source = path_utf8(runtime.entry_path);
+        if (!out_error->message.starts_with(source))
+            out_error->message = source + ": " + out_error->message;
+    }
     runtime.callbacks_accepting.store(false, std::memory_order_release);
     const int32_t provider_status = quiesce_context_providers(runtime);
     const int32_t teardown_status =
@@ -5135,6 +5170,14 @@ emma_plugin_runtime::~emma_plugin_runtime() {
         }
     }
     extension_handlers.clear();
+    if (interp != nullptr) {
+        try {
+            // 全局函数闭包会回持作用域及其嵌套 helper owner。
+            for (const auto& name : interp->global_names())
+                interp->register_global(name, nullptr);
+        } catch (...) {
+        }
+    }
     interp.reset();
     if (owns_context_lease) {
         sao::plugins::loader::plugin_context_release_host_lease(context);

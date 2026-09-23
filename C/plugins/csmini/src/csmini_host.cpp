@@ -18,7 +18,10 @@
 #endif
 #include <windows.h>
 
+#include "../../loader/src/plugin_internal.h"
+
 #include <cstring>
+#include <algorithm>
 #include <mutex>
 #include <unordered_map>
 
@@ -37,6 +40,7 @@ struct host_state {
     std::uint64_t entry_size = 0;
     std::int64_t entry_mtime = 0;
     bool unload_hook_fired = false;
+    bool load_failed = true;
 };
 
 std::mutex g_hosts_mu;
@@ -75,32 +79,12 @@ std::wstring widen(const std::string& u8) {
                         w.data(), n);
     return w;
 }
-std::string read_all(const std::wstring& path, bool* ok = nullptr) {
-    if (ok)
-        *ok = false;
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
-                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-        return {};
-    LARGE_INTEGER sz{};
-    GetFileSizeEx(h, &sz);
-    std::string out(static_cast<std::size_t>(sz.QuadPart), '\0');
-    DWORD rd = 0;
-    const bool r =
-        sz.QuadPart <= 0 ||
-        ReadFile(h, out.data(), static_cast<DWORD>(sz.QuadPart), &rd, nullptr);
-    CloseHandle(h);
-    if (!r)
-        return {};
-    if (ok)
-        *ok = true;
-    return out;
-}
 bool file_info(const std::wstring& p, std::uint64_t* size,
                std::int64_t* mtime) {
     WIN32_FILE_ATTRIBUTE_DATA d{};
     if (!GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &d))
+        return false;
+    if ((d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
         return false;
     if (size)
         *size = (static_cast<std::uint64_t>(d.nFileSizeHigh) << 32) |
@@ -172,6 +156,39 @@ const char* cs_hook_name(const char* hook) {
 
 } // namespace
 
+std::string csmini_read_file(const std::wstring& path) {
+    const HANDLE raw = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (raw == INVALID_HANDLE_VALUE) {
+        const auto error = GetLastError();
+        throw cs_error{SAO_ERR_OS_CALL_FAILED, "IOError",
+                       "file open failed, win32=" + std::to_string(error), {}, narrow(path), {}};
+    }
+    const std::unique_ptr<void, decltype(&CloseHandle)> file(raw, &CloseHandle);
+    LARGE_INTEGER size{};
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (GetFileType(raw) != FILE_TYPE_DISK || !GetFileInformationByHandle(raw, &info) ||
+        (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+        !GetFileSizeEx(raw, &size) || size.QuadPart < 0 ||
+        static_cast<uint64_t>(size.QuadPart) > std::string{}.max_size()) {
+        throw cs_error{SAO_ERR_OS_CALL_FAILED, "IOError", "invalid file size or file type",
+                       {}, narrow(path), {}};
+    }
+    std::string result(static_cast<size_t>(size.QuadPart), '\0');
+    for (size_t offset = 0; offset < result.size();) {
+        const DWORD requested = static_cast<DWORD>(
+            (std::min)(result.size() - offset, size_t{1024 * 1024}));
+        DWORD received = 0;
+        if (!ReadFile(raw, result.data() + offset, requested, &received, nullptr) ||
+            received != requested) {
+            throw cs_error{SAO_ERR_OS_CALL_FAILED, "IOError", "file read failed or was short",
+                           {}, narrow(path), {}};
+        }
+        offset += received;
+    }
+    return result;
+}
+
 std::string csmini_describe_sig(const sig_raise& sig, interpreter*) {
     if (const auto* e = as_exc(sig.exc)) {
         std::string s =
@@ -226,6 +243,8 @@ int call_hook_locked(host_state& s, const char* hook,
             a.pos.push_back(payload);
         }
         CsRef r = i.call(fn, a, {});
+        if (as_func(fn)->is_async)
+            r = csmini_await_value(i, r, {});
         if (std::strcmp(hook, "on_unload") == 0 ||
             std::strcmp(cs_hook_name(hook), "OnUnload") == 0)
             s.unload_hook_fired = true;
@@ -243,6 +262,10 @@ int call_hook_locked(host_state& s, const char* hook,
     } catch (const std::exception& e) {
         if (out_err)
             *out_err = exception_tag(e) + " " + e.what();
+        return -2;
+    } catch (...) {
+        if (out_err)
+            *out_err = "hook raised an unknown exception";
         return -2;
     }
 }
@@ -277,14 +300,16 @@ int csmini_host_load_plugin(loader::plugin_context_t* ctx,
                             const wchar_t* plugin_root,
                             const wchar_t* entry_rel,
                             const std::vector<std::wstring>& extra_dirs,
-                            std::string* out_err) {
+                            std::string* out_err, bool* out_owned) {
+    if (out_owned)
+        *out_owned = false;
     if (!plugin_id || !*plugin_id || !plugin_root || !entry_rel)
         return -1;
     std::lock_guard<std::mutex> g(g_hosts_mu);
     if (g_hosts.count(plugin_id))
         return -2;
 
-    auto s = std::make_unique<host_state>();
+    auto candidate = std::make_unique<host_state>();
     interpreter::config icfg{};
     icfg.ctx = ctx;
     icfg.plugin_id = plugin_id;
@@ -296,7 +321,11 @@ int csmini_host_load_plugin(loader::plugin_context_t* ctx,
         if (ctx)
             sao_plugins_ctx_log(ctx, msg.c_str());
     };
-    s->interp = std::make_unique<interpreter>(std::move(icfg));
+    candidate->interp = std::make_unique<interpreter>(std::move(icfg));
+    auto* s = candidate.get();
+    g_hosts.emplace(plugin_id, std::move(candidate));
+    if (out_owned)
+        *out_owned = true;
     interpreter& i = *s->interp;
     i.on_log = i.cfg.log_hook;
 
@@ -326,13 +355,7 @@ int csmini_host_load_plugin(loader::plugin_context_t* ctx,
                 ch = L'\\';
         s->entry_abs = abs;
         file_info(abs, &s->entry_size, &s->entry_mtime);
-        bool read_ok = false;
-        const std::string src = read_all(abs, &read_ok);
-        if (!read_ok) {
-            if (out_err)
-                *out_err = "entry file unreadable: " + narrow(abs);
-            return -3;
-        }
+        const std::string src = csmini_read_file(abs);
         std::string logical = narrow(entry_rel);
         for (auto& ch : logical)
             if (ch == '\\' || ch == '/')
@@ -356,20 +379,21 @@ int csmini_host_load_plugin(loader::plugin_context_t* ctx,
             *out_err = e.kind + ": " + e.message + " (" + e.file + ":" +
                        std::to_string(e.pos.line) + ":" +
                        std::to_string(e.pos.col) + ")";
-        g_hosts.erase(plugin_id);
         return -4;
     } catch (const sig_raise& sig) {
         if (out_err)
             *out_err = csmini_describe_sig(sig, &i);
-        g_hosts.erase(plugin_id);
         return -4;
     } catch (const std::exception& e) {
         if (out_err)
             *out_err = exception_tag(e) + " " + e.what();
-        g_hosts.erase(plugin_id);
+        return SAO_ERR_UNKNOWN;
+    } catch (...) {
+        if (out_err)
+            *out_err = "entry load raised an unknown exception";
         return SAO_ERR_UNKNOWN;
     }
-    g_hosts[plugin_id] = std::move(s);
+    s->load_failed = false;
     return 0;
 }
 
@@ -382,7 +406,10 @@ int csmini_host_call_hook(const char* plugin_id, const char* hook,
     host_state* s = find(plugin_id);
     if (!s)
         return -2;
-    return call_hook_locked(*s, hook, payload_json, out_err);
+    const int status = call_hook_locked(*s, hook, payload_json, out_err);
+    if (status < 0 && std::strcmp(cs_hook_name(hook), "OnLoad") == 0)
+        s->load_failed = true;
+    return status;
 }
 
 int csmini_host_call_hook_ret(const char* plugin_id, const char* hook,
@@ -394,6 +421,11 @@ int csmini_host_call_hook_ret(const char* plugin_id, const char* hook,
     host_state* s = find(plugin_id);
     if (!s)
         return -2;
+    if (s->load_failed && std::strcmp(cs_hook_name(hook), "OnUnload") == 0) {
+        if (out_ret)
+            *out_ret = nullptr;
+        return 1;
+    }
     return call_hook_locked(*s, hook, payload_json, out_err, out_ret);
 }
 
@@ -405,11 +437,21 @@ int csmini_host_unload_plugin(const char* plugin_id,
     auto it = g_hosts.find(plugin_id);
     if (it == g_hosts.end())
         return -2;
-    std::unique_ptr<host_state> s = std::move(it->second);
-    g_hosts.erase(it);
-    if (!s->unload_hook_fired)
-        (void)call_hook_locked(*s, "on_unload", nullptr, out_err);
+    auto& s = it->second;
+    if (!s->load_failed && !s->unload_hook_fired) {
+        const int status = call_hook_locked(*s, "on_unload", nullptr, out_err);
+        if (status < 0)
+            return SAO_ERR_OS_CALL_FAILED;
+        s->unload_hook_fired = true;
+    }
+    const int32_t cleanup = loader::plugin_context_release_resources(s->interp->cfg.ctx);
+    if (cleanup != SAO_OK) {
+        if (out_err)
+            *out_err = "callback cleanup pending: " + std::to_string(cleanup);
+        return cleanup;
+    }
     csmini_drop_callbacks(*s->interp);
+    g_hosts.erase(it);
     return 0;
 }
 

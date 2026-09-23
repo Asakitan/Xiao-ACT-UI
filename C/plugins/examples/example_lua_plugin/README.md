@@ -6,9 +6,8 @@
 
 ## Lua 姿势
 
-**冒号调用推荐**: ``ctx:log("hi")`` (自动传 self)。
-
-**点号也支持** (compat 层给 metatable 转发, 兼容老 Python plugin.lua)。
+ctx userdata 方法使用冒号：`ctx:log("hi")`（自动传 self）；`ctx.ui` 构造器使用点号。
+本例在停用和直接卸载时都清理计时器并重置本地状态。
 
 ## SDK 命名
 
@@ -41,5 +40,4 @@ ctx.ui.button(label, action_id, style)
 
 ## 从 Python 平台迁移
 
-``python/plugins/example_lua_plugin/plugin.lua`` 直接搬。lupa 兼容
-路径 (点号方法) 也可用。
+迁移时核对冒号调用、回调参数及宿主提供的模块；旧 lupa 插件不视为自动兼容。

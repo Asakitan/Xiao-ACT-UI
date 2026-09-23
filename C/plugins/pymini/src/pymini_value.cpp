@@ -15,6 +15,10 @@ const PyRef& none_ref() {
     static const PyRef v = std::make_shared<PyNoneObj>();
     return v;
 }
+const PyRef& ellipsis_ref() {
+    static const PyRef v = std::make_shared<PyEllipsisObj>();
+    return v;
+}
 const PyRef& true_ref() {
     static const PyRef v = std::make_shared<PyBoolObj>(true);
     return v;
@@ -99,6 +103,7 @@ std::string repr_float(double v) {
 
 // ── singletons / factories ────────────────────────────────────────────────
 PyRef py_none() { return none_ref(); }
+PyRef py_ellipsis() { return ellipsis_ref(); }
 PyRef py_true() { return true_ref(); }
 PyRef py_false() { return false_ref(); }
 PyRef py_bool(bool v) { return v ? true_ref() : false_ref(); }
@@ -239,6 +244,7 @@ std::string py_repr(interpreter& i, const PyRef& r) {
         return "None";
     switch (r->kind) {
     case py_kind::none_:    return "None";
+    case py_kind::ellipsis_: return "Ellipsis";
     case py_kind::boolean:  return static_cast<PyBoolObj*>(r.get())->v ? "True" : "False";
     case py_kind::integer: {
         char buf[24];
@@ -395,6 +401,7 @@ int64_t py_hash(const PyRef& r, bool* ok) {
     }
     switch (r->kind) {
     case py_kind::none_:    return 0x6e6f6e65;
+    case py_kind::ellipsis_: return 0x656c6c6970736973;
     case py_kind::boolean:  return static_cast<PyBoolObj*>(r.get())->v ? 1 : 0;
     case py_kind::integer:  return static_cast<PyIntObj*>(r.get())->v;
     case py_kind::number: {
@@ -498,6 +505,7 @@ bool py_eq(interpreter& i, const PyRef& a, const PyRef& b) {
     }
     switch (a->kind) {
     case py_kind::none_:    return true;
+    case py_kind::ellipsis_: return true;
     case py_kind::boolean:  return as_bool(a)->v == as_bool(b)->v;
     case py_kind::integer:  return as_int(a)->v == as_int(b)->v;
     case py_kind::number:   return as_float(a)->v == as_float(b)->v;

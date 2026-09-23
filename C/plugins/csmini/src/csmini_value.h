@@ -11,12 +11,14 @@
 
 #include "csmini_common.h"
 
+#include <array>
 #include <functional>
 #include <variant>
 
 namespace sao::plugins::csmini {
 
 class interpreter;
+struct cs_scope;
 struct CsObj;
 using CsRef = std::shared_ptr<CsObj>;
 
@@ -28,9 +30,9 @@ struct cs_args {
 
 enum class cs_kind : uint8_t {
     null_, boolean, integer, number, string, char_,
-    array, dict,
+    array, dict, guid,
     func, builtin, bound_method,
-    class_, instance, native_obj, exception_,
+    property, class_, instance, native_obj, exception_,
 };
 
 struct CsObj {
@@ -66,11 +68,18 @@ struct CsCharObj : CsObj {
 };
 
 // ── containers ────────────────────────────────────────────────────────────
-// C# array / List<T> — same object, List<T> methods attach by name.
+enum class cs_array_semantics : uint8_t { sequence, set };
+
+// C# array / List<T> share sequence semantics. HashSet<T> uses the same
+// bounded storage with explicit set semantics at every mutation boundary.
 struct CsArrayObj : CsObj {
     std::vector<CsRef> v;
-    CsArrayObj() : CsObj(cs_kind::array) {}
-    explicit CsArrayObj(std::vector<CsRef> x) : CsObj(cs_kind::array), v(std::move(x)) {}
+    cs_array_semantics semantics = cs_array_semantics::sequence;
+    explicit CsArrayObj(cs_array_semantics s = cs_array_semantics::sequence)
+        : CsObj(cs_kind::array), semantics(s) {}
+    CsArrayObj(std::vector<CsRef> x, cs_array_semantics s)
+        : CsObj(cs_kind::array), v(std::move(x)), semantics(s) {}
+    bool is_set() const noexcept { return semantics == cs_array_semantics::set; }
 };
 
 // Dictionary<K,V> / object literal — insertion-ordered pairs keyed by any
@@ -78,6 +87,12 @@ struct CsArrayObj : CsObj {
 struct CsDictObj : CsObj {
     std::vector<std::pair<CsRef, CsRef>> items;
     CsDictObj() : CsObj(cs_kind::dict) {}
+};
+
+struct CsGuidObj : CsObj {
+    std::array<uint8_t, 16> bytes{};
+    explicit CsGuidObj(std::array<uint8_t, 16> value)
+        : CsObj(cs_kind::guid), bytes(value) {}
 };
 
 // ── callables ─────────────────────────────────────────────────────────────
@@ -101,6 +116,7 @@ struct cs_param {
 struct ast_stmt;
 struct CsFuncObj : CsObj {
     std::string name;
+    std::string return_type;
     std::vector<cs_param> params;
     std::vector<struct ast_expr*> default_exprs;  // aligned w/ params (null → required)
     std::shared_ptr<std::vector<std::shared_ptr<ast_stmt>>> body;  // null → expr-body
@@ -108,7 +124,12 @@ struct CsFuncObj : CsObj {
     std::shared_ptr<void> anchor;                 // keeps owning ast_program alive
     bool is_static = false;
     bool is_ctor = false;
+    bool is_lambda = false;
+    bool is_async = false;
     struct CsClassObj* owner_class = nullptr;    // raw ptr: class keeps fn alive
+    cs_scope* closure_scope = nullptr;
+    CsRef closure_this;
+    CsRef closure_class;
     CsFuncObj() : CsObj(cs_kind::func) {}
 };
 
@@ -116,6 +137,18 @@ struct CsBoundMethodObj : CsObj {
     CsRef self;                                 // instance (or class for static)
     CsRef fn;
     CsBoundMethodObj(CsRef s, CsRef f) : CsObj(cs_kind::bound_method), self(std::move(s)), fn(std::move(f)) {}
+};
+
+struct CsPropertyObj : CsObj {
+    std::string name;
+    std::string backing_name;
+    CsRef getter;
+    CsRef setter;
+    CsRef static_value;
+    bool is_static = false;
+    bool auto_get = false;
+    bool auto_set = false;
+    CsPropertyObj() : CsObj(cs_kind::property) {}
 };
 
 // ── class machinery ───────────────────────────────────────────────────────
@@ -172,7 +205,9 @@ CsRef cs_str(std::string_view v);
 CsRef cs_str(const char* v);
 CsRef cs_char(int64_t v);
 CsRef cs_array(std::vector<CsRef> v = {});
+CsRef cs_set(std::vector<CsRef> v = {});
 CsRef cs_dict();
+CsRef cs_guid(const std::array<uint8_t, 16>& bytes);
 CsRef cs_builtin(std::string name, cs_native_fn fn);
 CsRef cs_exc(const std::string& type, const std::string& msg);
 CsRef cs_native(std::string name, bool ci = false);
@@ -185,12 +220,20 @@ inline CsBoolObj* as_bool(const CsRef& r) { return r && r->kind == cs_kind::bool
 inline CsCharObj* as_char(const CsRef& r) { return r && r->kind == cs_kind::char_ ? static_cast<CsCharObj*>(r.get()) : nullptr; }
 inline CsArrayObj* as_array(const CsRef& r) { return r && r->kind == cs_kind::array ? static_cast<CsArrayObj*>(r.get()) : nullptr; }
 inline CsDictObj* as_dict(const CsRef& r) { return r && r->kind == cs_kind::dict ? static_cast<CsDictObj*>(r.get()) : nullptr; }
+inline CsGuidObj* as_guid(const CsRef& r) { return r && r->kind == cs_kind::guid ? static_cast<CsGuidObj*>(r.get()) : nullptr; }
 inline CsExcObj* as_exc(const CsRef& r) { return r && r->kind == cs_kind::exception_ ? static_cast<CsExcObj*>(r.get()) : nullptr; }
 inline CsClassObj* as_class(const CsRef& r) { return r && r->kind == cs_kind::class_ ? static_cast<CsClassObj*>(r.get()) : nullptr; }
 inline CsInstanceObj* as_inst(const CsRef& r) { return r && r->kind == cs_kind::instance ? static_cast<CsInstanceObj*>(r.get()) : nullptr; }
 inline CsFuncObj* as_func(const CsRef& r) { return r && r->kind == cs_kind::func ? static_cast<CsFuncObj*>(r.get()) : nullptr; }
 inline CsBuiltinObj* as_builtin(const CsRef& r) { return r && r->kind == cs_kind::builtin ? static_cast<CsBuiltinObj*>(r.get()) : nullptr; }
+inline CsPropertyObj* as_property(const CsRef& r) { return r && r->kind == cs_kind::property ? static_cast<CsPropertyObj*>(r.get()) : nullptr; }
 inline CsNativeObj* as_native(const CsRef& r) { return r && r->kind == cs_kind::native_obj ? static_cast<CsNativeObj*>(r.get()) : nullptr; }
+
+inline bool cs_is_callable(const CsRef& r) {
+    return r && (r->kind == cs_kind::func || r->kind == cs_kind::builtin ||
+                 r->kind == cs_kind::bound_method || r->kind == cs_kind::class_ ||
+                 (r->kind == cs_kind::native_obj && as_native(r)->payload));
+}
 
 bool cs_is_null(const CsRef& r);
 bool cs_truthy(const CsRef& r);               // C# truthiness (only bool/null/non-null)
@@ -222,5 +265,10 @@ inline CsRef dict_get_ci(const CsRef& d, const CsRef& key) {
     return CsRef{};
 }
 bool cs_eq(const CsRef& a, const CsRef& b);
+bool cs_sequence_contains(const CsArrayObj* sequence, const CsRef& value);
+bool cs_set_add(CsArrayObj* set, CsRef value);
+bool cs_guid_parse(std::string_view text, std::array<uint8_t, 16>* out);
+std::string cs_guid_format(const std::array<uint8_t, 16>& bytes,
+                           std::string_view format = "D");
 
 } // namespace sao::plugins::csmini

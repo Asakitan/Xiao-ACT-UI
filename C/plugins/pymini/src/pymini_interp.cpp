@@ -58,6 +58,7 @@ const char* py_type_name(const PyRef& r) {
         return "NoneType";
     switch (r->kind) {
     case py_kind::none_:        return "NoneType";
+    case py_kind::ellipsis_:    return "ellipsis";
     case py_kind::boolean:      return "bool";
     case py_kind::integer:      return "int";
     case py_kind::number:       return "float";
@@ -131,6 +132,7 @@ expr_ptr clone_expr(const ast_expr* e) {
         nc.iter = clone_expr(g.iter.get());
         for (const auto& cond : g.ifs)
             nc.ifs.push_back(clone_expr(cond.get()));
+        nc.is_async = g.is_async;
         c->generators.push_back(std::move(nc));
     }
     for (const auto& p : e->params) {
@@ -143,6 +145,7 @@ expr_ptr clone_expr(const ast_expr* e) {
         c->params.push_back(std::move(np));
     }
     c->fstring_raw_flag = e->fstring_raw_flag;
+    c->is_generator = e->is_generator;
     return c;
 }
 
@@ -177,12 +180,20 @@ PyRef interpreter::create_module_object(const std::string& name,
     m->name = name;
     m->dict = py_dict();
     m->path = path_utf8;
-    m->package = package.empty() ? name : package;
+    const auto slash = path_utf8.find_last_of("/\\");
+    const auto leaf = path_utf8.substr(slash == std::string::npos ? 0 : slash + 1);
+    const bool is_package = leaf == "__init__.py";
+    const auto dot = name.rfind('.');
+    m->package = !package.empty() ? package : is_package ? name
+        : dot == std::string::npos ? std::string{} : name.substr(0, dot);
     auto* d = as_dict(m->dict);
     dict_set(d, py_str("__name__"), py_str(name));
     dict_set(d, py_str("__file__"), py_str(path_utf8));
     dict_set(d, py_str("__package__"), py_str(m->package));
     dict_set(d, py_str("__builtins__"), builtins_dict);
+    if (is_package)
+        dict_set(d, py_str("__path__"), py_list({py_str(
+            slash == std::string::npos ? "." : path_utf8.substr(0, slash))}));
     return m;
 }
 
@@ -199,9 +210,11 @@ PyRef interpreter::find_loaded(const std::string& name) {
 // exec_module_source can enqueue a module while pending.
 PyRef interpreter::exec_module_source(const std::string& logical_name,
                                       const std::string& file_utf8,
-                                      std::string_view source) {
+                                      std::string_view source,
+                                      PyRef prepared_module) {
     gil_guard g(*this);
-    auto mod = create_module_object(logical_name, file_utf8);
+    auto mod = prepared_module ? std::move(prepared_module)
+                              : create_module_object(logical_name, file_utf8);
     register_module(mod);
     pending.push_back(mod);
     try {
@@ -438,6 +451,15 @@ void interpreter::exec_body(const std::vector<stmt_ptr>& body, frame& f) {
     }
 }
 
+void interpreter::emit_yield(frame& f, PyRef value, src_pos pos) {
+    constexpr std::size_t kMaxGeneratorItems = 65536;
+    if (f.yield_sink == nullptr)
+        raise_exc("RuntimeError", "yield executed outside generator", pos);
+    if (f.yield_sink->size() >= kMaxGeneratorItems)
+        raise_exc("MemoryError", "eager generator item limit exceeded", pos);
+    f.yield_sink->push_back(std::move(value));
+}
+
 void interpreter::exec(const ast_stmt* s, frame& f) {
     gil_guard g(*this);
     if (static_cast<int64_t>(++call_depth) > cfg.max_call_depth) {
@@ -659,6 +681,8 @@ void interpreter::exec(const ast_stmt* s, frame& f) {
             auto fno = std::make_shared<PyFuncObj>();
             fno->name = s->name;
             fno->body = s->body;
+            fno->is_async = s->is_async;
+            fno->is_generator = s->is_generator;
             // capture: enclosing locals become the closure chain.
             // Methods defined inside a class body do NOT capture class attrs
             // (Python: class scope is not an enclosing scope for methods).
@@ -931,9 +955,31 @@ PyRef interpreter::eval(const ast_expr* e, frame& f) {
             return eval(e->base.get(), f);
         return eval(e->orelse.get(), f);
     }
+    case et::named_expr: {
+        PyRef value = eval(e->base.get(), f);
+        frame& target = f.named_expr_scope ? *f.named_expr_scope : f;
+        scope_set(target, e->name, value);
+        return value;
+    }
+    case et::await_:
+        return eval(e->base.get(), f);
+    case et::yield_: {
+        PyRef value = e->base ? eval(e->base.get(), f) : py_none();
+        emit_yield(f, std::move(value), e->pos);
+        return py_none();
+    }
+    case et::yield_from: {
+        PyRef iterable = eval(e->base.get(), f);
+        for_each(iterable, [&](PyRef value) {
+            emit_yield(f, std::move(value), e->pos);
+            return true;
+        });
+        return py_none();
+    }
     case et::lambda_: {
         auto fn = std::make_shared<PyFuncObj>();
         fn->name = "<lambda>";
+        fn->is_generator = e->is_generator;
         fn->globals_dict = f.globals;
         if (!f.in_class_body && f.locals != f.globals)
             fn->closure.push_back(f.locals);
@@ -1186,12 +1232,13 @@ void interpreter::exec_import(const ast_stmt* s, frame& f) {
     }
     // from X import a as b
     PyRef m = import_dotted(s->from_module, &f, s->from_level);
-    if (as_module(m) == nullptr)
+    PyRef module_globals = getattr(m, "__dict__");
+    if (as_dict(module_globals) == nullptr)
         raise_exc("ImportError", "import target is not a module", s->pos);
     for (const auto& [name, alias] : s->imports) {
         if (name == "*") {
             // star import: copy public names
-            auto* md = as_dict(as_module(m)->dict);
+            auto* md = as_dict(module_globals);
             if (md != nullptr)
                 for (auto& [k, v] : md->items) {
                     if (auto* ks = as_str(k)) {
@@ -1201,20 +1248,7 @@ void interpreter::exec_import(const ast_stmt* s, frame& f) {
                 }
             continue;
         }
-        PyRef v = getattr(m, name);
-        if (!v) {
-            // submodule fallback: package.name
-            std::string full = s->from_module.empty() ? name
-                                                      : s->from_module + "." + name;
-            try {
-                v = import_dotted(full, &f, s->from_level);
-            } catch (const sig_raise&) {
-                raise_exc("ImportError",
-                          "cannot import name '" + name + "' from '" +
-                              s->from_module + "'",
-                          s->pos);
-            }
-        }
+        PyRef v = import_from(m, name);
         scope_set(f, alias.empty() ? name : alias, std::move(v));
     }
 }
@@ -1287,6 +1321,7 @@ PyRef interpreter::eval_comprehension(const ast_expr* e, frame& f) {
     cf.fn_name = "<comprehension>";
     cf.file = f.file;
     cf.caller = cur_frame;
+    cf.named_expr_scope = f.named_expr_scope ? f.named_expr_scope : &f;
 
     std::function<void(std::size_t)> run = [&](std::size_t idx) {
         if (idx >= e->generators.size()) {

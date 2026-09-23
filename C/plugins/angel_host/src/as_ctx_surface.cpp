@@ -19,6 +19,7 @@
 #include "as_plugin_internal.h"
 
 #include "sao/plugins/angel_host/as_call.h"
+#include "sao/plugins/angel_host/as_error.h"
 #include "sao/plugins/angel_host/as_gpu_hunt_bind.h"
 #include "sao/plugins/angel_host/as_module_bridge.h"
 #include "sao/plugins/loader/entity_provider.h"
@@ -2593,9 +2594,15 @@ void local_module_get(asIScriptGeneric* generic) {
         const std::string name = arg_string(generic, 0);
         sc::script_value_ptr value;
         std::string error;
-        if (handle->module->get(name, &value, &error) == SAO_OK && value)
+        const int32_t status = handle->module->get(name, &value, &error);
+        if (status != SAO_OK) {
+            const std::string diagnostic = "LocalModule.get " + name + " failed (" +
+                                           std::to_string(status) + "): " + error;
+            set_active_exception(diagnostic.c_str());
+        } else if (value) {
             result = json_ref_from_ordered(generic->GetEngine(),
                                            script_value_to_json(*value));
+        }
     }
     *static_cast<void**>(generic->GetAddressOfReturnLocation()) = result;
 }
@@ -2645,14 +2652,18 @@ shared_plugin_state plugin_for_context(loader_ns::plugin_context_t* ctx) {
     return acquire_plugin_state_by_bound_context(ctx);
 }
 
-struct as_helper_module final : sc::script_module {
+struct as_helper_module final : sc::script_module,
+                               std::enable_shared_from_this<as_helper_module> {
     shared_plugin_state plugin;
     std::string module_name;
     std::string identity;
+    asIScriptModule* owned_module = nullptr;
 
     ~as_helper_module() override {
-        if (plugin != nullptr && plugin->engine != nullptr && !module_name.empty()) {
-            engine_execution_guard engine_lock;
+        engine_execution_guard engine_lock;
+        if (owned_module != nullptr && plugin != nullptr && plugin->engine != nullptr &&
+            plugin->engine->GetModule(module_name.c_str(), asGM_ONLY_IF_EXISTS) ==
+                owned_module) {
             plugin->engine->DiscardModule(module_name.c_str());
         }
     }
@@ -2661,12 +2672,12 @@ struct as_helper_module final : sc::script_module {
 
     std::vector<std::string> member_names() const override {
         std::vector<std::string> names;
+        engine_execution_guard engine_lock;
         if (plugin == nullptr || plugin->engine == nullptr)
             return names;
-        engine_execution_guard engine_lock;
         asIScriptModule* module = plugin->engine->GetModule(module_name.c_str(),
                                                           asGM_ONLY_IF_EXISTS);
-        if (module == nullptr)
+        if (module == nullptr || module != owned_module)
             return names;
         for (asUINT index = 0; index < module->GetGlobalVarCount(); ++index) {
             const char* name = nullptr;
@@ -2687,74 +2698,23 @@ struct as_helper_module final : sc::script_module {
         if (out_value == nullptr)
             return SAO_ERR_INVALID_ARGUMENT;
         *out_value = sc::script_value::null_value();
+        engine_execution_guard engine_lock;
         if (plugin == nullptr || plugin->engine == nullptr)
             return SAO_ERR_HANDLE_INVALID;
-        engine_execution_guard engine_lock;
         asIScriptModule* module = plugin->engine->GetModule(module_name.c_str(),
                                                           asGM_ONLY_IF_EXISTS);
-        if (module == nullptr)
+        if (module == nullptr || module != owned_module)
             return SAO_ERR_HANDLE_INVALID;
         const int index = module->GetGlobalVarIndexByName(name.c_str());
         if (index < 0) {
             if (module->GetFunctionByName(name.c_str()) != nullptr) {
-                const shared_plugin_state keep = plugin;
+                const auto keep = shared_from_this();
                 const std::string function_name = name;
-                const std::string owning_module = module_name;
                 *out_value = sc::script_value::make_function(
-                    [keep, owning_module, function_name](
+                    [keep, function_name](
                         const std::vector<sc::script_value_ptr>& args,
                         sc::script_value_ptr* result, std::string* error) -> int32_t {
-                        if (result == nullptr)
-                            return SAO_ERR_INVALID_ARGUMENT;
-                        *result = sc::script_value::null_value();
-                        if (keep == nullptr || keep->engine == nullptr)
-                            return SAO_ERR_HANDLE_INVALID;
-                        engine_execution_guard engine_lock;
-                        asIScriptModule* module = keep->engine->GetModule(
-                            owning_module.c_str(), asGM_ONLY_IF_EXISTS);
-                        if (module == nullptr)
-                            return SAO_ERR_HANDLE_INVALID;
-                        asIScriptFunction* fn =
-                            module->GetFunctionByName(function_name.c_str());
-                        if (fn == nullptr)
-                            return SAO_ERR_HANDLE_INVALID;
-                        ordered_json positional = ordered_json::array();
-                        for (const auto& arg : args)
-                            positional.push_back(
-                                arg ? script_value_to_json(*arg) : ordered_json(nullptr));
-                        asIScriptContext* raw = keep->engine->CreateContext();
-                        if (raw == nullptr)
-                            return SAO_ERR_OS_CALL_FAILED;
-                        const std::unique_ptr<asIScriptContext,
-                                            void (*)(asIScriptContext*)>
-                            context(raw, [](asIScriptContext* v) { v->Release(); });
-                        if (context->Prepare(fn) < 0)
-                            return SAO_ERR_OS_CALL_FAILED;
-                        std::vector<as_string> string_args;
-                        std::vector<std::pair<void*, const asITypeInfo*>> release_after;
-                        const int32_t arg_status = set_callback_arguments(
-                            context.get(), fn, keep->engine, positional, string_args,
-                            release_after);
-                        if (arg_status != SAO_OK) {
-                            for (const auto& [object, type] : release_after)
-                                keep->engine->ReleaseScriptObject(object, type);
-                            return arg_status;
-                        }
-                        if (context->Execute() != asEXECUTION_FINISHED) {
-                            for (const auto& [object, type] : release_after)
-                                keep->engine->ReleaseScriptObject(object, type);
-                            if (error != nullptr)
-                                *error = "helper function did not finish";
-                            return SAO_ERR_OS_CALL_FAILED;
-                        }
-                        for (const auto& [object, type] : release_after)
-                            keep->engine->ReleaseScriptObject(object, type);
-                        cb_result result_holder;
-                        const ordered_json value = return_value_to_json(
-                            context.get(), fn, keep->engine, &result_holder);
-                        release_return_object(keep->engine, result_holder);
-                        *result = json_to_script_value(value);
-                        return SAO_OK;
+                        return keep->call(function_name, args, result, error);
                     });
                 return SAO_OK;
             }
@@ -2778,12 +2738,12 @@ struct as_helper_module final : sc::script_module {
         if (out_value == nullptr)
             return SAO_ERR_INVALID_ARGUMENT;
         *out_value = sc::script_value::null_value();
+        engine_execution_guard engine_lock;
         if (plugin == nullptr || plugin->engine == nullptr)
             return SAO_ERR_HANDLE_INVALID;
-        engine_execution_guard engine_lock;
         asIScriptModule* module =
             plugin->engine->GetModule(module_name.c_str(), asGM_ONLY_IF_EXISTS);
-        if (module == nullptr)
+        if (module == nullptr || module != owned_module)
             return SAO_ERR_HANDLE_INVALID;
         asIScriptFunction* fn = module->GetFunctionByName(name.c_str());
         if (fn == nullptr) {
@@ -2814,8 +2774,12 @@ struct as_helper_module final : sc::script_module {
         if (context->Execute() != asEXECUTION_FINISHED) {
             for (const auto& [object, type] : release_after)
                 plugin->engine->ReleaseScriptObject(object, type);
-            if (out_error != nullptr)
-                *out_error = "helper function did not finish";
+            if (out_error != nullptr) {
+                char* raw_error = nullptr;
+                (void)sao_plugins_ashost_take_exception(context.get(), &raw_error);
+                const std::unique_ptr<char, decltype(&std::free)> error(raw_error, &std::free);
+                *out_error = error ? error.get() : "helper function did not finish";
+            }
             return SAO_ERR_OS_CALL_FAILED;
         }
         for (const auto& [object, type] : release_after)
@@ -2829,25 +2793,25 @@ struct as_helper_module final : sc::script_module {
     }
 };
 
-bool SAO_PLUGINS_CALL as_provider_probe(loader_ns::plugin_context_t* ctx,
+int32_t SAO_PLUGINS_CALL as_provider_probe(loader_ns::plugin_context_t* ctx,
                                         const wchar_t* abs_path, std::string& note,
                                         void*) noexcept {
     try {
+        engine_execution_guard engine_lock;
         const shared_plugin_state plugin = plugin_for_context(ctx);
         if (plugin == nullptr || plugin->engine == nullptr ||
             plugin->lifecycle != plugin_runtime_state::ready) {
             note = "angelscript engine unavailable for ctx";
-            return false;
+            return SAO_ERR_NOT_IMPLEMENTED;
         }
         std::error_code ec;
         if (!std::filesystem::exists(abs_path, ec)) {
-            note = "file missing";
-            return false;
+            note = ec ? ec.message() : "file disappeared after path resolution";
+            return SAO_ERR_OS_CALL_FAILED;
         }
-        return true;
+        return SAO_OK;
     } catch (...) {
-        note = "probe failed";
-        return false;
+        return SAO_ERR_OS_CALL_FAILED;
     }
 }
 
@@ -2860,6 +2824,7 @@ int32_t SAO_PLUGINS_CALL as_provider_load(loader_ns::plugin_context_t* ctx,
         return SAO_ERR_INVALID_ARGUMENT;
     out_module->reset();
     try {
+        engine_execution_guard engine_lock;
         const shared_plugin_state plugin = plugin_for_context(ctx);
         if (plugin == nullptr || plugin->engine == nullptr)
             return SAO_ERR_HANDLE_INVALID;
@@ -2867,36 +2832,85 @@ int32_t SAO_PLUGINS_CALL as_provider_load(loader_ns::plugin_context_t* ctx,
         if (!input) {
             if (out_error != nullptr)
                 *out_error = "cannot read module file";
-            return SAO_ERR_HANDLE_INVALID;
+            return SAO_ERR_OS_CALL_FAILED;
         }
         const std::string source{std::istreambuf_iterator<char>(input),
                                  std::istreambuf_iterator<char>()};
-        engine_execution_guard engine_lock;
-        asIScriptModule* module =
-            plugin->engine->GetModule(logical_name.c_str(), asGM_ALWAYS_CREATE);
+        if (input.bad()) {
+            if (out_error != nullptr)
+                *out_error = "module file read failed";
+            return SAO_ERR_OS_CALL_FAILED;
+        }
+        auto helper = std::make_shared<as_helper_module>();
+        helper->plugin = plugin;
+        helper->identity = logical_name;
+        // The execution guard serializes allocation; exhausted identities are never reused.
+        static uint64_t generation = 0;
+        do {
+            if (generation == std::numeric_limits<uint64_t>::max()) {
+                if (out_error != nullptr)
+                    *out_error = "helper module identity exhausted";
+                return SAO_ERR_OS_CALL_FAILED;
+            }
+            helper->module_name = "sao_local_helper_g" + std::to_string(++generation);
+        } while (plugin->engine->GetModule(helper->module_name.c_str(),
+                                           asGM_ONLY_IF_EXISTS) != nullptr);
+        asIScriptModule* module = plugin->engine->GetModule(helper->module_name.c_str(),
+                                                          asGM_CREATE_IF_NOT_EXISTS);
+        helper->owned_module = module;
         if (module == nullptr) {
             if (out_error != nullptr)
                 *out_error = "module creation failed";
             return SAO_ERR_OS_CALL_FAILED;
         }
-        if (module->AddScriptSection(logical_name.c_str(), source.c_str(), source.size()) <
-                0 ||
-            module->Build() < 0) {
-            if (out_error != nullptr)
-                *out_error = "script build failed";
-            plugin->engine->DiscardModule(logical_name.c_str());
+        const std::string rewritten_source = as_rewrite_legacy_source(source);
+        const bool inject_ctx = !as_script_declares_ctx_global(rewritten_source);
+        constexpr char bridge_section[] = "PluginContext@ ctx;";
+        const std::string engine_preamble = sao_as_engine_preamble(plugin->engine);
+        const std::string section_name = utf8_from_wide(abs_path);
+        size_t first_message = 0;
+        if (plugin->host_state != nullptr) {
+            std::lock_guard lock(plugin->host_state->message_mutex);
+            first_message = plugin->host_state->messages.size();
+        }
+        const bool built =
+            !(inject_ctx && module->AddScriptSection("sao_module_bridge", bridge_section,
+                                                     sizeof(bridge_section) - 1) < 0) &&
+            module->AddScriptSection("sao_engine_preamble", engine_preamble.c_str(),
+                                     engine_preamble.size()) >= 0 &&
+            module->AddScriptSection(section_name.c_str(), rewritten_source.c_str(),
+                                     rewritten_source.size()) >= 0 &&
+            module->Build() >= 0;
+        if (!built) {
+            if (out_error != nullptr) {
+                *out_error = "script build failed: " + section_name;
+                if (plugin->host_state != nullptr) {
+                    std::lock_guard lock(plugin->host_state->message_mutex);
+                    for (size_t index = first_message;
+                         index < plugin->host_state->messages.size(); ++index) {
+                        const auto& message = plugin->host_state->messages[index];
+                        *out_error += "\n" + message.section + ":" +
+                                      std::to_string(message.row) + ":" +
+                                      std::to_string(message.column) + ": " + message.message;
+                    }
+                }
+            }
             return SAO_ERR_INVALID_ARGUMENT;
         }
-        (void)sao_plugins_ashost_bind_ctx(plugin->engine, ctx, logical_name.c_str());
-        auto helper = std::make_shared<as_helper_module>();
-        helper->plugin = plugin;
-        helper->module_name = logical_name;
-        helper->identity = logical_name;
+        const int32_t bind_status =
+            sao_plugins_ashost_bind_ctx(plugin->engine, ctx, helper->module_name.c_str());
+        if (bind_status != SAO_OK) {
+            if (out_error != nullptr)
+                *out_error = "helper context binding failed: " + section_name;
+            return bind_status;
+        }
         *out_module = std::move(helper);
         return SAO_OK;
     } catch (...) {
-        if (out_error != nullptr)
-            *out_error = "module load raised a C++ exception";
+        if (out_error != nullptr) {
+            try { *out_error = "module load raised a C++ exception"; }
+            catch (...) { out_error->clear(); }
+        }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }
@@ -3948,7 +3962,9 @@ void ctx_load_local(asIScriptGeneric* generic) {
     auto* ctx = context_of(generic);
     const std::string rel = arg_string(generic, 0);
     local_module_handle* output = nullptr;
-    if (ctx != nullptr && !rel.empty()) {
+    if (rel.find('\0') != std::string::npos) {
+        set_active_exception("load_local: embedded NUL in path (status -1)");
+    } else {
         const wchar_t* root_wide = loader_ns::sao_plugins_ctx_path(ctx);
         const std::string plugin_id = loader_ns::sao_plugins_ctx_plugin_id(ctx) != nullptr
                                           ? loader_ns::sao_plugins_ctx_plugin_id(ctx)
@@ -3957,9 +3973,9 @@ void ctx_load_local(asIScriptGeneric* generic) {
         std::shared_ptr<sc::script_module> module;
         std::wstring abs_path;
         std::string diag;
-        if (root_wide != nullptr &&
-            sc::runtime_bridge_load_local(ctx, plugin_id.c_str(), root_wide, rel.c_str(),
-                                          &kind, &module, &abs_path, &diag) == SAO_OK) {
+        const int32_t status = sc::runtime_bridge_load_local(
+            ctx, plugin_id.c_str(), root_wide, rel.c_str(), &kind, &module, &abs_path, &diag);
+        if (status == SAO_OK) {
             if (kind == sc::load_local_result::module && module != nullptr) {
                 output = new local_module_handle();
                 output->module = std::move(module);
@@ -3968,8 +3984,10 @@ void ctx_load_local(asIScriptGeneric* generic) {
             }
             if (kind != sc::load_local_result::module && !diag.empty())
                 loader_ns::sao_plugins_ctx_log(ctx, diag.c_str());
-        } else if (!diag.empty()) {
-            loader_ns::sao_plugins_ctx_log(ctx, diag.c_str());
+        } else {
+            const std::string error = "load_local failed with status " +
+                std::to_string(status) + ": " + diag;
+            set_active_exception(error.c_str());
         }
     }
     *static_cast<local_module_handle**>(generic->GetAddressOfReturnLocation()) = output;
@@ -3979,7 +3997,9 @@ void ctx_load_local_path(asIScriptGeneric* generic) {
     auto* ctx = context_of(generic);
     const std::string rel = arg_string(generic, 0);
     as_string result;
-    if (ctx != nullptr && !rel.empty()) {
+    if (rel.find('\0') != std::string::npos) {
+        set_active_exception("load_local_path: embedded NUL in path (status -1)");
+    } else {
         const wchar_t* root_wide = loader_ns::sao_plugins_ctx_path(ctx);
         const std::string plugin_id = loader_ns::sao_plugins_ctx_plugin_id(ctx) != nullptr
                                           ? loader_ns::sao_plugins_ctx_plugin_id(ctx)
@@ -3988,13 +4008,17 @@ void ctx_load_local_path(asIScriptGeneric* generic) {
         std::shared_ptr<sc::script_module> module;
         std::wstring abs_path;
         std::string diag;
-        if (root_wide != nullptr &&
-            sc::runtime_bridge_load_local(ctx, plugin_id.c_str(), root_wide, rel.c_str(),
-                                          &kind, &module, &abs_path, &diag) == SAO_OK) {
+        const int32_t status = sc::runtime_bridge_load_local(
+            ctx, plugin_id.c_str(), root_wide, rel.c_str(), &kind, &module, &abs_path, &diag);
+        if (status == SAO_OK) {
             if (kind == sc::load_local_result::path_only)
                 result = utf8_from_wide(abs_path.c_str());
             else if (!diag.empty())
                 loader_ns::sao_plugins_ctx_log(ctx, diag.c_str());
+        } else {
+            const std::string error = "load_local_path failed with status " +
+                std::to_string(status) + ": " + diag;
+            set_active_exception(error.c_str());
         }
     }
     new (generic->GetAddressOfReturnLocation()) as_string(std::move(result));
