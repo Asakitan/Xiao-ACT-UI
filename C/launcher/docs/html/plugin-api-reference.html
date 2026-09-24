@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><link rel="icon" href="data:,"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="description" content="SAO Auto 插件公共 API 全集：插件清单、22 个声明式 UI builder 和全部反射引擎目录。"><title>插件公共 API 全集 · SAO Auto</title><link rel="stylesheet" href="assets/style.css"><script src="assets/theme.js"></script></head>
+<body class="api-guide"><div class="progress-track" aria-hidden="true"><span class="progress-fill" id="progress-fill"></span></div><a class="skip-link" href="#overview">跳到正文</a><header class="site-header"><a class="brand" href="index.html#plugin-api" aria-label="返回用户指南"><span class="brand-mark" aria-hidden="true">SA</span><span class="brand-copy"><strong>SAO Auto</strong><small>插件 API</small></span></a><nav class="header-nav" aria-label="插件语言导航"><a href="index.html#plugin-api">总览</a><a href="plugin-api-reference.html" aria-current="page">公共 API</a><a href="plugin-python.html">Python</a><a href="plugin-lua.html">Lua</a><a href="plugin-emma.html">Emma</a><a href="plugin-angelscript.html">AngelScript</a><a href="plugin-csharp.html">C#</a></nav><div class="header-actions"><button type="button" class="guide-close" data-guide-close>关闭 <span aria-hidden="true">×</span></button><button type="button" id="theme-toggle" class="theme-switch" aria-label="切换深色模式"><svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M21 13.4A9 9 0 0 1 10.6 3 9 9 0 1 0 21 13.4Z"/></svg></button></div></header>
+<main class="manual-shell" id="manual"><aside class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">公共接口</p><ol><li><a href="#overview" data-target="overview"><span>01</span>调用合同</a></li><li><a href="#manifest" data-target="manifest"><span>02</span>插件清单</a></li><li><a href="#ui" data-target="ui"><span>03</span>UI 构造器</a></li><li><a href="#engine" data-target="engine"><span>04</span>引擎目录</a></li><li><a href="#context" data-target="context"><span>05</span>语言 ctx 对照</a></li><li><a href="#manifest-full" data-target="manifest-full"><span>06</span>全部清单字段</a></li></ol></nav><div class="rail-tip"><span aria-hidden="true">⌂</span><p><strong>返回指南</strong><a href="index.html#plugin-api">浏览五语言手册</a></p></div></aside><article class="manual-content">
+<section class="manual-section" id="overview"><header class="section-heading"><span class="section-number">01</span><div><p>SHARED CONTRACT</p><h2>如何阅读本全集</h2></div></header><p>此页列出完整插件清单字段、22 个声明式 UI 构造器、六组共 126 条 <code>sdk_binding</code> 引擎目录和七条运行路径的 ctx 对照；每种语言的调用语法、生命周期、准确的宿主实现及可运行示例见对应语言页。原生 SDK C ABI 与脚本 ctx facade 不同，C 函数不能直接当脚本方法调用。</p><p>反射引擎名称为 <code>group.method</code>（例如 <code>mem.read_u64</code>），命名包装一般将点变成下划线（<code>ctx.engine.mem_read_u64(address)</code>）；raw 调用传 <code>{"name":"mem.read_u64","args":{"address":4096}}</code>。底层 envelope 是 <code>{"status":整数,"result":值}</code>，不同宿主选择抛错或仅返回 result；<code>engine.list()</code> 返回带 <code>name</code>、<code>args</code>、<code>available</code> 的目录记录，<code>available=false</code> 表示当前 provider/slot 不可用。</p><p>binary 数据参数和结果用 <code>*_b64</code> 字段传 Base64；句柄/token 是无符号整数。需要回调的反射条目要求宿主提供对应 callback 通道，未绑定时不会假装成功；使用对应语言原生 <code>ctx.register_ui_panel</code>、<code>ctx.register_menu_category</code> 等回调 API 时不走反射目录的通用方法 ID。</p></section>
+<section class="manual-section" id="manifest"><header class="section-heading"><span class="section-number">02</span><div><p>PLUGIN.JSON</p><h2>清单字段</h2></div></header><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>字段</th><th>类型与用法</th></tr></thead><tbody><tr><td><code>id</code>、<code>name</code>、<code>version</code></td><td>插件身份、显示名称和版本。ID 要在扫描根内唯一。</td></tr><tr><td><code>language</code>、<code>entry</code></td><td>语言身份：<code>python</code>/<code>lua</code>/<code>emma</code>/<code>angelscript</code>/<code>csharp</code>；入口为插件根内文件，相应扩展名 <code>.py/.lua/.emma/.as/.cs</code> 或托管 <code>.dll</code>。</td></tr><tr><td><code>py_runtime</code></td><td><code>auto</code>（缺省）、<code>pymini</code> 或 <code>cpython</code>；只适用于 Python。</td></tr><tr><td><code>cs_runtime</code>、<code>managed_type</code></td><td><code>auto</code>（缺省）、<code>csmini</code> 或 <code>coreclr</code>；CoreCLR DLL 还需托管类型和 runtimeconfig。</td></tr><tr><td><code>enabled</code>、<code>permissions</code></td><td>初始启用状态与权限 ID 列表；如 Lua <code>require</code>、反射 <code>engine_access</code>。</td></tr><tr><td><code>capabilities</code></td><td>字符串能力 ID 或带 <code>id/title/description/actions</code> 的对象数组，供管理器展示。</td></tr><tr><td><code>settings_schema</code></td><td>键→类型、default、description 的设置 schema；运行时 <code>set_defaults</code> 仅补未保存值。</td></tr><tr><td><code>platform</code></td><td><code>min_api_version</code>、<code>binds</code> 等需求声明；显示/预检不等于实际实现保证。</td></tr><tr><td><code>locales</code>、<code>sao_menu</code></td><td>本地化展示字段与菜单展示元数据；不会翻译脚本硬编码的文本。</td></tr></tbody></table></div></section>
+<section class="manual-section" id="ui"><header class="section-heading"><span class="section-number">03</span><div><p>DECLARATIVE UI</p><h2>全部 22 个 ctx.ui 构造器</h2></div></header><p>方法返回 JSON-compatible 节点；下面括号内是位置参数顺序，动态语言可使用同名关键字。可用 <code>ctx.ui.panel(...)</code> 作为注册面板的 render 回调返回值；<code>canvas</code>/<code>rgba_frame</code> 可组成 overlay 文档节点。渲染路径还会做节点/深度/字节预算验证，构造成功不代表上屏成功。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>方法（参数顺序）</th><th>返回节点与作用</th></tr></thead><tbody>
+<tr><td><code>panel(title, children)</code></td><td>面板根：title 文本、children 子节点。</td></tr>
+<tr><td><code>section(title, children, accent)</code></td><td>分节；accent 缺省 <code>cyan</code>。</td></tr>
+<tr><td><code>card(title, children)</code></td><td>卡片容器。</td></tr>
+<tr><td><code>row(children, align)</code></td><td>横向行；align 缺省 <code>left</code>。</td></tr>
+<tr><td><code>group(children)</code></td><td>分组容器。</td></tr>
+<tr><td><code>text(text, style, align)</code></td><td>文本节点；style 缺省 <code>value</code>，align 缺省 <code>left</code>。</td></tr>
+<tr><td><code>title(text)</code></td><td>标题样式的文本节点。</td></tr>
+<tr><td><code>kv(label, value, style)</code></td><td>键值行；label 最长 200 字节，value 最长 400 字节。</td></tr>
+<tr><td><code>bar(label, pct, color, caption)</code></td><td>进度条；pct 截至 0..1，color 缺省 <code>cyan</code>。</td></tr>
+<tr><td><code>slider(label, id, value, lo, hi, step, color)</code></td><td>滑块；step 缺省 0.01，color 缺省 <code>cyan</code>。</td></tr>
+<tr><td><code>badge(text, style)</code></td><td>状态标签；style 缺省 <code>muted</code>。</td></tr>
+<tr><td><code>divider()</code></td><td>分隔线节点。</td></tr>
+<tr><td><code>spacer(size)</code></td><td>空白间距，缺省 8。</td></tr>
+<tr><td><code>button(label, action, style, payload, disabled)</code></td><td>按钮；action 由 <code>on_panel_action(action, payload)</code> 处理，style 缺省 <code>default</code>；非空对象 payload 才保留。</td></tr>
+<tr><td><code>input(id, value, placeholder, input_type, width)</code></td><td>输入节点；缺省 text，width 限 0..2000。</td></tr>
+<tr><td><code>table(columns, rows, highlight_key, title)</code></td><td>列表/表格数据节点；columns/rows 为数组。</td></tr>
+<tr><td><code>canvas(width, height, ops, bg, x, y, z, id, draggable)</code></td><td>画布节点；1..4096 每维，ops 为下列绘图命令数组，缺省背景 <code>body</code>。</td></tr>
+<tr><td><code>rgba_frame(id, width, height, frame_rgba_b64, x, y, z, draggable, frame_key, hit_test, premultiplied)</code></td><td>RGBA 帧，宽高 1..4096，透明度/输入按 <code>hit_test</code>；二进制像素 Base64，hit_test 缺省 alpha。</td></tr>
+<tr><td><code>rect(x, y, w, h, fill, outline, width)</code></td><td>矩形 canvas 绘图指令；w/h 无效时 overlay 提交返回参数错误。</td></tr>
+<tr><td><code>oval(x, y, w, h, fill, outline, width)</code></td><td>椭圆绘图指令；参数与 rect 相同。</td></tr>
+<tr><td><code>line(x1, y1, x2, y2, fill, width)</code></td><td>线段绘图指令；fill 缺省 <code>value</code>，width 缺省 1。</td></tr>
+<tr><td><code>ctext(x, y, text, fill, size, anchor, bold)</code></td><td>画布文字绘图指令；anchor 缺省 <code>nw</code>，size 缺省 10。</td></tr>
+</tbody></table></div><p>builder 接口只定义节点结构，不拥有显示生命周期；面板渲染需注册 panel ID，覆盖层需以 surface 调用 <code>set_overlay</code>，同 surface 重绘在提交前保留旧图像；显式 <code>clear_overlay(surface)</code> 解除它。</p></section>
+<section class="manual-section" id="engine"><header class="section-heading"><span class="section-number">04</span><div><p>ENGINE CATALOG</p><h2>反射引擎接口全集</h2></div></header><p>每行按实际 <code>binding_engine_*.cpp</code> 目录字段给出名称、按序参数及用途。<code>engine.list()</code> 的 available 是此刻 provider/槽位检查，仍需对调用返回的 status 进行检查；特别是有回调的条目必须通过支持回调的宿主入口调用。</p>
+<h3 id="engine-mem">内存接口（9）</h3><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>按序参数 → 返回值 / 条件</th></tr></thead><tbody>
+<tr><td><code>mem.read</code></td><td><code>address, size</code> → <code>{bytes_b64,bytes_read}</code>；单次反射结果受 8 MiB JSON 预算，原始 size 不超过 6 MiB − 768 B。</td></tr>
+<tr><td><code>mem.read_u32</code></td><td><code>address</code> → u32 整数，按绑定的内存 provider 读取。</td></tr>
+<tr><td><code>mem.read_u64</code></td><td><code>address</code> → u64 整数。</td></tr>
+<tr><td><code>mem.read_ptr_chain</code></td><td><code>base, offsets</code> → 最终地址 u64；offsets 为非空整数数组。</td></tr>
+<tr><td><code>mem.module_base</code></td><td><code>module</code> → 模块基址 u64。</td></tr>
+<tr><td><code>mem.attach</code></td><td><code>process_id, image_name_utf8</code> → null；两个参数都需提供（仅按 PID 附着时名称传空字符串），PID 非零或名称非空；可额外提供 <code>process_start_time_100ns</code> 锁定身份。</td></tr>
+<tr><td><code>mem.detach</code></td><td>无参数 → null；释放当前内存附着。</td></tr>
+<tr><td><code>mem.enumerate_modules</code></td><td>无参数 → <code>[{name,base,size},…]</code>；模块数量受 SDK 上限约束。</td></tr>
+<tr><td><code>mem.provider_status</code></td><td>无参数 → 原始内存 provider 状态整数；允许在尚未附着时查询。</td></tr>
+</tbody></table></div>
+<h3 id="engine-net">网络接口（4）</h3><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>按序参数 → 返回值 / 条件</th></tr></thead><tbody>
+<tr><td><code>net.set_frame_callback</code></td><td><code>enable</code> → bool；开启时须绑定 <code>net.frame</code> callback，帧含 <code>frame_b64,length,ts_unix_ns</code>。</td></tr>
+<tr><td><code>net.capture_start</code></td><td><code>snap_length, source_id, filter, flags, callback</code> → bool；callback=true 时需注册 <code>net.packet</code> 通道，消息含 <code>packet_b64,length,link_type,flags,ts_unix_ns</code>。</td></tr>
+<tr><td><code>net.capture_stop</code></td><td>无参数 → bool；停止当前 capture。</td></tr>
+<tr><td><code>net.parse_packet</code></td><td><code>data_b64, link_type, flags, timestamp_unix_ns</code> → <code>[{layer,protocol,header_offset,header_size,payload_offset,payload_size,flow_id},…]</code>，最多 4096 条。</td></tr>
+</tbody></table></div>
+<h3 id="engine-ui">原生 UI 与 overlay 接口（21）</h3><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>按序参数 → 返回值 / 条件</th></tr></thead><tbody>
+<tr><td><code>ui.register_panel</code></td><td><code>id, title, spec</code> → panel 句柄。</td></tr>
+<tr><td><code>ui.set_panel_spec</code></td><td><code>panel, spec</code> → bool；以句柄更新声明式 panel JSON。</td></tr>
+<tr><td><code>ui.set_overlay</code></td><td><code>surface, spec</code> → bool；更新已绑定的 overlay surface。</td></tr>
+<tr><td><code>ui.request_redraw</code></td><td><code>surface</code> → bool；请求重绘。</td></tr>
+<tr><td><code>ui.clear_overlay</code></td><td><code>surface</code> → bool；按 surface 清理。</td></tr>
+<tr><td><code>ui.register_render_hook</code></td><td><code>surface, hook_point, priority</code> → hook token；须绑定 <code>ui.render_hook</code> callback。</td></tr>
+<tr><td><code>ui.register_render_hook_clock</code></td><td><code>hook_point</code> → hook token；需 <code>ui.render_hook</code> callback。</td></tr>
+<tr><td><code>ui.unregister_render_hook</code></td><td><code>hook</code> → bool；解除 hook。</td></tr>
+<tr><td><code>ui.register_ui_panel</code></td><td><code>id,title,default_x_px,default_y_px,default_width_px,default_height_px,min_width_px,min_height_px,movable,resizable,show_titlebar,show_close_button,visible,remember_geometry,modal,overlay_style,z_class,z_within_class,initial_opacity</code> → panel 句柄；typed SDK panel 描述符。</td></tr>
+<tr><td><code>ui.unregister_ui_panel</code></td><td><code>panel</code> → bool；解除原生面板注册。</td></tr>
+<tr><td><code>ui.panel_add_widget</code></td><td><code>panel, spec</code> → widget 句柄。</td></tr>
+<tr><td><code>ui.panel_update_widget</code></td><td><code>panel, widget, spec</code> → bool；修改 widget。</td></tr>
+<tr><td><code>ui.panel_remove_widget</code></td><td><code>panel, widget_id</code> → bool；移除 widget，兼容 <code>widget</code> 句柄字段。</td></tr>
+<tr><td><code>ui.overlay_set</code></td><td><code>surface, spec</code> → overlay token；按 token 或 surface 对应的 clear 项清理。</td></tr>
+<tr><td><code>ui.overlay_clear</code></td><td><code>overlay</code> → bool；overlay token 非零。</td></tr>
+<tr><td><code>ui.overlay_clear_surface</code></td><td><code>surface</code> → bool；按 surface 清理。</td></tr>
+<tr><td><code>ui.request_redraw_surface</code></td><td><code>surface</code> → bool；请求 surface 重绘。</td></tr>
+<tr><td><code>ui.request_redraw_panel</code></td><td><code>panel</code> → bool；请求 panel 重绘。</td></tr>
+<tr><td><code>ui.table_status</code></td><td>无参数 → SDK UI 表状态。</td></tr>
+<tr><td><code>ui.table_slot_status</code></td><td><code>slot_offset, slot_size, required_context_minor</code> → 槽位状态整数，minor 缺省 0。</td></tr>
+<tr><td><code>ui.table_authorize_slot</code></td><td><code>slot_offset, slot_size, required_context_minor</code> → 授权状态整数，minor 缺省 0。</td></tr>
+</tbody></table></div>
+<h3 id="engine-gpu">GPU Hunt 接口（36）</h3><p><code>tracker</code> 是 <code>create_tracker</code> 返回的句柄；所有条目由当前 GPU Hunt vtable 的槽位与结构大小控制，数组查询最多受 <code>max</code> 和内部 65536 元素预算限制。world_pos 接受三元素数组或 <code>{x,y,z}</code>。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>按序参数 → 返回值 / 条件</th></tr></thead><tbody>
+<tr><td><code>gpu_hunt.create_tracker</code></td><td>无参数 → tracker 句柄；后续操作先持有此句柄。</td></tr>
+<tr><td><code>gpu_hunt.destroy_tracker</code></td><td><code>tracker</code> → bool；销毁后停止使用句柄。</td></tr>
+<tr><td><code>gpu_hunt.tick</code></td><td><code>tracker</code> → bool；推进采样。</td></tr>
+<tr><td><code>gpu_hunt.get_view_proj</code></td><td><code>tracker</code> → <code>{matrix:[16 floats],locked}</code>，视图投影矩阵。</td></tr>
+<tr><td><code>gpu_hunt.get_camera_pos</code></td><td><code>tracker</code> → <code>{x,y,z}</code>，相机位置。</td></tr>
+<tr><td><code>gpu_hunt.get_skeleton_positions</code></td><td><code>tracker,max</code> → <code>[{x,y,z},…]</code>，骨骼点。</td></tr>
+<tr><td><code>gpu_hunt.world_to_screen</code></td><td><code>tracker,world_pos,viewport_w,viewport_h</code> → <code>{screen_x,screen_y,visible}</code>。</td></tr>
+<tr><td><code>gpu_hunt.invalidate</code></td><td><code>tracker</code> → bool；使跟踪结果失效。</td></tr>
+<tr><td><code>gpu_hunt.attach_tracker</code></td><td><code>tracker,pid</code> → bool；附着目标 PID。</td></tr>
+<tr><td><code>gpu_hunt.detach_tracker</code></td><td><code>tracker</code> → bool；解除附着。</td></tr>
+<tr><td><code>gpu_hunt.get_matrix_lock_info</code></td><td><code>tracker</code> → <code>{heap_base,offset,heap_size,locked}</code>。</td></tr>
+<tr><td><code>gpu_hunt.set_prior_lock_hint</code></td><td><code>tracker,hint_heap_size,hint_offset</code> → bool；hint_offset 可省略。</td></tr>
+<tr><td><code>gpu_hunt.get_skeleton_fingerprint</code></td><td><code>tracker,max</code> → 浮点数数组。</td></tr>
+<tr><td><code>gpu_hunt.set_skeleton_fingerprint_hint</code></td><td><code>tracker,floats</code> → bool；floats 可省略并清空提示。</td></tr>
+<tr><td><code>gpu_hunt.get_bone_cluster_count</code></td><td><code>tracker</code> → cluster 数量。</td></tr>
+<tr><td><code>gpu_hunt.get_bone_cluster_positions</code></td><td><code>tracker,index,max</code> → <code>[{x,y,z},…]</code>。</td></tr>
+<tr><td><code>gpu_hunt.get_prior_hot_heaps</code></td><td><code>tracker,max</code> → <code>[{size,protect,region_type,header_8b},…]</code>。</td></tr>
+<tr><td><code>gpu_hunt.set_prior_hot_heaps</code></td><td><code>tracker,flat</code> → bool；也接受 <code>heaps</code> 对象数组，省略时清空。</td></tr>
+<tr><td><code>gpu_hunt.set_pinned_heap</code></td><td><code>tracker,heap_base,heap_size,pinned_only</code> → bool；后两者可省略。</td></tr>
+<tr><td><code>gpu_hunt.get_pinned_heap</code></td><td><code>tracker</code> → <code>{heap_base,heap_size,pinned_only,active}</code>。</td></tr>
+<tr><td><code>gpu_hunt.get_runtime_toggles</code></td><td><code>tracker</code> → toggle 位掩码。</td></tr>
+<tr><td><code>gpu_hunt.set_runtime_toggles</code></td><td><code>tracker,mask,changed_mask</code> → bool；changed_mask 缺省 mask。</td></tr>
+<tr><td><code>gpu_hunt.get_locator_profile</code></td><td><code>tracker</code> → locator profile 整数。</td></tr>
+<tr><td><code>gpu_hunt.set_locator_profile</code></td><td><code>tracker,profile</code> → bool。</td></tr>
+<tr><td><code>gpu_hunt.get_view_matrix</code></td><td><code>tracker</code> → <code>{matrix:[16 floats],locked}</code>。</td></tr>
+<tr><td><code>gpu_hunt.get_proj_matrix</code></td><td><code>tracker</code> → <code>{matrix:[16 floats],locked}</code>。</td></tr>
+<tr><td><code>gpu_hunt.get_camera_world_pos</code></td><td><code>tracker</code> → <code>{x,y,z}</code>。</td></tr>
+<tr><td><code>gpu_hunt.get_split_lock_info</code></td><td><code>tracker</code> → <code>{view:{heap_base,offset,locked},proj:{heap_base,offset,locked}}</code>。</td></tr>
+<tr><td><code>gpu_hunt.get_predicted_view</code></td><td><code>tracker,future_tick</code> → <code>{matrix:[16 floats],camera:{x,y,z},confidence}</code>。</td></tr>
+<tr><td><code>gpu_hunt.get_motion_prediction_confidence</code></td><td><code>tracker</code> → 预测置信度浮点数。</td></tr>
+<tr><td><code>gpu_hunt.get_motion_prediction_sample_count</code></td><td><code>tracker</code> → 预测样本数。</td></tr>
+<tr><td><code>gpu_hunt.get_scene_snapshot</code></td><td><code>tracker</code> → epoch/revision/tick/对象数量/相机有效性/置信度等场景快照。</td></tr>
+<tr><td><code>gpu_hunt.get_scene_objects</code></td><td><code>tracker,max</code> → 对象数组；每项含 object_id、kind、source、坐标系、centroid、velocity、骨骼数、置信度及代际字段。</td></tr>
+<tr><td><code>gpu_hunt.get_scene_object_bones</code></td><td><code>tracker,object_id,max</code> → <code>[{x,y,z,parent},…]</code>。</td></tr>
+<tr><td><code>gpu_hunt.abi_version</code></td><td>无参数 → GPU Hunt 表 ABI 版本。</td></tr>
+<tr><td><code>gpu_hunt.struct_size</code></td><td>无参数 → vtable 结构体字节大小。</td></tr>
+</tbody></table></div>
+<h3 id="engine-vt">VT 接口（12）</h3><p>仅在显式 VT 路径就绪且对应槽存在时执行。结果中 <code>operation_status</code>/<code>response_flags</code> 是 driver 层返回字段，不等于外层 SDK <code>status</code>；必须分别检查。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>按序参数 → 返回值 / 条件</th></tr></thead><tbody>
+<tr><td><code>vt.provider_status</code></td><td>无参数 → <code>{handle_created,connected,helper_pid,state,inflight,respawn_attempts,epoch}</code>。</td></tr>
+<tr><td><code>vt.status</code></td><td><code>timeout_ms</code> → 状态、ABI、CPU 数、hook 数、heartbeat、CI/可用性字段及 operation_status/response_flags。</td></tr>
+<tr><td><code>vt.capabilities</code></td><td><code>timeout_ms</code> → vendor、supported_flags/active_flags、CPU 数与 VMX/SVM 能力。</td></tr>
+<tr><td><code>vt.probe</code></td><td><code>items_mask,timeout_ms</code> → completed_mask/ready_mask/item_status[4]；items_mask 缺省全项。</td></tr>
+<tr><td><code>vt.perf_stats</code></td><td><code>timeout_ms</code> → cpu_count、vmexit_count[]、vmexit_buckets[16]。</td></tr>
+<tr><td><code>vt.list_hooks</code></td><td><code>filter,timeout_ms</code> → <code>{count,hooks:[{hook_id,gpa,write_count,hook_flags,patch_size,backend,state}]}</code>。</td></tr>
+<tr><td><code>vt.read_phys</code></td><td><code>gpa,size,timeout_ms</code> → <code>{bytes,data_b64}</code>；size 范围 1..SDK_MAX_TRANSFER。</td></tr>
+<tr><td><code>vt.write_phys</code></td><td><code>gpa,data_b64,timeout_ms</code> → <code>{bytes}</code>。</td></tr>
+<tr><td><code>vt.hook_page</code></td><td><code>kernel_gva,patch_b64,timeout_ms</code> → <code>{hook_id,gpa}</code>。</td></tr>
+<tr><td><code>vt.hide_region</code></td><td><code>kernel_gva,page_count,decoy_mode,template_b64,timeout_ms</code> → <code>{installed_count,hook_ids:[]}</code>。</td></tr>
+<tr><td><code>vt.unhook</code></td><td><code>hook_id,timeout_ms</code> → <code>{operation_status,response_flags}</code>。</td></tr>
+<tr><td><code>vt.map_user</code></td><td><code>operation,flags,target_pid,target_cr3,target_user_va,source_gpa,expected_pte_gpa,expected_pte_value,mapping_id,generation,timeout_ms</code> → mapping_id/generation/target_user_va 等映射结果。</td></tr>
+</tbody></table></div>
+<h3 id="engine-misc">设置、事件和平台接口（44）</h3><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>按序参数 → 返回值 / 条件</th></tr></thead><tbody>
+<tr><td><code>config.get_bool</code></td><td><code>key</code> → bool 设置值。</td></tr>
+<tr><td><code>config.get_int</code></td><td><code>key</code> → int64 设置值。</td></tr>
+<tr><td><code>config.get_double</code></td><td><code>key</code> → double 设置值。</td></tr>
+<tr><td><code>config.get_string</code></td><td><code>key</code> → string 设置值。</td></tr>
+<tr><td><code>config.set_bool</code></td><td><code>key,value</code> → bool；写布尔设置。</td></tr>
+<tr><td><code>config.set_int</code></td><td><code>key,value</code> → bool；写 int64 设置。</td></tr>
+<tr><td><code>config.set_double</code></td><td><code>key,value</code> → bool；value 必须是有限数。</td></tr>
+<tr><td><code>config.set_string</code></td><td><code>key,value</code> → bool；写字符串设置。</td></tr>
+<tr><td><code>event.subscribe</code></td><td><code>topic</code> → subscription token；须提供 <code>event_callback</code>。</td></tr>
+<tr><td><code>event.unsubscribe</code></td><td><code>token</code> → bool；解除订阅。</td></tr>
+<tr><td><code>event.publish</code></td><td><code>topic,payload</code> → bool；payload 缺省空对象。</td></tr>
+<tr><td><code>hotkey.register</code></td><td><code>id,default_key,virtual_key,modifiers,enforce_ctrl_prefix,prevent_default,allow_repeat</code> → hotkey 句柄；需要 typed <code>hotkey_callback</code>。</td></tr>
+<tr><td><code>hotkey.unregister</code></td><td><code>id</code> → bool；注销热键。</td></tr>
+<tr><td><code>tts.speak</code></td><td><code>text,volume,rate</code> → bool；缺 rate 时接受 <code>speed</code> 兼容别名。</td></tr>
+<tr><td><code>tts.stop</code></td><td>无参数 → bool；停止语音。</td></tr>
+<tr><td><code>banner.show</code></td><td><code>text,duration_ms,argb_color</code> → bool；显示横幅。</td></tr>
+<tr><td><code>sound.procedural</code></td><td><code>kind</code> → bool；kind 必须是 SDK 枚举值。</td></tr>
+<tr><td><code>sound.play_wav</code></td><td><code>path</code> → bool；播放 WAV。</td></tr>
+<tr><td><code>sound.load_font</code></td><td><code>path</code> → bool；载入字体。</td></tr>
+<tr><td><code>sound.flash_overlay</code></td><td><code>duration_ms</code> → bool；触发 overlay 闪动。</td></tr>
+<tr><td><code>notify.show</code></td><td><code>message,title,duration_s,argb_color</code> → notify token；默认持续 60 秒。</td></tr>
+<tr><td><code>notify.toast</code></td><td><code>message</code> → notify token；简短通知约 3 秒。</td></tr>
+<tr><td><code>notify.dismiss</code></td><td><code>token</code> → bool；关闭通知。</td></tr>
+<tr><td><code>dialog.show</code></td><td><code>message,kind,title,input_prompt,input_default,input_max_length,dismiss_on_focus_out,dismiss_on_esc</code> → dialog token；需要 <code>dialog.result</code> engine callback，结果含 dialog/button/input。</td></tr>
+<tr><td><code>dialog.dismiss</code></td><td><code>token</code> → bool；关闭对话框。</td></tr>
+<tr><td><code>timer.register</code></td><td><code>seconds</code> → timer token；需要 typed <code>timer_callback</code>。</td></tr>
+<tr><td><code>timer.unregister</code></td><td><code>token</code> → bool；注销计时器。</td></tr>
+<tr><td><code>overlay.set</code></td><td><code>surface,spec</code> → overlay token；spec 为声明式 JSON。</td></tr>
+<tr><td><code>overlay.clear</code></td><td><code>token</code> → bool；按 token 清理。</td></tr>
+<tr><td><code>overlay.clear_surface</code></td><td><code>surface</code> → bool；按 surface 清理。</td></tr>
+<tr><td><code>version.query</code></td><td>无参数 → SDK/context ABI 版本和 major/minor。</td></tr>
+<tr><td><code>context.plugin_id</code></td><td>无参数 → 插件 ID 字符串。</td></tr>
+<tr><td><code>context.plugin_version</code></td><td>无参数 → 插件版本字符串。</td></tr>
+<tr><td><code>context.base_dir</code></td><td>无参数 → 插件根目录路径。</td></tr>
+<tr><td><code>context.web_path</code></td><td>无参数 → 插件根目录下 <code>web</code> 路径。</td></tr>
+<tr><td><code>context.assets_path</code></td><td>无参数 → 插件根目录下 <code>assets</code> 路径。</td></tr>
+<tr><td><code>context.bind_platform_services</code></td><td>无参数 → bool；按当前 ctx 绑定平台服务。</td></tr>
+<tr><td><code>context.provider_status</code></td><td>无参数 → ctx provider 原始状态整数。</td></tr>
+<tr><td><code>mem.provider_status</code></td><td>无参数 → 内存 provider 原始状态整数；misc 组中的同名目录项，与 mem 组同名。</td></tr>
+<tr><td><code>net.provider_status</code></td><td>无参数 → 网络 provider 原始状态整数。</td></tr>
+<tr><td><code>render_gpu.provider_status</code></td><td>无参数 → 渲染 GPU provider 原始状态整数。</td></tr>
+<tr><td><code>platform.open_panel</code></td><td><code>name</code> → bool；请求打开平台面板。</td></tr>
+<tr><td><code>platform.apply_streaming_mode</code></td><td><code>enabled</code> → bool；应用直播模式。</td></tr>
+<tr><td><code>platform.render_dispatch</code></td><td><code>surface,hook_point,monotonic_time_ns,viewport_x,viewport_y,viewport_width,viewport_height,dispatch_flags</code> → bool；显式渲染派发。</td></tr>
+</tbody></table></div>
+</section>
+<section class="manual-section" id="context"><header class="section-heading"><span class="section-number">05</span><div><p>SCRIPT CONTEXT</p><h2>七执行路径的 ctx 接口对照</h2></div></header><p>本表按真实宿主的注册表列出脚本根对象的方法（不含上文已逐项说明的 UI builder 和反射目录）。宿主标记：<strong>C</strong> 隔离 CPython、<strong>P</strong> pymini、<strong>L</strong> Lua、<strong>E</strong> Emma、<strong>A</strong> AngelScript、<strong>S</strong> csmini。托管 CoreCLR 由插件自行提供 managed facade，经 native sdk table 映射，具体声明见 C# 手册；它不是自动获得 csmini 全部方法。空缺代表该执行路径的根对象未注册此方法。</p>
+<div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>ctx 方法或属性</th><th>运行模式 · 参数、返回与语义</th></tr></thead><tbody>
+<tr><td><code>plugin_id</code>, <code>path</code>, <code>web_path</code>, <code>assets_path</code>, <code>base_dir</code></td><td>身份和路径只读属性；C 有上述全部及 <code>get_plugin_id()/get_base_dir()</code>；P/E/S 有前四项；L 只有 plugin_id/path；A 的 plugin_id 由 generic bindings 注册，另有 path/web_path/assets_path。</td></tr>
+<tr><td><code>should_stop</code>, <code>owner</code>, <code>ui</code>, <code>event_bus</code>, <code>engine</code>, <code>mem</code></td><td>子对象/属性：C 的 mem 是空 dict、engine 是 ctx 自身；P/S 的 mem 是反射内存 facade；A 的 mem 为独立 MemAccess；E 无 mem；L 仅 ui/engine。owner 按宿主类型不同，过期后不复用。</td></tr>
+<tr><td><code>log(message[,level])</code>, <code>log_info/warn/error(message)</code></td><td>日志：C/P/L/E/A/S 有 <code>log</code>；log_info 同时在 C/A 注册，log_warn/log_error 只在 C 根对象注册。</td></tr>
+<tr><td><code>time()</code></td><td>C/P/L/E/A/S → epoch 秒数；A 由 generic bindings 注册。</td></tr>
+<tr><td><code>set_defaults(defaults)</code></td><td>C/P/L/E/A/S → 补尚未保存的设置默认值；值必须可序列化，A 返回 bool。</td></tr>
+<tr><td><code>get_setting(key,default)</code>, <code>setting(key,default)</code></td><td>读取设置，缺键用 default：全路径有 get_setting；P/L/E/A/S 有 <code>setting</code> 别名，C 根对象无该别名。</td></tr>
+<tr><td><code>set_setting(key,value)</code></td><td>C/P/L/E/A/S → 保存可序列化设置；C 直连 typed SDK 的 value 限 bool/int/float/string，A 返回 bool。</td></tr>
+<tr><td><code>subscribe(topic,callback)</code>, <code>subscribe_once(topic,callback)</code></td><td>事件注册返回 token；C 只有 subscribe；P/L/E/A/S 两者都有；回调实参形状依宿主（payload 或 topic+payload），保存 token 供 unsubscribe。</td></tr>
+<tr><td><code>unsubscribe(token)</code>, <code>emit(topic,payload)</code>, <code>publish(topic,payload)</code></td><td>取消订阅、发送事件；C/L 有 publish/emit 别名；P/E/A/S 只注册 emit。C token 是 <code>event_N</code> 字符串。</td></tr>
+<tr><td><code>on(topic,callback)</code></td><td>P/E/A/S 绑定 topic 的兼容快捷方法；L/C 根对象没有该方法。</td></tr>
+<tr><td><code>on_damage/on_heal/on_skill/on_boss/on_snapshot/on_encounter_finalized(callback)</code></td><td>P/E/A/S 固定主题订阅快捷方法；各宿主 topic 名可能不同（如 A 的 on_snapshot 对应 <code>act_snapshot</code>）。</td></tr>
+<tr><td><code>get_snapshot()</code>, <code>snapshot_value(path,default)</code></td><td>P/L/E/A/S 读取当前状态快照与点路径字段；C 根对象未注册。A 的 snapshot_value 需 JSON addon。</td></tr>
+<tr><td><code>recent_events(limit,topic)</code></td><td>P/E/A/S 缺省 limit 20；L 缺省 64；C 未注册。返回事件记录数组。</td></tr>
+<tr><td><code>register_ui_panel(id,metadata,render,on_action)</code></td><td>C/P/L/E/A/S → 注册声明式面板与两个回调；render 接收 payload 并返回 UI spec，action 接收 action_id/payload。各语言返回 panel ID、bool 或 status 派生值。</td></tr>
+<tr><td><code>request_redraw(surface,reason)</code></td><td>C/P/L/E/A/S → 请求下一次渲染；reason 可省；C 可只传面板 ID。</td></tr>
+<tr><td><code>set_overlay(surface,spec)</code>, <code>clear_overlay(surface)</code></td><td>C/P/L/E/A/S → owner-scoped overlay 新帧事务提交/显式移除；A 的 clear_overlay 虽有空字符串缺省声明，实际需要非空 surface。</td></tr>
+<tr><td><code>register_render_hook(surface,callback,priority)</code>, <code>unregister_render_hook(token)</code></td><td>P/L/E/A/S → 注册/注销渲染 hook，默认 priority 0；C 根对象无这两个方法。</td></tr>
+<tr><td><code>register_menu_category(name,icon,builder,priority)</code></td><td>C/P/L/E/A/S → Entity/插件栏菜单 builder，返回行数组；行含 id/label/action_id，可携 command 回调、keep_menu_open 等。</td></tr>
+<tr><td><code>register_menu_surface(id,descriptor,priority)</code>, <code>register_action_handler(callback)</code></td><td>C/P/L/E/A/S → 注册菜单面及带 <code>(action_id,payload)</code> 的动作回调。</td></tr>
+<tr><td><code>register_hotkey(id,callback,default_key,label)</code>, <code>unregister_hotkey(id)</code></td><td>P/L/E/A/S 支持注册/注销；C 有 <code>add_hotkey</code> 及 register_hotkey 别名，但没有 unregister_hotkey；L 的热键 API 受 hotkey 权限门控。</td></tr>
+<tr><td><code>register_parser_adapter/register_exporter/register_formatter/register_trigger_type/register_report_view/register_timer(id,metadata)</code></td><td>P/E/A/S → 登记对应扩展描述符；C/L 未注册这些根方法。</td></tr>
+<tr><td><code>register_data_source(id,metadata,start,stop)</code></td><td>P/E/A/S → 绑定数据源的启动/停止回调；C/L 根对象无此入口，A 要求至少提供一个回调。</td></tr>
+<tr><td><code>register_thread(callback)</code>, <code>run_on_ui(callback)</code></td><td>P/S 的 register_thread 不启动线程；E 同名也不启动线程。P/S/E 提供 run_on_ui，mini 为已实现的同步/one-shot 子集；C/L/A 根对象无。</td></tr>
+<tr><td><code>set_interval(callback,seconds)</code>, <code>set_timeout(callback,seconds)</code>, <code>clear_timer(token)</code></td><td>C/P/L/E/A/S → 周期/一次性定时器与注销；seconds 为正数；停用时显式清理持有的 token。S 另有 <code>complete_timer(token)</code>。</td></tr>
+<tr><td><code>notify(title,message,duration_s,kind)</code>, <code>dismiss_notify()</code>, <code>toast(message)</code></td><td>C/P/L/E/A/S → 创建/关闭提示；C 的 notify 默认 duration 60 秒、kind plugin，C 的 dismiss_notify 不收参数。</td></tr>
+<tr><td><code>open_file(filters,title,initial_dir,hwnd)</code></td><td>P/L/E/A/S 提供本地文件选择；S 只使用 filters/title；C 根对象无。取消时返回空路径或 null，具体依宿主。</td></tr>
+<tr><td><code>open_window(panel_id,width,height)</code></td><td>C/P/L/E/A/S 打开注册面板；C 返回 <code>{ok,status,panel_id}</code> 而非 bool。</td></tr>
+<tr><td><code>register_engine(name,engine)</code>, <code>get_engine(name)</code></td><td>C/P/L/E/A/S 插件局部引擎注册/查找；C 的 <code>register/get</code> 是 engine 兼容别名；L 需要 engine_access 权限；A 使用 <code>get_engine(name, ?&amp;out engine)</code>。</td></tr>
+<tr><td><code>require_engine(name)</code>, <code>call_engine(name,method,args)</code></td><td>P/E/S 提供 require/call；A 只有 require（out 参数）；C 可通过 <code>get_engine_method</code> 获取成员方法，L 无 require/call 根绑定。</td></tr>
+<tr><td><code>engine_call(name,args)</code></td><td>C/P/L/E/A/S → 反射目录 raw 调用；C 返回解包 result 且错误抛异常，E 返回完整 envelope，A 传 JSON 字符串并返回 JSON 字符串，L 需 engine_access。</td></tr>
+<tr><td><code>load_local(relative_path)</code>, <code>ensure_requirements(install)</code></td><td>C/P/L/E/A/S → 限定插件根内 helper / 获取需求报告；C 的 install 参数会被忽略；A 另有 <code>load_local_path(relative_path)</code>。</td></tr>
+<tr><td><code>create_compositor_layer(name,w,h,…)</code>, <code>destroy_compositor_layer(name)</code></td><td>P/L/E/A/S 原生图层生命周期；C 根对象未注册创建/销毁方法。</td></tr>
+<tr><td><code>upload_compositor_frame(name,bytes,w,h)</code>, <code>set_compositor_layer_position(name,x,y)</code>, <code>set_compositor_layer_visible(name,visible)</code>, <code>set_compositor_layer_input(name,…)</code></td><td>P/L/E/A/S 图层帧、坐标、显隐及输入设置；具体 bytes 类型随语言转换。</td></tr>
+<tr><td><code>set_compositor_layer_mmf_source(name,mmf)</code>, <code>set_compositor_layer_shared_texture_source(name,handle,w,h)</code>, <code>compositor_gpu_interop_available()</code>, <code>compositor_layer_shared_texture_active(name)</code></td><td>C/P/L/E/A/S 暴露共享来源和查询；真实可用性由 compositor provider 决定。</td></tr>
+<tr><td><code>compositor_display_refresh_hz()</code></td><td>P/S 子集路径有此方法；S 固定回 0.0，不能用作显示器实测。</td></tr>
+<tr><td><code>call_runtime(...)</code>, <code>open(...)</code></td><td>P/S 的 call_runtime 是无操作兼容入口，S 的 open 抛 NotSupportedException；不要将它们视为完整 Python/.NET 的通用运行库。</td></tr>
+</tbody></table></div><p>子对象差异：P/S 的 <code>ctx.event_bus</code> 有 subscribe/subscribe_once/unsubscribe/emit/on，<code>ctx.mem</code> 是共享引擎目录的 mem 子集；E 的 event_bus 含 snapshot/recent_events，engine 含 get/require/register/has/list/on；A 的 <code>MemAccess</code> 是独立 v1 facade（attach/detach/module_base/read_u32/read_u64/read/read_ptr_chain/enumerate_modules），需要对应 addon。C 的 <code>ctx.engine</code> 即 ctx 自身，<code>ctx.mem</code> 为空 dict。</p></section>
+<section class="manual-section" id="manifest-full"><header class="section-heading"><span class="section-number">06</span><div><p>MANIFEST REFERENCE</p><h2>全部 plugin.json 字段</h2></div></header><p>以下是当前 loader 解析的全部顶层字段；未知键被忽略。清单解析成功仍需通过 ID、entry 路径和 ABI 校验。原始 JSON 最大 1 MiB、深度 64、节点 16384、单个字符串/键 64 KiB、字符串合计 512 KiB；拒绝非法 UTF-8、NUL、超预算或越界路径。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>字段</th><th>类型、默认值、实际语义</th></tr></thead><tbody>
+<tr><td><code>id</code></td><td>string；1..128 字符，由字母/数字/下划线/短横线/点组成，不接受单独 . 或 ..；插件根内身份唯一。</td></tr>
+<tr><td><code>name</code>、<code>version</code>、<code>description</code></td><td>string；name 缺省 ID，version 缺省 <code>0.1.0</code>，description 为说明。</td></tr>
+<tr><td><code>entry</code></td><td>string，相对插件根的入口；缺省依语言猜测 <code>plugin.py/.lua/.emma/.as/.cs</code>。拒绝绝对路径、父目录逃逸及指向根外文件。</td></tr>
+<tr><td><code>language</code> / <code>engine</code> / <code>runtime</code></td><td>string，按前者优先读取；缺省从 entry 扩展名推断，再缺省 Python。支持 python/lua/emma/angelscript/csharp 与 loader 的现行兼容别名。</td></tr>
+<tr><td><code>enabled</code>、<code>primary</code>、<code>hidden</code></td><td>bool，分别缺省 false、true、false；运行初始状态、主插件标志和目录隐藏状态。</td></tr>
+<tr><td><code>py_runtime</code> / <code>runtime_hint</code></td><td>string；pymini/cpython/auto；只有 py_runtime 为空时读取 runtime_hint。</td></tr>
+<tr><td><code>cs_runtime</code></td><td>string；csmini/coreclr/auto；.cs 不由宿主自动编译为 .NET DLL。</td></tr>
+<tr><td><code>managed_type</code>、<code>runtimeconfig</code></td><td>string；托管 entry 的程序集限定类型和 runtimeconfig 路径，未提供类型时按 <code>Plugin,&lt;entry-stem&gt;</code> 推导；runtimeconfig 必须在插件根内。</td></tr>
+<tr><td><code>requires</code>、<code>deps</code></td><td>array/object/标量，合并为依赖列表；<code>runtime_features</code> 数组规范化为 <code>runtime_feature:</code> 前缀。</td></tr>
+<tr><td><code>permissions</code>、<code>game_ids</code></td><td>string 数组，保留非空 ID；权限决定如 require、engine_access 等宿主能力。</td></tr>
+<tr><td><code>capabilities</code></td><td>数组；字符串或对象，后者含 <code>id</code>（别名 capability_id）、<code>title</code>、<code>description</code>、<code>route</code>、<code>render_hint</code>、<code>actions[]</code>、<code>payload_fields[]</code>。</td></tr>
+<tr><td><code>settings_schema</code></td><td>object；每键值提取 <code>type</code>、<code>description</code> 和 <code>default</code> JSON。</td></tr>
+<tr><td><code>hotkeys</code></td><td>object 或 array；支持 ID 与 <code>default/default_key</code>、<code>label</code>；仍需宿主实际注册动作。</td></tr>
+<tr><td><code>sao_menu</code>、<code>overlay_layers</code></td><td>任意 JSON 值，保留序列化元数据；不等于直接创建渲染资源。</td></tr>
+<tr><td><code>locales</code> / <code>i18n</code> / <code>translations</code></td><td>object，本地化元数据别名；脚本自有提示文案不会自动翻译。</td></tr>
+<tr><td><code>platform</code>、<code>surface</code></td><td>platform object 保留原值，并提取 <code>binds[]</code> 与 <code>surface</code>；顶层 surface 只在 platform.surface 为空时回退。</td></tr>
+<tr><td><code>min_width</code>、<code>min_height</code></td><td>非负整数，缺省 0；初始布局提示。</td></tr>
+<tr><td><code>mcpServers</code>、<code>chatProviders</code></td><td>JSON 原样保留，供需要的插件/编辑器扩展使用。</td></tr>
+<tr><td><code>protected</code>、<code>native_entry</code>、<code>native_abi</code>、<code>abi_version</code></td><td>受保护/native 插件字段；protected=true 必须有 native_entry，native_abi 必须为当前可接受的 <code>sao_plugin_v1</code> 或 <code>sao_plugin_v2</code>；abi_version 不得高于宿主支持值。脚本包通常不需要声明。</td></tr>
+</tbody></table></div></section>
+</article></main><script src="assets/scrollspy.js"></script></body></html>

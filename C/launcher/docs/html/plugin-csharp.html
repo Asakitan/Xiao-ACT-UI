@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><link rel="icon" href="data:,"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="description" content="SAO Auto C# 插件 API：csmini、CoreCLR、PluginContext、面板、菜单与示例。"><title>C# 插件 API · SAO Auto</title><link rel="stylesheet" href="assets/style.css"><script src="assets/theme.js"></script></head>
+<body class="api-guide"><div class="progress-track" aria-hidden="true"><span class="progress-fill" id="progress-fill"></span></div><a class="skip-link" href="#overview">跳到正文</a><header class="site-header"><a class="brand" href="index.html#plugin-api" aria-label="返回用户指南"><span class="brand-mark" aria-hidden="true">SA</span><span class="brand-copy"><strong>SAO Auto</strong><small>插件 API</small></span></a><nav class="header-nav" aria-label="插件语言导航"><a href="index.html#plugin-api">总览</a><a href="plugin-api-reference.html">公共 API</a><a href="plugin-python.html">Python</a><a href="plugin-lua.html">Lua</a><a href="plugin-emma.html">Emma</a><a href="plugin-angelscript.html">AngelScript</a><a href="plugin-csharp.html" aria-current="page">C#</a></nav><div class="header-actions"><button type="button" class="guide-close" data-guide-close>关闭 <span aria-hidden="true">×</span></button><button type="button" id="theme-toggle" class="theme-switch" aria-label="切换深色模式"><svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M21 13.4A9 9 0 0 1 10.6 3 9 9 0 1 0 21 13.4Z"/></svg></button></div></header>
+<main class="manual-shell" id="manual"><aside class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">C# API</p><ol><li><a href="#overview" data-target="overview"><span>01</span>执行模式</a></li><li><a href="#context" data-target="context"><span>02</span>ctx 方法</a></li><li><a href="#example" data-target="example"><span>03</span>csmini 示例</a></li><li><a href="#managed" data-target="managed"><span>04</span>CoreCLR 与边界</a></li><li><a href="#all-context" data-target="all-context"><span>05</span>全部 csmini ctx</a></li><li><a href="#managed-context" data-target="managed-context"><span>06</span>托管 facade</a></li></ol></nav><div class="rail-tip"><span aria-hidden="true">⌂</span><p><strong>返回指南</strong><a href="index.html#plugin-api">浏览全部语言</a></p></div></aside><article class="manual-content">
+<section class="manual-section" id="overview"><header class="section-heading"><span class="section-number">01</span><div><p>C#</p><h2>C# 插件 API</h2></div></header><p class="section-intro"><code>language: "csharp"</code> 可选 C++ 实现的 <code>csmini</code> 源码子集，或预编译 .NET DLL 的 <code>coreclr</code>；二者执行方式与可用运行库不同。</p><div class="api-grid"><div><h3>原生 csmini</h3><p><code>entry: "plugin.cs"</code>、<code>cs_runtime: "csmini"</code>。类 <code>Plugin</code> 的静态方法提供生命周期，无需 .NET；只执行解析器支持的 C# 子集。</p></div><div><h3>托管 CoreCLR</h3><p>将编译好的 DLL、匹配的 <code>.runtimeconfig.json</code> 和依赖放入插件包。清单声明 <code>cs_runtime: "coreclr"</code> 和 <code>managed_type</code>，加载时按需调用 hostfxr。</p></div></div><pre><code>{"id":"my_csharp_plugin","name":"C# 示例","version":"1.0.0",
+ "language":"csharp","entry":"plugin.cs","cs_runtime":"csmini",
+ "enabled":false,"permissions":[]}</code></pre></section>
+<section class="manual-section" id="context"><header class="section-heading"><span class="section-number">02</span><div><p>CONTEXT</p><h2>csmini PluginContext 方法</h2></div></header><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>用途</th><th>调用</th></tr></thead><tbody><tr><td>日志 / 设置</td><td><code>ctx.log(msg)</code>、<code>ctx.set_defaults(dict)</code>、<code>ctx.get_setting(key, fallback)</code>、<code>ctx.set_setting(key, value)</code></td></tr><tr><td>面板 / redraw</td><td><code>ctx.register_ui_panel(id, metadata, Render, OnAction)</code>、<code>ctx.open_window(id, w, h)</code>、<code>ctx.request_redraw(id, reason)</code></td></tr><tr><td>构造器</td><td><code>ctx.ui.panel/section/row/kv/button</code>；传入 <code>object[]</code> 或宿主支持的集合</td></tr><tr><td>菜单 / 通知</td><td><code>ctx.register_menu_category(title, icon, BuildMenu, priority)</code>、<code>ctx.register_action_handler(HandleAction)</code>、<code>ctx.notify(title, text, seconds)</code></td></tr><tr><td>计时 / 叠层</td><td><code>ctx.set_interval(…)</code>、<code>ctx.clear_timer(token)</code>、<code>ctx.set_overlay(surface, spec)</code>、<code>ctx.clear_overlay(surface)</code></td></tr><tr><td>引擎（仅 csmini）</td><td><code>ctx.engine_call(name, args)</code>、<code>ctx.engine.list()</code>、<code>ctx.engine.mem_read_u64(address)</code>（由当前目录/provider 决定）。CoreCLR 的托管 facade 见下方独立章节。</td></tr></tbody></table></div><p>csmini 类静态 hook 为 <code>OnLoad(PluginContext ctx)</code>、<code>OnEnable()</code>、<code>OnDisable()</code>、<code>OnUnload()</code>；<code>OnUnload()</code> 返回 <code>false</code> 可以否决卸载。</p></section>
+<section class="manual-section" id="example"><header class="section-heading"><span class="section-number">03</span><div><p>QUICK START</p><h2>csmini 面板示例</h2></div></header><pre><code>using System.Collections.Generic;
+public class Plugin {
+    private static dynamic _ctx;
+    private static int count = 0;
+    public static void OnLoad(PluginContext ctx) {
+        _ctx = ctx;
+        var meta = new Dictionary&lt;string, object&gt;();
+        meta["title"] = "C# 示例";
+        ctx.register_ui_panel("demo", meta, Render, OnAction);
+        ctx.register_action_handler(HandleAction);
+        ctx.register_menu_category("C# 示例", "C#", BuildMenu, 40.0);
+    }
+    public static object BuildMenu() {
+        var item = new Dictionary&lt;string, object&gt;();
+        item["id"] = "open";
+        item["action_id"] = "demo.open";
+        item["label"] = "打开面板";
+        return new object[] { item };
+    }
+    public static object Render(object payload) {
+        return _ctx.ui.panel("C# 示例", new object[] {
+            _ctx.ui.section("状态", new object[] {
+                _ctx.ui.kv("次数", count.ToString()),
+                _ctx.ui.button("增加", "add", "primary") }) });
+    }
+    public static object OnAction(string actionId, object payload) {
+        if (actionId == "add") {
+            count += 1;
+            _ctx.request_redraw("demo", "count_changed");
+        }
+        var result = new Dictionary&lt;string, object&gt;();
+        result["ok"] = actionId == "add";
+        return result;
+    }
+    public static object HandleAction(string actionId, object payload) {
+        if (actionId == "demo.open") _ctx.open_window("demo", 520, 360);
+        var result = new Dictionary&lt;string, object&gt;();
+        result["ok"] = actionId == "demo.open";
+        return result;
+    }
+    public static bool OnUnload() { return true; }
+}</code></pre><p>更多菜单、设置与通知用法见活动包 <code>plugins/example_csharp_plugin/plugin.cs</code>。</p></section>
+<section class="manual-section" id="managed"><header class="section-heading"><span class="section-number">04</span><div><p>CORECLR &amp; LIMITS</p><h2>预编译与兼容边界</h2></div></header><pre><code>{"id":"managed_demo","name":"Managed Demo","version":"1.0.0",
+ "language":"csharp","entry":"prebuilt/plugin.dll",
+ "cs_runtime":"coreclr","managed_type":"PluginEntry,plugin",
+ "enabled":false}</code></pre><p>托管路径需要同名 <code>prebuilt/plugin.runtimeconfig.json</code> 和有效 .NET 运行库；宿主不会从 <code>plugin.cs</code> 编译 DLL。完整 SDK 映射参考 <code>plugins/script_cutegirl_csharp/plugin_entry.cs</code>；托管 entry 的静态入口 ABI 不等于 csmini 类 hook，按对应 managed shim 实现。</p><p>csmini 的 LINQ、Task/ValueTask、Guid 为有界实现；Task 为同步立即值，<code>System.IO/Net/Threading</code>、P/Invoke、<code>unsafe</code>、<code>ref/out/in</code>、跨文件 partial 及任意托管库需要 CoreCLR。<code>auto</code> 对源码做无执行子集预检，子集外返回明确不支持状态，不会自动源编译后再执行。</p></section>
+<section class="manual-section" id="all-context"><header class="section-heading"><span class="section-number">05</span><div><p>CSMINI API</p><h2>csmini 全部 ctx 接口</h2></div></header><p>csmini 从同一 <code>ctx_builder</code> 注册成员；方法名不区分大小写，脚本参数主要按位置传入。<code>ctx.ui</code> 实现 <a href="plugin-api-reference.html#ui">22 个构造器</a>，<code>ctx.engine</code> 注册 <a href="plugin-api-reference.html#engine">126 项反射目录</a>；下表是其他全部根成员。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>参数、返回与语义</th></tr></thead><tbody>
+<tr><td><code>plugin_id,path,web_path,assets_path,should_stop,owner,ui,event_bus,engine,mem</code></td><td>身份、路径和子对象；owner 为插件 ID，mem 为反射内存 facade，event_bus 有 subscribe/subscribe_once/unsubscribe/emit/on。</td></tr>
+<tr><td><code>log(msg)</code>、<code>time()</code>、<code>get_setting(key,default)</code> / <code>setting(...)</code>、<code>set_setting(key,value)</code>、<code>set_defaults(map)</code></td><td>日志、epoch 秒、设置读取/写入及默认值。</td></tr>
+<tr><td><code>subscribe(topic,fn)</code>、<code>subscribe_once(topic,fn)</code>、<code>unsubscribe(token)</code>、<code>emit(topic,payload)</code></td><td>持续/一次事件订阅、解除和发布；保留返回的 token。</td></tr>
+<tr><td><code>on(topic,fn)</code>、<code>on_damage/on_heal/on_skill/on_boss/on_snapshot/on_encounter_finalized(fn)</code></td><td>事件快捷订阅或 decorator 风格写法。</td></tr>
+<tr><td><code>get_snapshot()</code>、<code>snapshot_value(path,default)</code>、<code>recent_events(limit=20,topic="")</code></td><td>状态快照、路径值及事件序列。</td></tr>
+<tr><td><code>register_ui_panel(id,meta,render,action)</code>、<code>request_redraw(surface,reason)</code>、<code>open_window(id,w,h)</code></td><td>声明式 panel 生命周期、重绘与打开窗口；render(payload) 返回 UI spec，action(id,payload) 返回动作结果。</td></tr>
+<tr><td><code>register_menu_category(name,icon,builder,priority)</code>、<code>register_menu_surface(id,descriptor,priority)</code>、<code>register_action_handler(fn)</code></td><td>原生 Entity/插件栏菜单及回调，参考本页可运行示例。</td></tr>
+<tr><td><code>register_render_hook(surface,fn,priority)</code>、<code>unregister_render_hook(token)</code>、<code>set_overlay(surface,spec)</code>、<code>clear_overlay(surface)</code></td><td>渲染 hook 与 surface-keyed overlay；替换失败保持旧帧，专用 8 MiB spec 预算。</td></tr>
+<tr><td><code>register_hotkey(id,fn,default_key,label)</code>、<code>unregister_hotkey(id)</code></td><td>注册和注销插件热键。</td></tr>
+<tr><td><code>register_parser_adapter/register_exporter/register_formatter/register_trigger_type/register_report_view/register_timer(id,metadata)</code></td><td>六类扩展描述符；不等于下面的周期 timer。</td></tr>
+<tr><td><code>register_data_source(id,metadata,start,stop)</code>、<code>register_engine(name,engine)</code></td><td>绑定数据源的启动/停止回调；注册插件局部引擎对象。</td></tr>
+<tr><td><code>get_engine(name)</code>、<code>require_engine(name)</code>、<code>call_engine(name,method,args)</code>、<code>engine_call(name,args)</code></td><td>插件内 engine 查找、必需查找、调用及原生目录 raw 调用；<code>ctx.engine</code> 还含 get/call/require/register/list/on 与命名目录函数，<code>ctx.mem</code> 镜像 mem.*。</td></tr>
+<tr><td><code>set_interval(fn,seconds)</code>、<code>set_timeout(fn,seconds)</code>、<code>clear_timer(token)</code>、<code>complete_timer(token)</code>、<code>run_on_ui(fn)</code></td><td>周期/一次性 timer、注销/完成与已实现的有限 UI 调度；并非完整多线程 task scheduler。</td></tr>
+<tr><td><code>notify(title,msg,duration_s,kind)</code>、<code>toast(msg)</code>、<code>dismiss_notify()</code></td><td>通知、短提示和清除。</td></tr>
+<tr><td><code>open_file(filters,title)</code>、<code>load_local(path)</code>、<code>ensure_requirements(install)</code></td><td>文件选择、插件根 helper、需求报告；<code>register_thread(fn)</code> 与 <code>call_runtime(...)</code> 为无操作兼容项，<code>open(...)</code> 抛 NotSupportedException。</td></tr>
+<tr><td><code>create_compositor_layer(name,w,h,…)</code>、<code>upload_compositor_frame(name,bytes,w,h)</code>、<code>set_compositor_layer_position(name,x,y)</code>、<code>set_compositor_layer_visible(name,visible)</code>、<code>set_compositor_layer_input(name,…)</code>、<code>destroy_compositor_layer(name)</code></td><td>图层创建、帧上传、位置/可见/输入与销毁。</td></tr>
+<tr><td><code>set_compositor_layer_mmf_source(name,mmf)</code>、<code>set_compositor_layer_shared_texture_source(name,handle,w,h)</code>、<code>compositor_gpu_interop_available()</code>、<code>compositor_layer_shared_texture_active(name)</code>、<code>compositor_display_refresh_hz()</code></td><td>共享帧源与可用状态；csmini 当前显示刷新率固定返回 0.0，别当成实测显示器值。</td></tr>
+</tbody></table></div></section>
+<section class="manual-section" id="managed-context"><header class="section-heading"><span class="section-number">06</span><div><p>MANAGED SDK</p><h2>当前 CoreCLR 托管 facade</h2></div></header><p>CoreCLR 宿主加载预编译程序集；托管 <code>PluginContext</code> 的具体 public 方法由插件随包实现。当前活动 <code>plugins/script_cutegirl_csharp/plugin_entry.cs</code> 的 <code>PluginEntry.SaoCtx</code> 是可参考的真实实现，不是任何托管插件都自动得到 csmini 表。它通过版本化 C ABI table 调用宿主；插件作者在自己的 managed shim 中实现 facade。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>SaoCtx public 成员</th><th>参数、返回与语义</th></tr></thead><tbody>
+<tr><td><code>path,plugin_id,should_stop,ui</code></td><td>只读路径/身份、bool 停止状态、SaoUi 构造器对象。</td></tr>
+<tr><td><code>log(params object[] args)</code>、<code>get_setting(key,fallback=null)</code> / <code>setting(...)</code>、<code>set_setting(key,value)</code>、<code>set_defaults(defaults)</code></td><td>日志与基础 JSON 设置；get 返回 object，set/default 为 void。</td></tr>
+<tr><td><code>toast(message)</code>、<code>notify(message)</code></td><td>本 shim 的 notify(message) 只是 toast 别名，均返回 void；不接受 title/duration。</td></tr>
+<tr><td><code>set_interval(Delegate fn,double seconds)</code>、<code>set_timeout(Delegate fn,double seconds)</code>、<code>clear_timer(object token)</code></td><td>timer 返回 object（实际字符串 token），callback 必须可转 Func&lt;object&gt;，clear 为 void。</td></tr>
+<tr><td><code>register_ui_panel(id,meta,render=null,action=null)</code></td><td>返回 native JSON object；render(payload) → UI spec，action(actionKey,payload) → result。</td></tr>
+<tr><td><code>register_action_handler(handler)</code>、<code>register_menu_category(name,icon,builder,priority)</code></td><td>handler(actionId,payload) 返回结果；builder() 产出行，行的 command 为 Action；托管 shim 管理菜单树与结果提交。</td></tr>
+<tr><td><code>request_redraw(surface="")</code>、<code>open_file(filters,title,initial_dir,hwnd)</code>、<code>open_window(panelId,width=0,height=0)</code></td><td>重绘、文件选择及面板打开；无 surface 时按已注册 panel 遍历；取消文件选择为 null。</td></tr>
+<tr><td><code>create_compositor_layer(name,w,h,x,y,z,clickThrough,highFps=false,targetFps=0)</code>、<code>upload_compositor_frame(name,byte[] bgra,w,h)</code>、<code>set_compositor_layer_position(name,x,y)</code>、<code>set_compositor_layer_visible(name,visible)</code>、<code>destroy_compositor_layer(name)</code></td><td>图层、BGRA 帧与几何/显隐/销毁；上传检查 32 MiB 上限。</td></tr>
+<tr><td><code>set_compositor_layer_mmf_source(name,mmfName)</code>、<code>set_compositor_layer_shared_texture_source(name,handle,w,h)</code>、<code>compositor_gpu_interop_available()</code>、<code>compositor_layer_shared_texture_active(name)</code>、<code>compositor_display_refresh_hz()</code></td><td>共享源与 GPU 查询，返回类型分别为 void / void / bool / bool / int。</td></tr>
+<tr><td><code>prompt(title,current)</code>、<code>Dispose()</code></td><td>阻塞 prompt 返回文字或 null；Dispose 清理托管 facade 自己的 panel 集合。</td></tr>
+</tbody></table></div><p>这个托管 shim 的 <code>SaoUi</code> 实际公开 <code>panel,section,row,kv,button,text,title,divider,spacer,badge,input,table,bar,slider,Build(method,args)</code>（含重载），并非自动暴露全部 22 个 UI builder；其余底层构造器可经 Build 调用。底层 <code>cs_managed_sdk_table</code> 还含 dispatch、log、register/get_engine、entity provider、ui_build、prompt 等 ABI 槽位；槽位存在不等于本托管 facade 声明了同名 public 方法。</p></section>
+</article></main><script src="assets/scrollspy.js"></script></body></html>

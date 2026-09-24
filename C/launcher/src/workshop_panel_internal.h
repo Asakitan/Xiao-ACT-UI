@@ -60,6 +60,8 @@ struct Operations {
                                                const std::filesystem::path&)>;
     using Uninstall = std::function<sao_status_t(std::stop_token, std::string_view,
                                                  const std::filesystem::path&, bool)>;
+    using Publish = std::function<sao_status_t(std::stop_token, const std::filesystem::path&,
+                                               std::string&)>;
 
     List list;
     Detail detail;
@@ -67,6 +69,7 @@ struct Operations {
     Verify verify;
     Install install;
     Uninstall uninstall;
+    Publish publish;
 
     [[nodiscard]] bool complete() const noexcept;
 };

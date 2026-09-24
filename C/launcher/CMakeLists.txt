@@ -337,6 +337,7 @@ if(WIN32 AND TARGET sao::ui AND TARGET sao::sdk AND TARGET sao::plugin_ai_editor
         sao::plugin_ai_editor
         sao::rt_io
         sao::server::freetier::workshop_client
+        comdlg32
         user32
         gdi32
         ole32
@@ -436,7 +437,7 @@ if (_SAO_GUIDE_WEBVIEW2_ROOT)
         target_compile_definitions(sao_ui_preview PRIVATE SAO_LAUNCHER_HAS_WEBVIEW2=1)
     endif()
 endif()
-target_link_libraries(SaoAuto PRIVATE nlohmann_json::nlohmann_json dwmapi)
+target_link_libraries(SaoAuto PRIVATE nlohmann_json::nlohmann_json dwmapi comdlg32)
 if (TARGET sao::core)
     target_link_libraries(SaoAuto PRIVATE sao::core)
     target_compile_definitions(SaoAuto PRIVATE
@@ -634,6 +635,13 @@ target_compile_definitions(SaoAuto PRIVATE
 
 set(SAO_LAUNCHER_DOCS_INDEX
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/index.html")
+set(SAO_LAUNCHER_PLUGIN_API_PAGES
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/plugin-api-reference.html"
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/plugin-python.html"
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/plugin-lua.html"
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/plugin-emma.html"
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/plugin-angelscript.html"
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/plugin-csharp.html")
 set(SAO_LAUNCHER_DOCS_STYLE
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/style.css")
 set(SAO_LAUNCHER_DOCS_THEME
@@ -657,6 +665,11 @@ set(SAO_LAUNCHER_DOCS_SOUNDS_DIR
 set(SAO_LAUNCHER_DOCS_FONT_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/fonts/SAOUI.ttf"
     "${CMAKE_CURRENT_SOURCE_DIR}/docs/html/assets/fonts/ZhuZiAYuanJWD.ttf")
+foreach (_sao_plugin_api_page IN LISTS SAO_LAUNCHER_PLUGIN_API_PAGES)
+    if (NOT EXISTS "${_sao_plugin_api_page}")
+        message(FATAL_ERROR "launcher: required plugin API page is missing: ${_sao_plugin_api_page}")
+    endif()
+endforeach()
 foreach (_sao_guide_font IN LISTS SAO_LAUNCHER_DOCS_FONT_FILES)
     if (NOT EXISTS "${_sao_guide_font}")
         message(FATAL_ERROR "launcher: required guide font is missing: ${_sao_guide_font}")
@@ -703,6 +716,9 @@ add_custom_command(TARGET SaoAuto POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${SAO_LAUNCHER_DOCS_INDEX}"
         "$<TARGET_FILE_DIR:SaoAuto>/docs/html/index.html"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        ${SAO_LAUNCHER_PLUGIN_API_PAGES}
+        "$<TARGET_FILE_DIR:SaoAuto>/docs/html"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${SAO_LAUNCHER_DOCS_STYLE}"
         "$<TARGET_FILE_DIR:SaoAuto>/docs/html/assets/style.css"
@@ -798,7 +814,7 @@ if (_SAO_GUIDE_WEBVIEW2_ROOT)
     )
 endif()
 
-install(FILES "${SAO_LAUNCHER_DOCS_INDEX}"
+install(FILES "${SAO_LAUNCHER_DOCS_INDEX}" ${SAO_LAUNCHER_PLUGIN_API_PAGES}
     DESTINATION bin/docs/html
     COMPONENT ship
 )

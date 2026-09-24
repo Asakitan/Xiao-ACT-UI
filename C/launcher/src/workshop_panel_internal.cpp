@@ -6,6 +6,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <windows.h>
+#include <commdlg.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -328,7 +331,7 @@ json section_node(std::string title, json children, std::string_view accent = "c
                 {"children", std::move(children)}};
 }
 
-json dock_document(json nodes, std::string content_id, int min_width = 640) {
+json dock_document(json nodes, std::string content_id, int min_width = 320) {
     if (!nodes.is_array() || nodes.empty())
         return json{{"version", 1}, {"title", ""}, {"layout", "dock"}, {"nodes", std::move(nodes)}};
     json top = std::move(nodes.front());
@@ -548,6 +551,17 @@ Operations make_production_operations() {
             stable_id.c_str(), plugins_utf8.c_str(), keep_backup ? 1 : 0));
         return stop.stop_requested() ? SAO_STATUS_ERR_CANCELLED : status;
     };
+    operations.publish = [](std::stop_token stop, const std::filesystem::path& package,
+                            std::string& id) -> sao_status_t {
+        if (stop.stop_requested()) return SAO_STATUS_ERR_CANCELLED;
+        std::array<char, 64> buffer{};
+        const std::string path = path_to_utf8(package);
+        const sao_status_t status = map_workshop_status(
+            sao_workshop_publish_plugin(path.c_str(), buffer.data(), buffer.size()));
+        if (stop.stop_requested()) return SAO_STATUS_ERR_CANCELLED;
+        if (status == SAO_STATUS_OK) id = buffer.data();
+        return status;
+    };
     return operations;
 }
 
@@ -561,16 +575,16 @@ SaoPanelDescriptor panel_descriptor() noexcept {
     descriptor.panel_id_utf8 = kPanelId;
     descriptor.title_utf8 = kPanelTitle;
     descriptor.anchor = SAO_UI_PANEL_ANCHOR_CENTER;
-    descriptor.default_width_px = 980;
-    descriptor.default_height_px = 760;
-    descriptor.min_width_px = 680;
-    descriptor.min_height_px = 480;
+    descriptor.default_width_px = 1280;
+    descriptor.default_height_px = 900;
+    descriptor.min_width_px = 320;
+    descriptor.min_height_px = 240;
     descriptor.movable = true;
     descriptor.resizable = true;
     descriptor.show_titlebar = true;
     descriptor.show_close_button = true;
     descriptor.visible = false;
-    descriptor.remember_geometry = true;
+    descriptor.remember_geometry = false;
     descriptor.z_class = SAO_UI_PANEL_Z_NORMAL;
     descriptor.theme_override_json_utf8 = nullptr;
     descriptor.initial_opacity = 1.0F;
@@ -617,8 +631,10 @@ class Owner::Impl final {
     enum class TaskKind {
         List,
         Detail,
+        Download,
         Install,
         Uninstall,
+        Publish,
     };
 
     struct Task {
@@ -626,6 +642,7 @@ class Owner::Impl final {
         std::uint64_t sequence{};
         std::uint32_t page{1};
         std::string id;
+        std::filesystem::path package;
     };
 
     struct Completion {
@@ -755,6 +772,27 @@ class Owner::Impl final {
         if (panel == nullptr)
             return SAO_STATUS_ERR_HANDLE_INVALID;
         const bool was_visible = query_visible(panel);
+        MONITORINFO monitor{sizeof(monitor)};
+        HWND hwnd = static_cast<HWND>(sao_ui_compositor_host_hwnd(compositor_));
+        const HMONITOR display = hwnd != nullptr
+                                     ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY)
+                                     : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        if (!GetMonitorInfoW(display, &monitor))
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        const RECT& area = monitor.rcWork;
+        RECT host_bounds{};
+        if (hwnd == nullptr || !GetWindowRect(hwnd, &host_bounds))
+            return SAO_STATUS_ERR_OS_CALL_FAILED;
+        const int left = std::max(area.left, host_bounds.left);
+        const int top = std::max(area.top, host_bounds.top);
+        const int width = std::min(area.right, host_bounds.right) - left;
+        const int height = std::min(area.bottom, host_bounds.bottom) - top;
+        if (width < 320 || height < 240)
+            return SAO_STATUS_ERR_CAPABILITY_MISSING;
+        status = sao_ui_panel_set_geometry(panel, left - host_bounds.left,
+                                           top - host_bounds.top, width, height);
+        if (status != SAO_STATUS_OK)
+            return status;
         status = sao_ui_panel_show(panel);
         if (status == SAO_STATUS_OK)
             status = sao_ui_panel_bring_to_front(panel);
@@ -902,11 +940,48 @@ class Owner::Impl final {
         if (action == "workshop.close") {
             return request_hide();
         }
+        if (action == "workshop.plugin.publish") {
+            if (require_owner_thread() != SAO_STATUS_OK)
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            {
+                std::lock_guard lock(mutex_);
+                if (!operations_.publish)
+                    return SAO_STATUS_ERR_CAPABILITY_MISSING;
+                if (worker_active_ || !tasks_.empty() || !completions_.empty())
+                    return SAO_UI_PANEL_STATUS_ERR_BUSY;
+            }
+            std::array<wchar_t, 32768> selected{};
+            static constexpr wchar_t filter[] =
+                L"SAO plugin archives (*.sao-plugin)\0*.sao-plugin\0\0";
+            OPENFILENAMEW dialog{};
+            dialog.lStructSize = sizeof(dialog);
+            dialog.hwndOwner = static_cast<HWND>(sao_ui_compositor_host_hwnd(compositor_));
+            dialog.lpstrFilter = filter;
+            dialog.lpstrFile = selected.data();
+            dialog.nMaxFile = static_cast<DWORD>(selected.size());
+            dialog.lpstrTitle = L"Select plugin package to upload";
+            dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR |
+                           OFN_HIDEREADONLY;
+            if (!GetOpenFileNameW(&dialog)) {
+                const auto error = CommDlgExtendedError();
+                if (error == 0) return SAO_STATUS_ERR_CANCELLED;
+                std::lock_guard lock(mutex_);
+                last_status_ = SAO_STATUS_ERR_OS_CALL_FAILED;
+                error_text_ = "File picker failed";
+                dirty_ = true;
+                return last_status_;
+            }
+            Task task;
+            task.kind = TaskKind::Publish;
+            task.package = selected.data();
+            return enqueue_task(std::move(task));
+        }
 
         const bool detail_action = action == "workshop.plugin.detail";
+        const bool download_action = action == "workshop.plugin.download";
         const bool install_action = action == "workshop.plugin.install";
         const bool uninstall_action = action == "workshop.plugin.uninstall";
-        if (!detail_action && !install_action && !uninstall_action)
+        if (!detail_action && !download_action && !install_action && !uninstall_action)
             return SAO_STATUS_ERR_NOT_FOUND;
         std::string id;
         bool confirmed = false;
@@ -925,6 +1000,8 @@ class Owner::Impl final {
         }
         if (detail_action)
             return enqueue_task(Task{TaskKind::Detail, 0, 0, std::move(id)});
+        if (download_action)
+            return enqueue_task(Task{TaskKind::Download, 0, 0, std::move(id)});
         if (install_action)
             return enqueue_task(Task{TaskKind::Install, 0, 0, std::move(id)});
         if (uninstall_action && !confirmed) {
@@ -1205,7 +1282,7 @@ class Owner::Impl final {
                 return SAO_STATUS_ERR_NOT_INITIALIZED;
             if (worker_active_ || !tasks_.empty() || !completions_.empty())
                 return SAO_UI_PANEL_STATUS_ERR_BUSY;
-            if (task.kind != TaskKind::List) {
+            if (task.kind != TaskKind::List && task.kind != TaskKind::Publish) {
                 if (!catalog_connected_)
                     return SAO_STATUS_ERR_NOT_INITIALIZED;
                 if (std::none_of(items_.begin(), items_.end(),
@@ -1288,6 +1365,7 @@ class Owner::Impl final {
                     completion.detail = std::move(detail);
                 break;
             }
+            case TaskKind::Download:
             case TaskKind::Install: {
                 std::filesystem::path package;
                 push_progress(task, "Downloading " + task.id, 20);
@@ -1306,6 +1384,10 @@ class Owner::Impl final {
                 completion.status = operations_.verify(stop, package, task.id);
                 if (completion.status != SAO_STATUS_OK)
                     break;
+                if (task.kind == TaskKind::Download) {
+                    completion.progress = path_to_utf8(package);
+                    break;
+                }
                 if (stop.stop_requested()) {
                     completion.status = SAO_STATUS_ERR_CANCELLED;
                     break;
@@ -1317,6 +1399,12 @@ class Owner::Impl final {
             case TaskKind::Uninstall:
                 push_progress(task, "Uninstalling " + task.id, 50);
                 completion.status = operations_.uninstall(stop, task.id, plugins_dir_, true);
+                break;
+            case TaskKind::Publish:
+                push_progress(task, "Uploading selected package", 30);
+                completion.status = operations_.publish
+                                        ? operations_.publish(stop, task.package, completion.task.id)
+                                        : SAO_STATUS_ERR_CAPABILITY_MISSING;
                 break;
             }
         } catch (...) {
@@ -1381,9 +1469,17 @@ class Owner::Impl final {
                 status_text_ = "Installed " + completion.task.id;
                 progress_text_ = "Download, verification, and installation completed";
                 break;
+            case TaskKind::Download:
+                status_text_ = "Downloaded " + completion.task.id + " (not installed)";
+                progress_text_ = "Verified archive: " + completion.progress;
+                break;
             case TaskKind::Uninstall:
                 status_text_ = "Uninstalled " + completion.task.id;
                 progress_text_ = "Plugin directory moved to its backup";
+                break;
+            case TaskKind::Publish:
+                status_text_ = "Uploaded " + completion.task.id;
+                progress_text_ = "Server confirmed publish; refresh to see catalog changes";
                 break;
             }
             dirty_ = true;
@@ -1398,8 +1494,12 @@ class Owner::Impl final {
             return "Detail / 详情";
         case TaskKind::Install:
             return "Download / verify / install";
+        case TaskKind::Download:
+            return "Download / verify";
         case TaskKind::Uninstall:
             return "Uninstall";
+        case TaskKind::Publish:
+            return "Publish";
         }
         return "Workshop operation";
     }
@@ -1414,7 +1514,6 @@ class Owner::Impl final {
                                                : busy              ? "gold"
                                                : catalog_connected_ ? "ok"
                                                                     : "muted";
-        controls.push_back(text_node("浏览、查看并管理插件包。", "muted", 30));
         nodes.push_back(status_strip_node(
             !online_             ? "面板离线"
             : connecting         ? "连接中"
@@ -1445,6 +1544,9 @@ class Owner::Impl final {
         json navigation = json::array();
         navigation.push_back(button_node("workshop.refresh", error_text_.empty() ? "刷新" : "重试",
                                          "workshop.refresh", json::object(), "primary", busy));
+        navigation.push_back(button_node("workshop.publish", "上传插件包",
+                         "workshop.plugin.publish", json::object(), "primary",
+                         busy || !operations_.publish));
         navigation.push_back(button_node("workshop.previous", "上一页", "workshop.page.previous",
                                          json::object(), "default",
                                          interaction_disabled || current_page_ <= 1));
@@ -1486,21 +1588,20 @@ class Owner::Impl final {
                     !installed_error;
                 metadata.push_back(
                     badge_node(installed ? "已安装" : "未安装", installed ? "ok" : "muted"));
+                metadata.push_back(badge_node(item.tag.empty() ? "未分类" : item.tag, "muted"));
+                metadata.push_back(badge_node(format_rating(item.rating), "gold"));
+                metadata.push_back(badge_node(std::to_string(item.downloads) + " ↓", "accent"));
                 details.push_back(row_node(std::move(metadata)));
-                details.push_back(text_node(
-                    "Tag / 标签: " + (item.tag.empty() ? "untagged / 未分类" : item.tag) +
-                        " · Author / 作者: " + (item.author.empty() ? item.id : item.author) +
-                        " · " + updated_ago(item.updated_ms),
-                    "muted", 24));
-                json metrics = json::array();
-                metrics.push_back(badge_node(format_rating(item.rating), "gold"));
-                metrics.push_back(
-                    badge_node(std::to_string(item.downloads) + " downloads", "accent"));
-                details.push_back(row_node(std::move(metrics)));
+                details.push_back(text_node((item.author.empty() ? item.id : item.author) +
+                                                " · " + updated_ago(item.updated_ms),
+                                            "muted", 22));
                 const json payload{{"id", item.id}};
                 json actions = json::array();
                 actions.push_back(button_node("detail." + item.id, "查看",
                                               "workshop.plugin.detail", payload, "default",
+                                              interaction_disabled));
+                actions.push_back(button_node("download." + item.id, "仅下载",
+                                              "workshop.plugin.download", payload, "default",
                                               interaction_disabled));
                 if (!installed)
                     actions.push_back(button_node("install." + item.id, "安装",
@@ -1553,6 +1654,9 @@ class Owner::Impl final {
                 detail_actions.push_back(button_node("detail.install", "安装",
                                                      "workshop.plugin.install", payload, "primary",
                                                      interaction_disabled));
+            detail_actions.push_back(button_node("detail.download", "仅下载",
+                                                 "workshop.plugin.download", payload, "default",
+                                                 interaction_disabled));
             if (detail_installed)
                 detail_actions.push_back(button_node("detail.remove", "移除",
                                                      "workshop.plugin.uninstall", payload, "danger",

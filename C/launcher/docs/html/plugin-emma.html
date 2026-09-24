@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><link rel="icon" href="data:,"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="description" content="SAO Auto Emma 插件 API、上下文、面板、菜单、计时器和示例。"><title>Emma 插件 API · SAO Auto</title><link rel="stylesheet" href="assets/style.css"><script src="assets/theme.js"></script></head>
+<body class="api-guide"><div class="progress-track" aria-hidden="true"><span class="progress-fill" id="progress-fill"></span></div><a class="skip-link" href="#overview">跳到正文</a><header class="site-header"><a class="brand" href="index.html#plugin-api" aria-label="返回用户指南"><span class="brand-mark" aria-hidden="true">SA</span><span class="brand-copy"><strong>SAO Auto</strong><small>插件 API</small></span></a><nav class="header-nav" aria-label="插件语言导航"><a href="index.html#plugin-api">总览</a><a href="plugin-api-reference.html">公共 API</a><a href="plugin-python.html">Python</a><a href="plugin-lua.html">Lua</a><a href="plugin-emma.html" aria-current="page">Emma</a><a href="plugin-angelscript.html">AngelScript</a><a href="plugin-csharp.html">C#</a></nav><div class="header-actions"><button type="button" class="guide-close" data-guide-close>关闭 <span aria-hidden="true">×</span></button><button type="button" id="theme-toggle" class="theme-switch" aria-label="切换深色模式"><svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M21 13.4A9 9 0 0 1 10.6 3 9 9 0 1 0 21 13.4Z"/></svg></button></div></header>
+<main class="manual-shell" id="manual"><aside class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">Emma API</p><ol><li><a href="#overview" data-target="overview"><span>01</span>语言与清单</a></li><li><a href="#context" data-target="context"><span>02</span>ctx 方法</a></li><li><a href="#example" data-target="example"><span>03</span>插件示例</a></li><li><a href="#advanced" data-target="advanced"><span>04</span>引擎与限制</a></li><li><a href="#all-context" data-target="all-context"><span>05</span>全部 ctx 接口</a></li></ol></nav><div class="rail-tip"><span aria-hidden="true">⌂</span><p><strong>返回指南</strong><a href="index.html#plugin-api">浏览全部语言</a></p></div></aside><article class="manual-content">
+<section class="manual-section" id="overview"><header class="section-heading"><span class="section-number">01</span><div><p>EMMA</p><h2>Emma 插件 API</h2></div></header><p class="section-intro">内置原生解释器，无需额外语言运行库。使用 <code>fn … end</code>、<code>let</code>、<code>{key: value}</code>、<code>..</code> 拼接字符串；不是 Python 方言。</p><pre><code>{"id":"my_emma_plugin","name":"Emma 示例","version":"1.0.0",
+ "language":"emma","entry":"plugin.emma","enabled":false,
+ "permissions":[]}</code></pre><p>定义 <code>fn on_load(ctx) … end</code>、<code>on_enable()</code>、<code>on_disable()</code>、<code>on_unload()</code>。<code>on_disable()</code> 显式返回 <code>false</code> 表示清理未完成，宿主保留状态以便重试；<code>on_unload()</code> 可否决卸载。</p></section>
+<section class="manual-section" id="context"><header class="section-heading"><span class="section-number">02</span><div><p>CONTEXT</p><h2>ctx 方法速查</h2></div></header><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>用途</th><th>调用</th></tr></thead><tbody><tr><td>日志与设置</td><td><code>ctx.log(msg)</code>、<code>ctx.set_defaults(dict)</code>、<code>ctx.get_setting(key, default)</code>、<code>ctx.set_setting(key, value)</code></td></tr><tr><td>面板 / 动作</td><td><code>ctx.register_ui_panel(id, meta, render, action)</code>、<code>ctx.open_window(id, w, h)</code>、<code>ctx.request_redraw(id, reason)</code>、<code>ctx.register_action_handler(handler)</code></td></tr><tr><td>构造界面</td><td><code>ctx.ui.panel(title, children)</code>、<code>ctx.ui.section(title, children)</code>、<code>ctx.ui.row(children)</code>、<code>ctx.ui.kv(key, value)</code>、<code>ctx.ui.button(label, action_id, style)</code></td></tr><tr><td>菜单 / 通知</td><td><code>ctx.register_menu_category(title, icon, builder, priority)</code>、<code>ctx.notify(title, message, seconds)</code></td></tr><tr><td>定时 / 覆盖层</td><td><code>ctx.set_interval(fn, seconds)</code>、<code>ctx.clear_timer(token)</code>、<code>ctx.set_overlay(surface, spec)</code>、<code>ctx.clear_overlay(surface)</code></td></tr><tr><td>本地模块 / 引擎</td><td><code>ctx.load_local(path)</code>、<code>ctx.engine_call(name, args)</code>、<code>ctx.engine.list()</code></td></tr></tbody></table></div></section>
+<section class="manual-section" id="example"><header class="section-heading"><span class="section-number">03</span><div><p>QUICK START</p><h2>面板 + Entity 菜单</h2></div></header><pre><code>let count = 0
+fn open_panel()
+    ctx.open_window("demo", 520, 360)
+    return {ok: true}
+end
+fn build_menu()
+    return [{id: "open", action_id: "demo.open",
+             label: "打开面板", command: open_panel}]
+end
+fn on_load(ctx)
+    ctx.set_defaults({greeting: "你好"})
+    ctx.register_ui_panel("demo", {title: "Emma 示例"},
+        render_panel, on_panel_action)
+    ctx.register_menu_category("Emma 示例", "E", build_menu, 40.0)
+end
+fn render_panel(payload)
+    return ctx.ui.panel("Emma 示例", [
+        ctx.ui.section("状态", [ctx.ui.kv("次数", tostring(count)),
+            ctx.ui.button("增加", "add", "primary")])])
+end
+fn on_panel_action(action_id, payload)
+    if action_id == "add"
+        count = count + 1
+        ctx.request_redraw("demo", "count_changed")
+        return {ok: true}
+    end
+    return {ok: false}
+end
+fn on_unload()
+    ctx.log("Emma 插件卸载")
+end</code></pre><p>带定时器、通知与动作路由的完整示例：<code>plugins/example_emma_plugin/plugin.emma</code>。</p></section>
+<section class="manual-section" id="advanced"><header class="section-heading"><span class="section-number">04</span><div><p>ENGINE &amp; LIMITS</p><h2>引擎与边界</h2></div></header><p><code>ctx.engine.mem_read_u64(address)</code> 等命名 callable 按引擎目录参数顺序分发；<code>ctx.engine_call("mem.read_u64", {address: address})</code> 返回包含 <code>status</code>、<code>result</code> 的 envelope；<code>ctx.engine.on(channel, callback)</code> 为回调通道。功能取决于当前 provider，可通过 <code>ctx.engine.list()</code> 查询。</p><p>容器支持 list 的 append/extend/pop 等、dict 的 get/keys/items/update 等；string 大小写转换限 ASCII。外部 <code>.py</code> helper 经共享 pymini→CPython 路由，只传有界 JSON-compatible 值与 callable。普通 ctx/action JSON 与 overlay 专用 8 MiB 文档预算不同；重复设置同一 surface 只在新帧提交后替换旧画面。</p></section>
+<section class="manual-section" id="all-context"><header class="section-heading"><span class="section-number">05</span><div><p>FULL EMMA SURFACE</p><h2>全部 Emma ctx 接口</h2></div></header><p>Emma 根 ctx 是字典，方法以 <code>ctx.name(...)</code> 调用；失败通常抛 Emma 异常，保存的 token 须在停用/卸载时清理。<a href="plugin-api-reference.html#ui">22 个 UI builder</a> 和 <a href="plugin-api-reference.html#engine">126 个引擎目录项</a>共有完整参数与结果表。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>参数、返回与语义</th></tr></thead><tbody>
+<tr><td><code>plugin_id,path,web_path,assets_path,ui,event_bus,engine</code></td><td>字符串路径/ID 与 UI、事件、引擎字典；<code>ctx.should_stop()</code> 查询停止状态，<code>ctx.time()</code> 返回 epoch 秒。</td></tr>
+<tr><td><code>log(value…)</code>、<code>set_defaults(map)</code>、<code>get_setting(key,default)</code> / <code>setting(...)</code>、<code>set_setting(key,value)</code></td><td>日志、设置默认值、读取和写入；get_setting 在值不存在时使用传入 default。</td></tr>
+<tr><td><code>subscribe(topic,fn)</code>、<code>subscribe_once(topic,fn)</code>、<code>unsubscribe(token)</code>、<code>emit(topic,payload)</code></td><td>返回数值订阅 token；callback 收 payload；unsubscribe 取消后返回 bool；未提供 payload 时发 null。</td></tr>
+<tr><td><code>on(topic,fn)</code>、<code>on_damage/on_heal/on_skill/on_boss/on_snapshot/on_encounter_finalized(fn)</code></td><td>事件快捷订阅；on 可返回装饰器，提供 fn 时返回原 fn；on_snapshot 对应 <code>act_snapshot</code> 主题。</td></tr>
+<tr><td><code>get_snapshot()</code>、<code>snapshot_value(path,default)</code>、<code>recent_events(limit=20,topic="")</code></td><td>状态快照、点路径取值、最近事件数组；<code>ctx.event_bus</code> 复用 subscribe/subscribe_once/unsubscribe/emit 和上述 snapshot 方法。</td></tr>
+<tr><td><code>register_ui_panel(id,metadata,render,on_action)</code>、<code>request_redraw(surface,reason)</code></td><td>注册回调与重绘。render(payload) 返回 UI 节点，action(action_id,payload) 返回 <code>{ok: true/false}</code> 等动作结果。</td></tr>
+<tr><td><code>register_menu_category(name,icon,builder,priority)</code>、<code>register_menu_surface(id,descriptor,priority)</code>、<code>register_action_handler(fn)</code></td><td>Entity 菜单、surface 和 action callback；builder 返回行数组，菜单更新可重建。</td></tr>
+<tr><td><code>register_render_hook(surface,fn,priority)</code>、<code>unregister_render_hook(token)</code></td><td>渲染 hook 的绑定/解除；回调生命周期绑定插件。</td></tr>
+<tr><td><code>register_hotkey(id,fn,default_key,label)</code>、<code>unregister_hotkey(id)</code></td><td>热键注册返回 ID；注销成功/无账目分别返回 true/false。</td></tr>
+<tr><td><code>set_interval(fn,seconds)</code>、<code>set_timeout(fn,seconds)</code>、<code>clear_timer(token)</code></td><td>周期/单次 timer 返回字符串 token；clear_timer 对不存在的台账返回 false。</td></tr>
+<tr><td><code>notify(title,msg,duration_s=60,kind="plugin")</code>、<code>toast(msg)</code>、<code>dismiss_notify()</code></td><td>通知、短消息和解除通知；错误时异常。</td></tr>
+<tr><td><code>set_overlay(surface,spec)</code>、<code>clear_overlay(surface)</code></td><td>设置/移除 owner surface；同键重复提交保留一份资源账目，失败保持前帧；成功 clear 清同键记录。</td></tr>
+<tr><td><code>register_parser_adapter/register_exporter/register_formatter/register_trigger_type/register_report_view/register_timer(id,metadata)</code></td><td>注册六类扩展描述符；与 <code>set_interval</code> timer callback 不是同一接口。</td></tr>
+<tr><td><code>register_data_source(id,metadata,start,stop)</code></td><td>数据源及启停回调；回调失败返回 status 后资源仍按 owner 生命周期收敛。</td></tr>
+<tr><td><code>register_engine(name,engine)</code>、<code>get_engine(name)</code>、<code>require_engine(name)</code></td><td>插件局部引擎注册/查找/必需查找；ctx.engine 另含 get/require/register/has/list/on 与目录命名函数。</td></tr>
+<tr><td><code>engine_call(name,args)</code>、<code>engine.&lt;group_method&gt;(...)</code></td><td>raw 方法返回完整 <code>{status,result}</code>；命名调用解包 result 并处理非零 status；<code>ctx.engine.on(channel,fn)</code> 管理回调。</td></tr>
+<tr><td><code>load_local(relative_path)</code>、<code>load_script</code>、<code>ensure_requirements(install)</code></td><td>受控 helper、语言全局 load_script 在 ctx 上的兼容投影、需求报告；非模块资源返回路径，跨语言仅 JSON 值/callable。</td></tr>
+<tr><td><code>register_thread(fn)</code>、<code>run_on_ui(fn)</code></td><td>register_thread 只校验 callable 后返回 true，不启动线程；run_on_ui 转一次性 timer，非独立 UI dispatch。</td></tr>
+<tr><td><code>open_file(filters,title,initial_dir,hwnd)</code>、<code>open_window(panel_id,w,h)</code></td><td>文件选择与打开已注册面板。</td></tr>
+<tr><td><code>create_compositor_layer(name,w,h,…)</code>、<code>upload_compositor_frame(name,data,w,h)</code>、<code>set_compositor_layer_position(name,x,y)</code>、<code>set_compositor_layer_visible(name,visible)</code>、<code>set_compositor_layer_input(name,…)</code>、<code>destroy_compositor_layer(name)</code></td><td>原生图层生命周期和帧、输入配置；需相应 compositor 能力。</td></tr>
+<tr><td><code>set_compositor_layer_mmf_source(name,mmf)</code>、<code>set_compositor_layer_shared_texture_source(name,handle,w,h)</code>、<code>compositor_gpu_interop_available()</code>、<code>compositor_layer_shared_texture_active(name)</code></td><td>共享源绑定和 GPU 能力查询；handle 为零可清除来源，非零须配正宽高。</td></tr>
+</tbody></table></div></section>
+</article></main><script src="assets/scrollspy.js"></script></body></html>

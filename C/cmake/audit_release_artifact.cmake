@@ -492,7 +492,7 @@ set(_SAO_WINDOWS_SYSTEM_DLLS
     comdlg32.dll crypt32.dll d2d1.dll d3d11.dll dcomp.dll dbghelp.dll dwrite.dll
     dwmapi.dll dxgi.dll gdi32.dll hid.dll imagehlp.dll imm32.dll iphlpapi.dll
     kernel32.dll kernelbase.dll msvcrt.dll ntdll.dll
-    ole32.dll oleaut32.dll psapi.dll rpcrt4.dll sechost.dll setupapi.dll shell32.dll
+    ole32.dll oleaut32.dll psapi.dll rpcrt4.dll sechost.dll secur32.dll setupapi.dll shell32.dll
     shcore.dll shlwapi.dll user32.dll userenv.dll uxtheme.dll version.dll winhttp.dll
     wininet.dll winmm.dll wintrust.dll windowsapp.dll ws2_32.dll wtsapi32.dll
     normaliz.dll mswsock.dll nsi.dll ucrtbase.dll xaudio2_9.dll)

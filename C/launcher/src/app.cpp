@@ -25,6 +25,7 @@
 #endif
 #include "sao/ui/input_router.h"
 #include "sao/ui/linkstart_intro.h"
+#include "sao/ui/sound.h"
 
 #include "launcher_lifecycle.h"
 
@@ -1496,6 +1497,7 @@ int App::playExitAnimation(int exit_code) noexcept {
         (void)sao_ui_outro_cancel(ctx);
         return exit_code;
     }
+    (void)sao_ui_sound_play(SAO_UI_SOUND_MENU_CLOSE, 70);
     const ULONGLONG started = GetTickCount64();
     const ULONGLONG deadline = started + 2500u;
     while (GetTickCount64() < deadline && !user_menu_.sessionEnding() &&

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><link rel="icon" href="data:,"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="description" content="SAO Auto Lua 5.4 插件 API、ctx 方法、回调与使用示例。"><title>Lua 插件 API · SAO Auto</title><link rel="stylesheet" href="assets/style.css"><script src="assets/theme.js"></script></head>
+<body class="api-guide"><div class="progress-track" aria-hidden="true"><span class="progress-fill" id="progress-fill"></span></div><a class="skip-link" href="#overview">跳到正文</a><header class="site-header"><a class="brand" href="index.html#plugin-api" aria-label="返回用户指南"><span class="brand-mark" aria-hidden="true">SA</span><span class="brand-copy"><strong>SAO Auto</strong><small>插件 API</small></span></a><nav class="header-nav" aria-label="插件语言导航"><a href="index.html#plugin-api">总览</a><a href="plugin-api-reference.html">公共 API</a><a href="plugin-python.html">Python</a><a href="plugin-lua.html" aria-current="page">Lua</a><a href="plugin-emma.html">Emma</a><a href="plugin-angelscript.html">AngelScript</a><a href="plugin-csharp.html">C#</a></nav><div class="header-actions"><button type="button" class="guide-close" data-guide-close>关闭 <span aria-hidden="true">×</span></button><button type="button" id="theme-toggle" class="theme-switch" aria-label="切换深色模式"><svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M21 13.4A9 9 0 0 1 10.6 3 9 9 0 1 0 21 13.4Z"/></svg></button></div></header>
+<main class="manual-shell" id="manual"><aside class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">Lua API</p><ol><li><a href="#overview" data-target="overview"><span>01</span>语言与清单</a></li><li><a href="#context" data-target="context"><span>02</span>ctx 与回调</a></li><li><a href="#example" data-target="example"><span>03</span>插件示例</a></li><li><a href="#advanced" data-target="advanced"><span>04</span>引擎与模块</a></li><li><a href="#all-context" data-target="all-context"><span>05</span>全部 ctx 接口</a></li></ol></nav><div class="rail-tip"><span aria-hidden="true">⌂</span><p><strong>返回指南</strong><a href="index.html#plugin-api">浏览全部语言</a></p></div></aside><article class="manual-content">
+<section class="manual-section" id="overview"><header class="section-heading"><span class="section-number">01</span><div><p>LUA 5.4</p><h2>Lua 插件 API</h2></div></header><p class="section-intro">每个插件有独立 Lua 5.4 state；入口 <code>plugin.lua</code> 在受控模块环境中运行。普通 ctx 方法使用冒号调用，<code>ctx.ui</code> builder 使用点号。</p><pre><code>{"id":"my_lua_plugin","name":"Lua 示例","version":"1.0.0",
+ "language":"lua","entry":"plugin.lua","enabled":false,
+ "permissions":[]}</code></pre><p>定义 <code>on_load(ctx)</code>、<code>on_enable(ctx)</code>、<code>on_disable(ctx)</code>、<code>on_unload(ctx)</code>。停用与卸载时撤销保存的计时器及外部资源。清单还可声明 settings_schema、capabilities、locales；<code>require</code> 和 <code>ctx.engine</code> 分别受权限门控。</p></section>
+<section class="manual-section" id="context"><header class="section-heading"><span class="section-number">02</span><div><p>CONTEXT</p><h2>ctx 方法速查</h2></div></header><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>用途</th><th>调用</th></tr></thead><tbody><tr><td>日志和设置</td><td><code>ctx:log(msg)</code>、<code>ctx:set_defaults(table)</code>、<code>ctx:get_setting(key, default)</code>、<code>ctx:set_setting(key, value)</code></td></tr><tr><td>原生面板</td><td><code>ctx:register_ui_panel(id, meta, render, action)</code>、<code>ctx:open_window(id, w, h)</code>、<code>ctx:request_redraw(id, reason)</code>；<code>ctx.ui.panel/section/kv/row/button</code></td></tr><tr><td>Entity 菜单</td><td><code>ctx:register_menu_category(title, icon, builder, priority)</code>、<code>ctx:register_action_handler(handler)</code>；行可含 <code>id/action_id/label/command/keep_menu_open</code></td></tr><tr><td>通知 / 事件</td><td><code>ctx:notify(title, text, seconds)</code>、<code>ctx:subscribe(topic, cb)</code>、<code>ctx:emit(topic, payload)</code></td></tr><tr><td>定时 / 覆盖层</td><td><code>ctx:set_interval(fn, seconds)</code>、<code>ctx:set_timeout(fn, seconds)</code>、<code>ctx:clear_timer(token)</code>、<code>ctx:set_overlay(surface, spec)</code>、<code>ctx:clear_overlay(surface)</code></td></tr><tr><td>本地 helper</td><td><code>ctx:load_local("helpers/util.lua")</code>；成员通过返回的 module proxy 访问</td></tr></tbody></table></div></section>
+<section class="manual-section" id="example"><header class="section-heading"><span class="section-number">03</span><div><p>QUICK START</p><h2>面板 + 菜单 + 计时器</h2></div></header><pre><code>local ctx_ref, count, timer = nil, 0, ""
+local function stop_timer()
+  if timer ~= "" then ctx_ref:clear_timer(timer); timer = "" end
+end
+local function add()
+  count = count + 1
+  ctx_ref:request_redraw("demo", "count_changed")
+  return {ok = true}
+end
+function on_load(ctx)
+  ctx_ref = ctx
+  ctx:register_ui_panel("demo", {title = "Lua 示例"}, render_panel, on_action)
+  ctx:register_menu_category("Lua 示例", "L", function()
+    return {{id="open", action_id="demo.open", label="打开面板",
+      command=function() ctx:open_window("demo", 520, 360); return {ok=true} end}}
+  end, 40.0)
+  timer = ctx:set_interval(add, 2.0)
+end
+function render_panel(payload)
+  return ctx_ref.ui.panel("Lua 示例", {
+    ctx_ref.ui.section("状态", {ctx_ref.ui.kv("次数", tostring(count)),
+      ctx_ref.ui.button("增加", "add", "primary")})})
+end
+function on_action(action_id, payload)
+  if action_id == "add" then return add() end
+  return {ok = false}
+end
+function on_disable(ctx) stop_timer() end
+function on_unload(ctx) stop_timer(); ctx_ref = nil end</code></pre><p>活动完整示例：<code>plugins/example_lua_plugin/plugin.lua</code>。</p></section>
+<section class="manual-section" id="advanced"><header class="section-heading"><span class="section-number">04</span><div><p>ENGINE</p><h2>引擎与模块约束</h2></div></header><p>反射面要求清单 <code>permissions: ["engine_access"]</code>（或 <code>unsafe</code>）；<code>ctx.engine.list()</code> 查询目录，<code>ctx.engine.mem_read_u64(address)</code> 等命名调用按目录参数顺序，<code>ctx:engine_call("mem.read_u64", {address=address})</code> 走 raw 名称入口。<code>ctx.engine.on(channel, fn)</code> 注册回调；provider 不可用时原样上报错误。</p><p><code>require</code> 需同名权限；只从插件根内受控的 <code>engine/</code>、<code>libs/</code>、<code>vendor/</code> 等路径加载文本 Lua。跨语言 helper 只返回有界 JSON-compatible 值与函数代理。overlay 同 surface 更新事务替换，普通 ctx/action JSON 预算与专用 8 MiB overlay 文档预算不同。</p></section>
+<section class="manual-section" id="all-context"><header class="section-heading"><span class="section-number">05</span><div><p>FULL LUA SURFACE</p><h2>全部 Lua ctx 接口</h2></div></header><p>普通方法按 <code>ctx:method(...)</code> 调用（宿主兼容部分点号调用）；<code>ctx.ui.method(...)</code> 和 <code>ctx.engine.method(...)</code> 使用点号。<a href="plugin-api-reference.html#context">全宿主 ctx 对照</a>、<a href="plugin-api-reference.html#ui">全部 22 个 UI 构造器</a>、<a href="plugin-api-reference.html#engine">126 个反射条目</a>提供按序参数与结果字段。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>名称</th><th>入参、结果与用法</th></tr></thead><tbody>
+<tr><td><code>plugin_id, path, should_stop, ui, engine</code></td><td>只读属性/子表；未绑定的属性返回 nil。ui 是节点构造器表；engine 是命名反射函数表。</td></tr>
+<tr><td><code>log(msg)</code>、<code>time()</code></td><td>日志与 epoch 秒数。</td></tr>
+<tr><td><code>set_defaults(table)</code>、<code>get_setting(key,default)</code> / <code>setting(...)</code>、<code>set_setting(key,value)</code></td><td>缺省设置、读取与写入；setting 与 get_setting 同义。</td></tr>
+<tr><td><code>subscribe(topic,fn)</code>、<code>subscribe_once(topic,fn)</code>、<code>unsubscribe(token)</code></td><td>注册持续/一次性事件回调和取消；保留数值 token；回调接收事件 payload。</td></tr>
+<tr><td><code>emit(topic,payload)</code> / <code>publish(topic,payload)</code></td><td>发布事件；缺 payload 序列化为 null。</td></tr>
+<tr><td><code>get_snapshot()</code>、<code>snapshot_value(path,default)</code>、<code>recent_events(limit=64,topic="")</code></td><td>读当前状态、点路径值和事件数组；Lua 未注册根 <code>on()</code>，用 subscribe。</td></tr>
+<tr><td><code>register_ui_panel(id,meta,render,on_action)</code>、<code>request_redraw(surface,reason)</code></td><td>render(payload) 返回 UI builder 节点；on_action(action_id,payload) 返回动作结果。request_redraw 请求刷新。</td></tr>
+<tr><td><code>register_menu_category(name,icon,builder,priority)</code>、<code>register_menu_surface(id,descriptor,priority)</code>、<code>register_action_handler(fn)</code></td><td>原生 Entity/插件栏回调；菜单行包含 id、label、action_id，可有 command 回调、keep_menu_open。</td></tr>
+<tr><td><code>register_render_hook(surface,fn,priority)</code>、<code>unregister_render_hook(token)</code></td><td>渲染 hook 注册/注销，priority 缺省 0；按 plugin generation 维护回调。</td></tr>
+<tr><td><code>set_overlay(surface,spec)</code>、<code>clear_overlay(surface)</code></td><td>surface-keyed、代际所有权 overlay；spec 使用专用 8 MiB JSON 预算，替换失败保留旧帧。</td></tr>
+<tr><td><code>register_hotkey(id,callback,default_key,label)</code>、<code>unregister_hotkey(id)</code></td><td>快捷键注册与注销；清单必须具备宿主要求的 hotkey 权限。</td></tr>
+<tr><td><code>set_interval(callback,seconds)</code>、<code>set_timeout(callback,seconds)</code>、<code>clear_timer(token)</code></td><td>周期/单次定时器返回字符串 token，clear_timer 接收该字符串；秒数须为有限正数，停用时清理 token。</td></tr>
+<tr><td><code>notify(title,message,duration_s,kind)</code>、<code>toast(message)</code>、<code>dismiss_notify()</code></td><td>通知、短提示与撤销，duration 缺省 60 秒，kind 缺省 plugin。</td></tr>
+<tr><td><code>register_engine(name,engine)</code>、<code>get_engine(name)</code></td><td>插件内引擎注册和查找；需 <code>engine_access</code> 权限或宿主允许的 unsafe 权限。</td></tr>
+<tr><td><code>engine_call(name,args)</code>、<code>engine.list()</code>、<code>engine.on(channel,fn)</code>、<code>engine.&lt;group_method&gt;(...)</code></td><td>raw 分发、查询当前目录、注册回调、命名调用；<code>mem.read_u64</code> 映射为 <code>ctx.engine.mem_read_u64(address)</code>；需要 engine_access，provider 缺失抛 Lua error。</td></tr>
+<tr><td><code>open_file(filters,title,initial_dir,hwnd)</code>、<code>open_window(panel_id,width,height)</code></td><td>文件选择和打开面板；文件选择取消返回空值/空路径，先检查返回。</td></tr>
+<tr><td><code>load_local(path)</code>、<code>ensure_requirements(install)</code></td><td>根内 helper 与依赖报告；<code>require</code> 与 <code>load_local</code> 是两套入口，前者受 require 权限限制。</td></tr>
+<tr><td><code>create_compositor_layer(name,w,h,…)</code>、<code>upload_compositor_frame(name,bytes,w,h)</code>、<code>set_compositor_layer_position(name,x,y)</code>、<code>set_compositor_layer_visible(name,visible)</code>、<code>set_compositor_layer_input(name,…)</code>、<code>destroy_compositor_layer(name)</code></td><td>创建图层、上传帧、控制位置/显隐/输入和销毁；功能仍需 compositor provider。</td></tr>
+<tr><td><code>set_compositor_layer_mmf_source(name,mmf)</code>、<code>set_compositor_layer_shared_texture_source(name,handle,w,h)</code>、<code>compositor_gpu_interop_available()</code>、<code>compositor_layer_shared_texture_active(name)</code></td><td>共享帧源绑定与 GPU 能力/激活状态查询。</td></tr>
+</tbody></table></div></section>
+</article></main><script src="assets/scrollspy.js"></script></body></html>

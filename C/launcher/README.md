@@ -58,10 +58,48 @@ See
 
 ## Public bootstrap lifecycle
 
+The launcher registers one configurable global Entity-menu shortcut (Home by
+default); Insert is not registered. The shortcut reopens a hidden overlay and
+checks the menu state after Home: if the menu was already open in front while
+hidden, Home closes it, so the shortcut opens it again; an open menu behind a
+panel is raised by Home without an extra toggle. The About → User panel opens
+after the current input dispatch finishes. The existing tray icon and keybinding
+panel remain available.
+
+The Plugin Workshop panel fills the intersection of the overlay host and monitor
+work area using compositor-local coordinates on open and
+offers catalog browsing, detail, verified download without installation,
+installation/removal, and `.sao-plugin` publication via the native file picker.
+Publication and download exchange the active license token and HWID v3 for a
+server-derived per-user/per-device marker. The server validates the activation
+on each operation; updates to an existing plugin remain with its original
+publisher. The client checks the server's package ID, version, size, and
+SHA-256 acknowledgement. Catalog I/O stays on the owner-managed worker,
+while file selection remains on the UI thread.
+Independent review bound acknowledgement to the bytes streamed from the selected
+file and preserved UTF-8 download paths. Authenticated identity, download and
+publication use Schannel TLS to verify the server SPKI before sending credentials
+or package bytes; anonymous catalog and detail remain on WinHTTP. The post-change
+full Debug build passed; actual publication and live UI interaction remain
+unverified.
+The session-85 review added the configured client-version request header and a
+negotiated-confidentiality check. The subsequent full Debug build covered these
+edits; live upload and receipt framing remain unverified.
+
+The native plugin overlay provider reserves its session token before submitting an
+SDK replacement. A successful call fills that reservation with the SDK token; a
+failed call that returns a token retains a cleanup entry, and a zero-token failure
+removes the reservation. Exceptional exits also remove zero-token reservations or
+publish returned SDK tokens for cleanup. The loader transfers the surface key only
+after the SDK commit. The accepted headless compositor probe confirms distinct
+consecutive BGRA frames,
+failed-frame rollback, and no overlay layer after clear.
+
 Normal GUI exit first hides registered panels, the Entity/NerveGear surface and
 other native layers, without transferring their teardown ownership. The existing
 owner-thread exit pump then runs 900ms Link End followed by 650ms CRT line/dot
-shutdown before hiding the host and proceeding to resource teardown. Its cooperative
+shutdown before hiding the host and proceeding to resource teardown. When Link End
+opens successfully, the bundled `Dismiss.SAO.Launcher.wav` cue plays once. Its cooperative
 deadline is 2500ms; reduced motion remains 180ms. System shutdown, error, smoke,
 safe and operator paths retain their existing skip/cancel behavior.
 

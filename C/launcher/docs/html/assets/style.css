@@ -1873,6 +1873,37 @@ html.no-sc-cursor [data-detail]:hover { cursor: pointer; }
   .step-list, .interaction-board, .hotkey-table-wrap, .split-guide section, .ai-entry, .privacy-grid > div { box-shadow: none; }
 }
 
+.plugin-api-links, .api-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:12px; margin:20px 0 28px; }
+.plugin-api-links a, .api-grid > div { display:grid; gap:5px; padding:20px; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--surface-2); color:var(--ink); }
+.plugin-api-links a:hover { border-color:var(--accent); background:var(--accent-soft); color:var(--ink-strong); }
+.plugin-api-links strong, .api-grid h3 { color:var(--ink-strong); font-size:17px; margin:0; }
+.plugin-api-links span, .api-grid p { color:var(--muted); font-size:13px; margin:0; }
+.api-guide .site-header { grid-template-columns:auto minmax(0,1fr) auto; gap:24px; }
+.api-guide .header-nav { justify-content:center; gap:13px; }
+.api-guide .header-nav a[aria-current="page"] { color:var(--accent-strong); }
+.api-guide .header-nav a[aria-current="page"]::after { transform:scaleX(1); }
+.api-guide .manual-shell { padding-top:46px; }
+.api-guide .manual-section pre { max-width:100%; padding:18px; overflow:auto; border:1px solid var(--line); border-radius:var(--r-sm); background:var(--surface-2); line-height:1.6; font-size:13px; tab-size:4; }
+.api-guide .manual-section pre code { padding:0; border:0; background:none; color:var(--ink-strong); white-space:pre; }
+.api-guide .manual-section p { overflow-wrap:anywhere; }
+.api-guide.js .manual-section.reveal { opacity:1; transform:none; }
+.api-guide .hotkey-table { table-layout:fixed; }
+.api-guide .hotkey-table th:first-child { width:155px; }
+.api-guide .hotkey-table td { overflow-wrap:anywhere; }
+.api-guide .rail-tip a { text-decoration:underline; }
+@media (max-width:1050px) {
+  html:has(body.api-guide) { scroll-padding-top:140px; }
+  .api-guide .manual-section:focus { scroll-margin-top:140px; }
+  .api-guide .site-header { grid-template-columns:auto auto; }
+  .api-guide .header-nav { display:flex; grid-column:1 / -1; grid-row:2; justify-content:flex-start; overflow-x:auto; max-width:calc(100vw - 32px); }
+  .api-guide .header-nav a { padding:9px 0; white-space:nowrap; }
+  .api-guide .header-actions { grid-column:2; grid-row:1; }
+}
+@media (max-width:560px) {
+  .api-guide .hotkey-table th:first-child { width:95px; }
+  .api-guide .hotkey-table td, .api-guide .hotkey-table th { padding:10px; font-size:12px; }
+}
+
 
 
 /* The shipped skin keeps legacy selectors stable for the packaged interaction scripts. */

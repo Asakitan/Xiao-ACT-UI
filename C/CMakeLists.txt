@@ -313,6 +313,101 @@ if (SAO_BUILD_LAUNCHER)
     add_subdirectory(launcher)
 endif()
 
+set(SAO_WORKSPACE_PLUGIN_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins" CACHE PATH
+    "Curated workspace plugin packages staged beside native development builds")
+set(SAO_WORKSPACE_PLUGIN_PACKAGES
+    example_angelscript_plugin
+    example_csharp_plugin
+    example_emma_plugin
+    example_lua_plugin
+    goose_goose_duck
+    hide_seek_plugin
+    midi_piano_plugin
+    Razorworks
+    script_cutegirl_csharp
+    script_flappy_emma
+    script_snake_lua
+    script_world_clock_angelscript
+    star_resonance_plugin
+    wardogs)
+if (TARGET SaoAuto)
+    if (NOT IS_DIRECTORY "${SAO_WORKSPACE_PLUGIN_ROOT}")
+        message(FATAL_ERROR
+            "Curated workspace plugin root is missing: ${SAO_WORKSPACE_PLUGIN_ROOT}")
+    endif()
+    list(LENGTH SAO_WORKSPACE_PLUGIN_PACKAGES _sao_workspace_plugin_package_count)
+    set(_sao_workspace_plugin_packages_unique ${SAO_WORKSPACE_PLUGIN_PACKAGES})
+    list(REMOVE_DUPLICATES _sao_workspace_plugin_packages_unique)
+    list(LENGTH _sao_workspace_plugin_packages_unique
+        _sao_workspace_plugin_unique_package_count)
+    if (NOT _sao_workspace_plugin_package_count EQUAL 14 OR
+        NOT _sao_workspace_plugin_unique_package_count EQUAL 14)
+        message(FATAL_ERROR
+            "Curated workspace plugin list must contain exactly 14 unique packages")
+    endif()
+    set(_sao_workspace_plugin_stage_commands
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf
+            "$<TARGET_FILE_DIR:SaoAuto>/plugins"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_FILE_DIR:SaoAuto>/plugins")
+    set(_sao_workspace_plugin_stage_inputs)
+    set(_sao_workspace_plugin_stage_count 0)
+    foreach (_sao_workspace_plugin_package IN LISTS SAO_WORKSPACE_PLUGIN_PACKAGES)
+        set(_sao_workspace_plugin_source
+            "${SAO_WORKSPACE_PLUGIN_ROOT}/${_sao_workspace_plugin_package}")
+        if (NOT IS_DIRECTORY "${_sao_workspace_plugin_source}" OR
+            NOT EXISTS "${_sao_workspace_plugin_source}/plugin.json" OR
+            IS_DIRECTORY "${_sao_workspace_plugin_source}/plugin.json")
+            message(FATAL_ERROR
+                "Curated workspace plugin package is missing or has no plugin.json: "
+                "${_sao_workspace_plugin_source}")
+        endif()
+        math(EXPR _sao_workspace_plugin_stage_count
+            "${_sao_workspace_plugin_stage_count} + 1")
+        file(GLOB_RECURSE _sao_workspace_plugin_files
+            CONFIGURE_DEPENDS
+            LIST_DIRECTORIES false
+            RELATIVE "${_sao_workspace_plugin_source}"
+            "${_sao_workspace_plugin_source}/*")
+        foreach (_sao_workspace_plugin_file IN LISTS _sao_workspace_plugin_files)
+            string(TOLOWER "${_sao_workspace_plugin_file}"
+                _sao_workspace_plugin_file_lower)
+            if (_sao_workspace_plugin_file_lower MATCHES
+                    "(^|/)(__pycache__|obj|tools)(/|$)" OR
+                _sao_workspace_plugin_file_lower MATCHES "\\.(pyc|pyo|pdb)$" OR
+                (_sao_workspace_plugin_package STREQUAL "script_cutegirl_csharp" AND
+                 _sao_workspace_plugin_file_lower MATCHES "^(bin|refs)/"))
+                continue()
+            endif()
+            get_filename_component(_sao_workspace_plugin_parent
+                "${_sao_workspace_plugin_file}" DIRECTORY)
+            if (_sao_workspace_plugin_parent)
+                list(APPEND _sao_workspace_plugin_stage_commands
+                    COMMAND "${CMAKE_COMMAND}" -E make_directory
+                        "$<TARGET_FILE_DIR:SaoAuto>/plugins/${_sao_workspace_plugin_package}/${_sao_workspace_plugin_parent}")
+            endif()
+            list(APPEND _sao_workspace_plugin_stage_commands
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${_sao_workspace_plugin_source}/${_sao_workspace_plugin_file}"
+                    "$<TARGET_FILE_DIR:SaoAuto>/plugins/${_sao_workspace_plugin_package}/${_sao_workspace_plugin_file}")
+            list(APPEND _sao_workspace_plugin_stage_inputs
+                "${_sao_workspace_plugin_source}/${_sao_workspace_plugin_file}")
+        endforeach()
+    endforeach()
+    if (_sao_workspace_plugin_stage_count GREATER 0)
+        add_custom_target(sao_workspace_plugins_stage ALL
+            ${_sao_workspace_plugin_stage_commands}
+            DEPENDS ${_sao_workspace_plugin_stage_inputs}
+            COMMENT "Staging workspace plugin packages for native development runs"
+            VERBATIM)
+        add_dependencies(SaoAuto sao_workspace_plugins_stage)
+        if (TARGET SaoBootstrap)
+            add_dependencies(SaoBootstrap sao_workspace_plugins_stage)
+        endif()
+    endif()
+endif()
+
 set(SAO_LAUNCHER_PROVIDER_CONFIG_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/launcher/config/SaoAuto.provider.json")
 if (EXISTS "${SAO_LAUNCHER_PROVIDER_CONFIG_SOURCE}")
@@ -590,6 +685,12 @@ if (TARGET SaoAuto)
     set(_SAO_RELEASE_EXPECTED_FILES
         "bin/$<TARGET_FILE_NAME:${_SAO_RELEASE_ENTRY_TARGET}>"
         "bin/docs/html/index.html"
+        "bin/docs/html/plugin-api-reference.html"
+        "bin/docs/html/plugin-python.html"
+        "bin/docs/html/plugin-lua.html"
+        "bin/docs/html/plugin-emma.html"
+        "bin/docs/html/plugin-angelscript.html"
+        "bin/docs/html/plugin-csharp.html"
         "bin/docs/html/assets/style.css"
         "bin/docs/html/assets/fonts/SAOUI.ttf"
         "bin/docs/html/assets/fonts/ZhuZiAYuanJWD.ttf"

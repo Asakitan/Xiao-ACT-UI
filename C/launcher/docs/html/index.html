@@ -36,7 +36,7 @@
       <span class="brand-copy"><strong>SAO Auto</strong><small>用户指南</small></span>
     </a>
     <nav class="header-nav" aria-label="快速跳转">
-      <a href="#quick-start">快速开始</a><a href="#hotkeys">快捷键</a><a href="#cli">启动参数</a><a href="#faq">常见问题</a>
+      <a href="#quick-start">快速开始</a><a href="#hotkeys">快捷键</a><a href="#plugin-api">插件 API</a><a href="#cli">启动参数</a><a href="#faq">常见问题</a>
     </nav>
     <div class="header-actions">
       <button type="button" id="native-guide-close" class="guide-close" data-guide-close aria-label="关闭指南，返回 SAO Auto" title="关闭指南（Esc）">关闭 <span aria-hidden="true">×</span></button>
@@ -68,7 +68,7 @@
           <dl class="hero-meta">
             <div><dt>程序</dt><dd><code>SaoAuto.exe</code></dd></div>
             <div><dt>菜单</dt><dd><kbd>HOME</kbd> 开关</dd></div>
-            <div><dt>悬浮按钮</dt><dd><kbd>INSERT</kbd> 显隐</dd></div>
+            <div><dt>改键</dt><dd>托盘菜单 → 快捷键</dd></div>
           </dl>
         </div>
         <div class="hero-visual" aria-hidden="true">
@@ -96,6 +96,7 @@
             <li><a href="#tray-menu" data-target="tray-menu"><span>02</span>系统托盘菜单</a></li>
             <li><a href="#hotkeys" data-target="hotkeys"><span>03</span>全局快捷键</a></li>
             <li><a href="#panels-plugins" data-target="panels-plugins"><span>04</span>面板和插件</a></li>
+            <li><a href="#plugin-api" data-target="plugin-api"><span>API</span>插件开发 API</a></li>
             <li><a href="#ai-editor" data-target="ai-editor"><span>05</span>AI Editor</a></li>
             <li><a href="#gpu-hunt" data-target="gpu-hunt"><span>06</span>GPU Hunt</a></li>
             <li><a href="#cli" data-target="cli"><span>07</span>启动参数</a></li>
@@ -145,13 +146,12 @@
         <!-- 03 快捷键 -->
         <section class="manual-section" id="hotkeys" aria-labelledby="hotkeys-title">
           <header class="section-heading"><span class="section-number">03</span><div><p>HOTKEYS</p><h2 id="hotkeys-title">全局快捷键</h2></div></header>
-          <p class="section-intro">SAO Auto 启动时会注册下面两个全局快捷键，在任何程序里按都有效。需要修改的话，去托盘菜单 → "快捷键"。</p>
+          <p class="section-intro">SAO Auto 启动时会注册一个全局菜单快捷键，在任何程序里按都有效。需要修改的话，去托盘菜单 → "快捷键"。</p>
           <div class="hotkey-table-wrap">
             <table class="hotkey-table">
               <thead><tr><th scope="col">按键</th><th scope="col">动作</th><th scope="col">说明</th></tr></thead>
               <tbody>
                 <tr data-detail="h1"><td><kbd>HOME</kbd></td><td>开关主菜单</td><td>按一下打开，再按一下关闭</td></tr>
-                <tr data-detail="h2"><td><kbd>INSERT</kbd></td><td>隐藏 / 显示悬浮按钮</td><td>嫌按钮挡画面可以藏起来；部分显示模式下覆盖层会一起隐藏</td></tr>
               </tbody>
             </table>
           </div>
@@ -178,6 +178,20 @@
             </ul></section>
           </div>
           <div class="flow-strip" aria-label="推荐操作顺序"><span>打开菜单</span><i aria-hidden="true">→</i><span>启用插件</span><i aria-hidden="true">→</i><span>打开面板</span><i aria-hidden="true">→</i><span>按插件提示启动识别</span></div>
+        </section>
+
+        <section class="manual-section" id="plugin-api" aria-labelledby="plugin-api-title">
+          <header class="section-heading"><span class="section-number">API</span><div><p>PLUGIN DEVELOPMENT</p><h2 id="plugin-api-title">插件开发 API</h2></div></header>
+          <p class="section-intro">五种插件语言分别有独立的离线 API 文档，包含插件清单、生命周期、ctx 方法、面板和菜单回调、完整示例及运行时边界。选择语言进入对应手册：</p>
+          <nav class="plugin-api-links" aria-label="插件语言 API 文档">
+            <a href="plugin-api-reference.html"><strong>公共接口全集</strong><span>插件清单 · 22 个 UI 构造器 · 126 个引擎目录项</span></a>
+            <a href="plugin-python.html"><strong>Python</strong><span>pymini / CPython · 设置、UI、事件与引擎</span></a>
+            <a href="plugin-lua.html"><strong>Lua</strong><span>原生 Lua 5.4 · 回调、菜单与模块</span></a>
+            <a href="plugin-emma.html"><strong>Emma</strong><span>内置解释器 · 面板、计时器与画面</span></a>
+            <a href="plugin-angelscript.html"><strong>AngelScript</strong><span>强类型脚本 · PluginContext 与模块句柄</span></a>
+            <a href="plugin-csharp.html"><strong>C#</strong><span>csmini / CoreCLR · 静态 hook 与托管插件</span></a>
+          </nav>
+          <p>插件目录包含 <code>plugin.json</code> 与所选语言的入口文件，随后在插件管理页启用；实际可用能力由运行时和 provider 决定。五份手册共享本指南的导航、配色及阅读样式。</p>
         </section>
 
         <!-- 05 AI Editor -->
@@ -261,7 +275,7 @@
         <section class="manual-section" id="faq" aria-labelledby="faq-title">
           <header class="section-heading"><span class="section-number">08</span><div><p>TROUBLESHOOTING</p><h2 id="faq-title">常见问题</h2></div></header>
           <div class="faq-list">
-            <details><summary><span>悬浮按钮不见了</span><i aria-hidden="true">+</i></summary><p>先按 <kbd>INSERT</kbd> 把它显示出来，再按 <kbd>HOME</kbd> 试试菜单能不能开。还不行就右键托盘图标确认 SAO Auto 是否还在运行；已经退出的话重新启动。</p></details>
+            <details><summary><span>悬浮按钮不见了</span><i aria-hidden="true">+</i></summary><p>按默认的 <kbd>HOME</kbd> 菜单键重新显示覆盖层并打开菜单；改过键位时使用快捷键面板里显示的组合。还不行就右键托盘图标确认 SAO Auto 是否还在运行；已经退出的话重新启动。</p></details>
             <details><summary><span>按快捷键没反应</span><i aria-hidden="true">+</i></summary><p>常见原因是和其他软件的全局键冲突。右键托盘图标 → "快捷键"，录入新的组合后查看卡片状态；失败会显示冲突或保存回滚提示。</p></details>
             <details><summary><span>面板打开了但内容为空</span><i aria-hidden="true">+</i></summary><p>先确认对应插件已启用、当前场景符合插件的要求。部分插件有自己的"启动识别"按钮，按插件界面上的提示操作。</p></details>
             <details><summary><span>面板被游戏窗口挡住</span><i aria-hidden="true">+</i></summary><p>大多数面板自带置顶或透明选项。也可以按 <kbd>HOME</kbd> 关掉主菜单，或关掉暂时不用的覆盖层。</p></details>

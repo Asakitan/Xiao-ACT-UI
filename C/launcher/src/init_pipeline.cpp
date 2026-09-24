@@ -3846,10 +3846,11 @@ sao_status_t SAO_UI_CALL entity_action(SaoUiEntityAction action, void* user_data
         if (ctx == nullptr || ctx->user_menu == nullptr) {
             return SAO_STATUS_ERR_NOT_INITIALIZED;
         }
-        // Route through the same path as an empty command line: shows the
-        // launcher UserMenu panel (settings / hotkeys / guide / exit).
-        static_cast<sao::launcher::UserMenu*>(ctx->user_menu)->processCommandLine(L"", true);
-        return SAO_STATUS_OK;
+        return sao_ui_compositor_post_input(ctx->compositor, [](void* data) {
+            auto* owner = static_cast<sao_platform_ctx*>(data);
+            if (!owner->ui_exiting && owner->user_menu != nullptr)
+                static_cast<sao::launcher::UserMenu*>(owner->user_menu)->processCommandLine(L"", true);
+        }, ctx);
     }
     case SAO_UI_ENTITY_ACTION_TOGGLE_TOPMOST:
     case SAO_UI_ENTITY_ACTION_TOGGLE_STREAMING_MODE:
@@ -5241,13 +5242,20 @@ sao_status_t sao_platform_bringup_engines(const sao_platform_config* cfg, sao_pl
 #endif
     sao::launcher::hotkey::clear_callbacks();
     sao::launcher::hotkey::set_callback("toggle_sao_menu", [ctx] {
-        if (sao_ui_entity_shell_home(ctx->entity_shell) == SAO_STATUS_OK) {
-            (void)tick_shared_fisheye(ctx);
-            (void)sao_ui_compositor_tick(ctx->compositor);
+        SaoUiEntityShellSnapshot shell{};
+        sao_status_t status = sao_ui_entity_shell_get_snapshot(ctx->entity_shell, &shell);
+        const bool was_hidden = status == SAO_STATUS_OK && !shell.overlay_visible;
+        if (was_hidden)
+            status = sao_ui_entity_shell_insert(ctx->entity_shell);
+        if (status == SAO_STATUS_OK)
+            status = sao_ui_entity_shell_home(ctx->entity_shell);
+        if (status == SAO_STATUS_OK && was_hidden) {
+            SaoUiEntityShellSnapshot restored{};
+            status = sao_ui_entity_shell_get_snapshot(ctx->entity_shell, &restored);
+            if (status == SAO_STATUS_OK && !restored.menu_visible)
+                status = sao_ui_entity_shell_home(ctx->entity_shell);
         }
-    });
-    sao::launcher::hotkey::set_callback("toggle_float_button", [ctx] {
-        if (sao_ui_entity_shell_insert(ctx->entity_shell) == SAO_STATUS_OK) {
+        if (status == SAO_STATUS_OK) {
             (void)tick_shared_fisheye(ctx);
             (void)sao_ui_compositor_tick(ctx->compositor);
         }
@@ -6102,7 +6110,6 @@ sao_status_t sao_ui_bring_online(sao_platform_ctx* ctx) {
     }
     sao::launcher::hotkey::load_or_default({
         {"toggle_sao_menu", "Home", VK_HOME, MOD_NOREPEAT},
-        {"toggle_float_button", "Insert", VK_INSERT, MOD_NOREPEAT},
     });
     if (!sao::launcher::hotkey::register_all().empty()) {
 #if defined(SAO_LAUNCHER_ENTITY_PROVIDER_COMPOSITION)

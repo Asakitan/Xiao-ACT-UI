@@ -1055,7 +1055,11 @@ struct Host {
         case kOpenLicense:
             return host->open_license();
         case kOpenUserMenu:
-            return host->open_user_menu();
+            return sao_ui_compositor_post_input(host->compositor, [](void* data) {
+                auto* owner = static_cast<Host*>(data);
+                if (!owner->closing)
+                    (void)owner->open_user_menu();
+            }, host);
         case kOpenAboutGuide:
             return host->open_about_guide();
         case SAO_UI_ENTITY_ACTION_SET_ALL_LIGHT:
@@ -1679,16 +1683,24 @@ struct Host {
         require(sao_ui_entity_shell_bring_online(entity));
         sao::launcher::hotkey::clear_callbacks();
         sao::launcher::hotkey::set_callback("toggle_sao_menu", [this] {
-            if (sao_ui_entity_shell_home(entity) == SAO_STATUS_OK)
-                (void)sao_ui_compositor_tick(compositor);
-        });
-        sao::launcher::hotkey::set_callback("toggle_float_button", [this] {
-            if (sao_ui_entity_shell_insert(entity) == SAO_STATUS_OK)
+            SaoUiEntityShellSnapshot shell{};
+            sao_status_t status = sao_ui_entity_shell_get_snapshot(entity, &shell);
+            const bool was_hidden = status == SAO_STATUS_OK && !shell.overlay_visible;
+            if (was_hidden)
+                status = sao_ui_entity_shell_insert(entity);
+            if (status == SAO_STATUS_OK)
+                status = sao_ui_entity_shell_home(entity);
+            if (status == SAO_STATUS_OK && was_hidden) {
+                SaoUiEntityShellSnapshot restored{};
+                status = sao_ui_entity_shell_get_snapshot(entity, &restored);
+                if (status == SAO_STATUS_OK && !restored.menu_visible)
+                    status = sao_ui_entity_shell_home(entity);
+            }
+            if (status == SAO_STATUS_OK)
                 (void)sao_ui_compositor_tick(compositor);
         });
         sao::launcher::hotkey::load_or_default({
             {"toggle_sao_menu", "Home", VK_HOME, MOD_NOREPEAT},
-            {"toggle_float_button", "Insert", VK_INSERT, MOD_NOREPEAT},
         });
         if (config.frame_out.empty() && !config.intro_audition &&
             !sao::launcher::hotkey::register_all().empty())

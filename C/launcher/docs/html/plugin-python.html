@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <link rel="icon" href="data:,">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="description" content="SAO Auto Python 插件 API：pymini 与 CPython、生命周期、设置、面板、事件、引擎和使用示例。">
+  <title>Python 插件 API · SAO Auto</title><link rel="stylesheet" href="assets/style.css"><script src="assets/theme.js"></script>
+</head>
+<body class="api-guide">
+  <div class="progress-track" aria-hidden="true"><span class="progress-fill" id="progress-fill"></span></div>
+  <a class="skip-link" href="#overview">跳到正文</a>
+  <header class="site-header">
+    <a class="brand" href="index.html#plugin-api" aria-label="返回用户指南"><span class="brand-mark" aria-hidden="true">SA</span><span class="brand-copy"><strong>SAO Auto</strong><small>插件 API</small></span></a>
+    <nav class="header-nav" aria-label="插件语言导航"><a href="index.html#plugin-api">总览</a><a href="plugin-api-reference.html">公共 API</a><a href="plugin-python.html" aria-current="page">Python</a><a href="plugin-lua.html">Lua</a><a href="plugin-emma.html">Emma</a><a href="plugin-angelscript.html">AngelScript</a><a href="plugin-csharp.html">C#</a></nav>
+    <div class="header-actions"><button type="button" class="guide-close" data-guide-close>关闭 <span aria-hidden="true">×</span></button><button type="button" id="theme-toggle" class="theme-switch" aria-label="切换深色模式" title="切换浅色 / 深色模式"><svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M21 13.4A9 9 0 0 1 10.6 3 9 9 0 1 0 21 13.4Z"/></svg></button></div>
+  </header>
+  <main class="manual-shell" id="manual"><aside class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">Python API</p><ol>
+    <li><a href="#overview" data-target="overview"><span>01</span>运行模式</a></li><li><a href="#lifecycle" data-target="lifecycle"><span>02</span>生命周期与清单</a></li><li><a href="#context" data-target="context"><span>03</span>ctx 方法</a></li><li><a href="#example" data-target="example"><span>04</span>完整示例</a></li><li><a href="#advanced" data-target="advanced"><span>05</span>引擎与边界</a></li><li><a href="#all-context" data-target="all-context"><span>06</span>全部 ctx 接口</a></li>
+  </ol></nav><div class="rail-tip"><span aria-hidden="true">⌂</span><p><strong>返回指南</strong><a href="index.html#plugin-api">选择其他语言和安装说明</a></p></div></aside>
+  <article class="manual-content">
+    <section class="manual-section" id="overview"><header class="section-heading"><span class="section-number">01</span><div><p>PYTHON</p><h2>Python 插件 API</h2></div></header><p class="section-intro">同一种 <code>language: "python"</code>，两条执行路径：原生 C++ 子集 pymini 和隔离 CPython。以实际插件入口及 manifest 为准，不把子集当成完整 Python。</p><div class="api-grid"><div><h3>pymini</h3><p><code>py_runtime: "pymini"</code>；无需 Python DLL，支持已实现的同步语法和标准库子集。生成器为有界 eager 执行，async/await 不提供真正的异步调度。</p></div><div><h3>CPython</h3><p><code>py_runtime: "cpython"</code>；需要可用的 <code>plugins.python_home</code> 与 CPython 3.11+。适合第三方库及 pymini 不支持的语法；运行库按需初始化。</p></div></div><p><code>auto</code> 先无执行预检 pymini，明确不支持时才尝试 CPython；实际执行失败不会重新运行插件。</p></section>
+    <section class="manual-section" id="lifecycle"><header class="section-heading"><span class="section-number">02</span><div><p>PLUGIN PACKAGE</p><h2>清单与生命周期</h2></div></header><p>在 <code>plugins/&lt;id&gt;/</code> 放置 <code>plugin.json</code> 和入口文件；用户在插件管理中启用。可选 <code>permissions</code>、<code>capabilities</code>、<code>settings_schema</code>、<code>locales</code> 由清单声明；翻译元数据不会自动翻译脚本文字。</p><pre><code>{"id":"my_python_plugin","name":"Python 示例","version":"1.0.0",
+ "language":"python","entry":"plugin.py","py_runtime":"cpython",
+ "enabled":false,"permissions":[]}</code></pre><p>入口 hook 为 <code>on_load(ctx)</code>、<code>on_enable()</code>、<code>on_disable()</code>、<code>on_unload()</code>；在停用/卸载时清理自己保存的计时器、订阅和外部资源。宿主负责已注册回调的最终退役。</p></section>
+    <section class="manual-section" id="context"><header class="section-heading"><span class="section-number">03</span><div><p>CONTEXT</p><h2>ctx 方法速查</h2></div></header><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>用途</th><th>调用</th></tr></thead><tbody>
+      <tr><td>状态与设置</td><td><code>ctx.log(message)</code>、<code>ctx.set_defaults(dict)</code>、<code>ctx.get_setting(key, default)</code>、<code>ctx.set_setting(key, value)</code></td></tr>
+      <tr><td>面板与交互</td><td><code>ctx.register_ui_panel(id, metadata, render, on_action)</code>、<code>ctx.open_window(id, width, height)</code>、<code>ctx.request_redraw(id)</code>；回调返回 <code>ctx.ui.panel/section/row/kv/button</code> 构造的声明式节点</td></tr>
+      <tr><td>菜单与快捷键</td><td><code>ctx.register_menu_category(title, icon, builder, priority)</code>、<code>ctx.register_action_handler(callback)</code>、<code>ctx.register_hotkey(id, callback, key, label)</code></td></tr>
+      <tr><td>事件与通知</td><td><code>ctx.subscribe(topic, callback)</code>、<code>ctx.emit(topic, payload)</code>、<code>ctx.notify(title, message, duration_s)</code></td></tr>
+      <tr><td>计时与画面</td><td><code>ctx.set_interval(callback, seconds)</code>、<code>ctx.clear_timer(token)</code>、<code>ctx.set_overlay(surface, spec)</code>、<code>ctx.clear_overlay(surface)</code></td></tr>
+      <tr><td>模块与引擎</td><td><code>ctx.load_local(path)</code>、<code>ctx.engine_call(name, args)</code>；pymini 还提供 <code>ctx.engine.list()</code> / 目录命名调用</td></tr>
+    </tbody></table></div><p>回调及 ctx 都属于插件当前代，别在卸载后复用。Entity 菜单 builder 返回含 <code>id</code>、<code>action_id</code>、<code>label</code> 的行，<code>command</code> 可直接绑定回调。</p></section>
+    <section class="manual-section" id="example"><header class="section-heading"><span class="section-number">04</span><div><p>QUICK START</p><h2>面板 + 动作示例</h2></div></header><pre><code>_ctx = None
+count = 0
+
+def on_load(ctx):
+    global _ctx
+    _ctx = ctx
+    ctx.set_defaults({"greeting": "你好"})
+    ctx.register_ui_panel("demo", {"title": "Python 示例"}, render_panel, on_action)
+    ctx.register_menu_category("Python 示例", "P", lambda: [
+        {"id": "open", "action_id": "demo.open", "label": "打开面板",
+         "command": lambda: ctx.open_window("demo", 520, 360)}
+    ], 40.0)
+
+def render_panel(payload):
+    return _ctx.ui.panel("Python 示例", [
+        _ctx.ui.section("状态", [
+            _ctx.ui.kv("次数", str(count)),
+            _ctx.ui.button("增加", "add", "primary")])])
+
+def on_action(action_id, payload):
+    global count
+    if action_id == "add":
+        count += 1
+        _ctx.request_redraw("demo")
+        return {"ok": True}
+    return {"ok": False}
+
+def on_unload():
+    pass</code></pre><p>更完整的原生示例在源码 <code>sao_auto/C/plugins/examples/example_python_plugin/</code>；活动插件中可参考 <code>plugins/goose_goose_duck/</code> 与 <code>plugins/Razorworks/</code> 的不同运行模式。</p></section>
+    <section class="manual-section" id="advanced"><header class="section-heading"><span class="section-number">05</span><div><p>ENGINE &amp; LIMITS</p><h2>引擎与资源边界</h2></div></header><p>反射目录的 <a href="plugin-api-reference.html#engine">全部 126 项与顺序参数</a>包括 <code>mem.*</code>、<code>net.*</code>、<code>ui.*</code>、<code>gpu_hunt.*</code>、<code>vt.*</code> 和 config/event 组。pymini 的 <code>ctx.engine.list()</code> 可查询 available；CPython 不提供该目录列表或独立目录子对象，只能使用 <code>ctx.engine_call(name, args)</code>。二进制值使用 <code>*_b64</code>；provider 不可用时按状态处理。</p><p>CPython 的 <code>engine_call(name, args)</code> 成功返回解包的 result，status 非零抛异常，也不提供反射回调 facade；pymini 的 <code>ctx.engine</code> 包含 <code>get/call/require/register/list/on</code> 与各目录命名方法，<code>ctx.mem</code> 是 <code>mem.*</code> 别名。<code>set_overlay</code> 同 surface 替换在新帧提交前保留旧帧，<code>clear_overlay(surface)</code> 要指定 surface。反射 <code>mem.read</code> 单次原始长度不超过 6 MiB − 768 B，结果 JSON 限 8 MiB；大块数据分段读取。跨语言 <code>load_local</code> 只传有界 JSON 值与 callable，不传任意 Python 对象或 bytes。</p></section>
+    <section class="manual-section" id="all-context"><header class="section-heading"><span class="section-number">06</span><div><p>FULL SURFACE</p><h2>全部 Python ctx 接口</h2></div></header><p>标记 C = CPython、P = pymini；两条路径的同名 API 可有不同类型与错误处理。各接口的跨语言适用范围、22 个 <code>ctx.ui</code> 构造器及 126 个反射项在 <a href="plugin-api-reference.html#context">公共接口全集</a>。</p>
+    <div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>方法 / 属性</th><th>模式、签名与使用</th></tr></thead><tbody>
+      <tr><td><code>plugin_id, path, base_dir, web_path, assets_path, should_stop, owner</code></td><td>C：只读属性，另有 <code>get_plugin_id()</code>、<code>get_base_dir()</code>；<code>owner</code> 可写 namespace，<code>should_stop</code> 是只读停止状态。P：除 base_dir 外的路径/身份属性，should_stop 是可调用查询，owner 为 ID。</td></tr>
+      <tr><td><code>ui, engine, mem, event_bus</code></td><td>C：ui 提供全部 22 builder；engine 为 ctx 自身，mem 为空字典，无 event_bus。P：ui、engine、mem、event_bus 子对象分别提供 UI builder、引擎目录、内存目录别名和事件快捷方法。</td></tr>
+      <tr><td><code>log(message,level)</code>、<code>log_info/warn/error(message)</code>、<code>time()</code></td><td>C：以上均有；P：log(message) 与 time()。time 为 epoch 秒数。</td></tr>
+      <tr><td><code>set_defaults(dict)</code>、<code>get_setting(key,default)</code>、<code>set_setting(key,value)</code>、<code>setting(key,default)</code></td><td>C/P：默认设置、读取、写入；P 的 setting 为读取别名。C 的原生 typed 设置只接受 bool/int/finite float/string。</td></tr>
+      <tr><td><code>subscribe(topic,callback)</code>、<code>unsubscribe(token)</code>、<code>emit(topic,payload)</code> / <code>publish(topic,payload)</code></td><td>C/P：订阅、取消、发送。C 的 subscribe 返 <code>event_N</code> token，事件 callback 收 payload；C 有 publish/emit 别名。P 的 callback 通常收 topic + payload。</td></tr>
+      <tr><td><code>subscribe_once(topic,callback)</code>、<code>on(topic,callback)</code>、<code>on_damage/on_heal/on_skill/on_boss/on_snapshot/on_encounter_finalized(callback)</code></td><td>仅 P：一次性订阅及固定 topic 快捷入口，返回可注销订阅 token。C 未注册这些名称。</td></tr>
+      <tr><td><code>get_snapshot()</code>、<code>snapshot_value(path,default)</code>、<code>recent_events(limit=20,topic="")</code></td><td>仅 P：读取状态快照、嵌套值和最近事件；C 根对象未注册。</td></tr>
+      <tr><td><code>register_ui_panel(id,meta,render,on_action)</code>、<code>request_redraw(id,reason)</code>、<code>open_window(id,w,h)</code></td><td>C/P：注册面板后 render(payload) 返回声明式节点，action(action_id,payload) 返回结果；C 的 open_window 返回 <code>{ok,status,panel_id}</code>，不是 bool。</td></tr>
+      <tr><td><code>register_menu_category(name,icon,builder,priority)</code>、<code>register_menu_surface(id,descriptor,priority)</code>、<code>register_action_handler(callback)</code></td><td>C/P：Entity 菜单 builder、菜单 surface 与动作回调；builder 返回行列表，command 或 handler 执行实际动作，需处理 stale/disabled 状态。</td></tr>
+      <tr><td><code>add_hotkey(id,cb,key,label)</code> / <code>register_hotkey(...)</code>、<code>unregister_hotkey(id)</code></td><td>C：add_hotkey 与 register_hotkey 是别名，未提供独立注销方法；P：注册及注销均有。保存自己的 callback/token。</td></tr>
+      <tr><td><code>set_interval(cb,seconds)</code>、<code>set_timeout(cb,seconds)</code>、<code>clear_timer(token)</code>、<code>complete_timer(token)</code></td><td>C/P：周期、一次性注册及取消；complete_timer 仅 P，停用时清理自己的 timer token。</td></tr>
+      <tr><td><code>notify(title,message,duration_s,kind)</code>、<code>toast(message)</code>、<code>dismiss_notify()</code></td><td>C/P：通知、短提示与撤销；C notify 默认 duration_s=60、kind=plugin。</td></tr>
+      <tr><td><code>set_overlay(surface,spec)</code>、<code>clear_overlay(surface)</code></td><td>C/P：surface 所有权归插件当前代；专用 8 MiB JSON 预算，明确给出 surface。</td></tr>
+      <tr><td><code>load_local(path)</code>、<code>ensure_requirements(install=True)</code></td><td>C/P：插件根内 helper 与需求查询；C 的 install 入参忽略，.py 返回模块；跨语言 helper 仅允许有界 JSON-compatible 值/callable。</td></tr>
+      <tr><td><code>get_engine(name)</code> / <code>get(name)</code>、<code>register_engine(name,engine)</code> / <code>register(name,engine)</code>、<code>get_engine_method(name,method,fallback)</code>、<code>set_owner_attr(name,value)</code>、<code>owner_attr(name)</code></td><td>仅 C：插件局部 EngineAccess 兼容入口；它不是 126 反射函数目录。P 使用 <code>ctx.engine.get/call/require/register</code> 或根方法 <code>get_engine/require_engine/call_engine/register_engine</code>。</td></tr>
+      <tr><td><code>engine_call(name,args,callback_channel)</code></td><td>C/P：raw 反射调用；C 必须传 object args，成功返回 result，回调型槽无通用 callback facade；P 同时有 engine.list/on 与命名方法。</td></tr>
+      <tr><td><code>register_render_hook(surface,callback,priority)</code>、<code>unregister_render_hook(token)</code>、<code>register_data_source(id,meta,start,stop)</code></td><td>仅 P：渲染 hook 与带生命周期 callback 的数据源；C 根对象未绑定。</td></tr>
+      <tr><td><code>register_parser_adapter/register_exporter/register_formatter/register_trigger_type/register_report_view/register_timer(id,metadata)</code></td><td>仅 P：六类扩展描述符注册；C 根对象未绑定。</td></tr>
+      <tr><td><code>open_file(filters,title)</code>、<code>run_on_ui(callback)</code>、<code>register_thread(callback)</code>、<code>call_runtime(...)</code>、<code>open(...)</code></td><td>仅 P：文件选择与有限 UI 调用；register_thread/call_runtime 是 no-op 兼容项，不表示完整 Python 线程/动态执行。</td></tr>
+      <tr><td><code>create_compositor_layer(name,w,h,…)</code>、<code>upload_compositor_frame(name,bytes,w,h)</code>、<code>set_compositor_layer_position/visible/input(...)</code>、<code>destroy_compositor_layer(name)</code></td><td>仅 P：图层管理，真实显示仍由 compositor provider 负责。</td></tr>
+      <tr><td><code>set_compositor_layer_mmf_source(name,mmf)</code>、<code>set_compositor_layer_shared_texture_source(name,handle,w,h)</code>、<code>compositor_gpu_interop_available()</code>、<code>compositor_layer_shared_texture_active(name)</code></td><td>C/P：查询或绑定共享帧源；C 根对象只注册这一组，不提供上一行的图层创建等接口。</td></tr>
+      <tr><td><code>compositor_display_refresh_hz()</code></td><td>仅 P：查询子集宿主的显示刷新率。</td></tr>
+    </tbody></table></div></section>
+  </article></main><script src="assets/scrollspy.js"></script>
+</body></html>

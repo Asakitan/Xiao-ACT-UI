@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><link rel="icon" href="data:,"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="description" content="SAO Auto AngelScript 插件 API、类型句柄、面板与菜单示例。"><title>AngelScript 插件 API · SAO Auto</title><link rel="stylesheet" href="assets/style.css"><script src="assets/theme.js"></script></head>
+<body class="api-guide"><div class="progress-track" aria-hidden="true"><span class="progress-fill" id="progress-fill"></span></div><a class="skip-link" href="#overview">跳到正文</a><header class="site-header"><a class="brand" href="index.html#plugin-api" aria-label="返回用户指南"><span class="brand-mark" aria-hidden="true">SA</span><span class="brand-copy"><strong>SAO Auto</strong><small>插件 API</small></span></a><nav class="header-nav" aria-label="插件语言导航"><a href="index.html#plugin-api">总览</a><a href="plugin-api-reference.html">公共 API</a><a href="plugin-python.html">Python</a><a href="plugin-lua.html">Lua</a><a href="plugin-emma.html">Emma</a><a href="plugin-angelscript.html" aria-current="page">AngelScript</a><a href="plugin-csharp.html">C#</a></nav><div class="header-actions"><button type="button" class="guide-close" data-guide-close>关闭 <span aria-hidden="true">×</span></button><button type="button" id="theme-toggle" class="theme-switch" aria-label="切换深色模式"><svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M21 13.4A9 9 0 0 1 10.6 3 9 9 0 0 1 21 13.4Z"/></svg></button></div></header>
+<main class="manual-shell" id="manual"><aside class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">AngelScript API</p><ol><li><a href="#overview" data-target="overview"><span>01</span>语言与清单</a></li><li><a href="#context" data-target="context"><span>02</span>ctx 方法</a></li><li><a href="#example" data-target="example"><span>03</span>插件示例</a></li><li><a href="#advanced" data-target="advanced"><span>04</span>模块与边界</a></li><li><a href="#all-context" data-target="all-context"><span>05</span>全部 ctx 接口</a></li></ol></nav><div class="rail-tip"><span aria-hidden="true">⌂</span><p><strong>返回指南</strong><a href="index.html#plugin-api">浏览全部语言</a></p></div></aside><article class="manual-content">
+<section class="manual-section" id="overview"><header class="section-heading"><span class="section-number">01</span><div><p>ANGELSCRIPT</p><h2>AngelScript 插件 API</h2></div></header><p class="section-intro">原生 AngelScript 编译器和强类型 <code>PluginContext@</code>；句柄用 <code>@</code>，传回 UI 的数据常用 <code>dictionary@</code> 和 <code>array&lt;dictionary@&gt;</code>。</p><pre><code>{"id":"my_as_plugin","name":"AS 示例","version":"1.0.0",
+ "language":"angelscript","entry":"plugin.as","enabled":false,
+ "permissions":[]}</code></pre><p>入口 <code>void on_load(PluginContext@ c)</code> 把 ctx 保存为全局 handle；<code>on_enable()</code>、<code>on_disable()</code>、<code>on_unload()</code> 是可选 hook。<code>on_unload()</code> 清理自建资源并把持有的 ctx handle 置空。</p></section>
+<section class="manual-section" id="context"><header class="section-heading"><span class="section-number">02</span><div><p>CONTEXT</p><h2>ctx 方法速查</h2></div></header><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>用途</th><th>调用</th></tr></thead><tbody><tr><td>日志 / 设置</td><td><code>ctx.log(msg)</code>、<code>ctx.log_info(msg)</code>、<code>ctx.time()</code> 由 generic bindings 注册；设置为 <code>ctx.set_defaults(dictionary)</code>、<code>ctx.get_setting(key, fallback)</code>、<code>ctx.set_setting(key, value)</code>。</td></tr><tr><td>面板</td><td><code>ctx.register_ui_panel(id, metadata, @render, @action)</code>、<code>ctx.open_window(id, width, height)</code>、<code>ctx.request_redraw(id, reason)</code></td></tr><tr><td>UI builder</td><td><code>ctx.ui.panel/section/row/kv/button</code>；children 使用 <code>array&lt;dictionary@&gt;</code></td></tr><tr><td>菜单 / 通知</td><td><code>ctx.register_menu_category(title, icon, @builder, priority)</code>、<code>ctx.register_action_handler(@handler)</code>、<code>ctx.register_hotkey(…)</code>、<code>ctx.notify(title, text, seconds)</code></td></tr><tr><td>定时 / 覆盖层</td><td><code>ctx.set_interval(…)</code>、<code>ctx.clear_timer(token)</code>、<code>ctx.set_overlay(surface, spec)</code>、<code>ctx.clear_overlay(surface)</code></td></tr><tr><td>模块 / 引擎</td><td><code>ctx.load_local(path)</code>、<code>ctx.engine_call(name, args_json)</code>（JSON 字符串）、<code>ctx.engine_list()</code></td></tr></tbody></table></div><p>逐项签名及宿主差异见 <a href="plugin-api-reference.html#context">ctx 接口全集</a>；反射函数与参数见 <a href="plugin-api-reference.html#engine">引擎目录</a>。</p></section>
+<section class="manual-section" id="example"><header class="section-heading"><span class="section-number">03</span><div><p>QUICK START</p><h2>面板 + 菜单示例</h2></div></header><pre><code>PluginContext@ ctx;
+int count = 0;
+void open_panel() { ctx.open_window("demo", 520, 360); }
+array&lt;dictionary@&gt;@ build_menu() {
+    dictionary@ item = {"id": "open", "action_id": "demo.open",
+        "label": "打开面板", "command": @open_panel};
+    return {item};
+}
+void on_load(PluginContext@ c) {
+    @ctx = c;
+    dictionary meta;
+    meta["title"] = "AngelScript 示例";
+    ctx.register_ui_panel("demo", meta, @render_panel, @on_action);
+    ctx.register_menu_category("AS 示例", "AS", @build_menu, 40.0);
+}
+dictionary@ render_panel(dictionary@ payload) {
+    array&lt;dictionary@&gt; children = {
+        ctx.ui.kv("次数", tostring(count)),
+        ctx.ui.button("增加", "add", "primary")};
+    array&lt;dictionary@&gt; sections = {ctx.ui.section("状态", children)};
+    return ctx.ui.panel("AS 示例", sections);
+}
+dictionary@ on_action(string action_id, dictionary@ payload) {
+    if (action_id == "add") {
+        count += 1;
+        ctx.request_redraw("demo", "count_changed");
+        return {"ok": true};
+    }
+    return {"ok": false};
+}
+void on_unload() { @ctx = null; }</code></pre><p>完整的状态、菜单与热键参考：<code>plugins/example_angelscript_plugin/plugin.as</code>。</p></section>
+<section class="manual-section" id="advanced"><header class="section-heading"><span class="section-number">04</span><div><p>HELPERS &amp; ENGINE</p><h2>模块与边界</h2></div></header><p>脚本按 section 直接编译，<code>#include</code> 不执行源码预处理；用 <code>ctx.load_local("helpers/x.as")</code> 加载同插件根内 helper。<code>LocalModule</code> 的 <code>get/call</code> 返回 <code>json@</code>，取标量前检查真实 JSON 类型。不同 helper 独立物理模块，不共享全局值。</p><p><code>ctx.engine_call("mem.read_u64", "{\"address\":4096}")</code> 的第二参数为 JSON 字符串，返回 envelope JSON 字符串，调用方须解析并检查 status；<code>ctx.engine_list()</code> 返回目录 JSON 字符串。宿主另提供 <code>sao_engine</code> typed/raw 包装。回调、参数类型与可用性以目录/当前 provider 为准。</p></section>
+<section class="manual-section" id="all-context"><header class="section-heading"><span class="section-number">05</span><div><p>FULL TYPED SURFACE</p><h2>全部 AngelScript ctx 接口</h2></div></header><p>公开面由 <code>as_generic_bindings.cpp</code> 和 <code>as_ctx_surface.cpp</code> 共同注册；<code>?&amp;in</code> 是动态输入，函数 handle 用 <code>@fn</code>。基础层提供 <code>ctx.log(string)</code>、<code>ctx.log_info(string)</code>、<code>ctx.plugin_id</code>、<code>ctx.should_stop</code> 和 <code>ctx.time()</code>。UI 构造器及 126 项反射参数分别见 <a href="plugin-api-reference.html#ui">UI</a>、<a href="plugin-api-reference.html#engine">引擎目录</a>。</p><div class="hotkey-table-wrap"><table class="hotkey-table"><thead><tr><th>成员</th><th>签名、返回与使用</th></tr></thead><tbody>
+<tr><td><code>path,assets_path,web_path,engine,event_bus,ui,mem,owner</code></td><td>get_* 只读属性；engine/event_bus 返回 ctx handle，ui 返回 UiBuilder@，mem 返回 MemAccess@，owner 需要 dictionary addon。</td></tr>
+<tr><td><code>subscribe(topic,callback)</code>、<code>subscribe_once(topic,callback)</code>、<code>on(topic,callback)</code>、<code>unsubscribe(int64 token)</code></td><td>前三者返回 int64 token，取消返回 bool；回调经当前 plugin ctx 代际保活。</td></tr>
+<tr><td><code>on_damage/on_heal/on_skill/on_boss/on_snapshot/on_encounter_finalized(callback)</code></td><td>固定事件快捷订阅，返回 int64 token；on_snapshot 对应 act_snapshot。</td></tr>
+<tr><td><code>emit(topic,payload=null)</code>、<code>get_snapshot()</code>、<code>snapshot_value(path,default=null)</code>、<code>recent_events(limit=20,topic="")</code></td><td>发布事件、读取状态和事件列表；返回 bool/dictionary@/json@/array&lt;dictionary&gt;，部分依赖 JSON/array/dictionary addon。</td></tr>
+<tr><td><code>get_setting(key,default=null)</code> / <code>setting(...)</code>、<code>set_setting(key,value)</code>、<code>set_defaults(defaults)</code></td><td>设置读返回 json@、写/默认值返回 bool；<code>set_defaults(dictionary@)</code> 另有重载。</td></tr>
+<tr><td><code>register_ui_panel(id,metadata,render,on_action)</code>、<code>request_redraw(surface="",reason="")</code></td><td>面板 callback 与重绘返回 bool；render 应返回 dictionary@，action 接收 action_id/payload 并返回动作结果。</td></tr>
+<tr><td><code>register_menu_category(name,icon,builder,priority=0)</code>、<code>register_menu_surface(id,descriptor,priority=0)</code>、<code>register_action_handler(handler)</code></td><td>Entity 菜单及 action 回调注册均返回 bool，builder 通常返回 array&lt;dictionary@&gt;@。</td></tr>
+<tr><td><code>register_render_hook(surface,callback,priority=0)</code>、<code>unregister_render_hook(token)</code></td><td>返回 int64 hook token / bool；回调按宿主能力调用。</td></tr>
+<tr><td><code>set_overlay(surface,spec)</code>、<code>clear_overlay(surface)</code></td><td>返回 bool；clear 虽声明 surface=""，实际非空键才会清除。</td></tr>
+<tr><td><code>register_hotkey(id,callback,default_key="",label="")</code>、<code>unregister_hotkey(id)</code></td><td>绑定/注销热键，返回 bool。</td></tr>
+<tr><td><code>register_parser_adapter/register_exporter/register_formatter/register_trigger_type/register_report_view/register_timer(id,metadata=null)</code></td><td>六种扩展描述符，返回 bool；与真实周期 timer callback 分开。</td></tr>
+<tr><td><code>register_data_source(id,metadata,start,stop)</code></td><td>注册启停回调；start 或 stop 至少一个 callable，成功返回 bool。</td></tr>
+<tr><td><code>register_engine(name,engine)</code>、<code>get_engine(name,?&amp;out engine)</code>、<code>require_engine(name,?&amp;out engine)</code></td><td>插件内引擎句柄注册/取回，返回 bool 并写 out；并非反射 <code>engine_call</code> 的替身。</td></tr>
+<tr><td><code>set_interval(callback,seconds)</code>、<code>set_timeout(callback,seconds)</code>、<code>clear_timer(token)</code></td><td>前两者返回 string token，clear 返回 bool；seconds 必须大于零。</td></tr>
+<tr><td><code>notify(title,message,duration_s=60,kind="plugin")</code>、<code>toast(message)</code>、<code>dismiss_notify()</code></td><td>显示/撤销消息，返回 bool。</td></tr>
+<tr><td><code>open_file(filters=null,title="",initial_dir="",hwnd=0)</code>、<code>open_window(panel_id,width,height)</code></td><td>文件选择返回路径字符串（取消为空），打开已注册面板返回 bool。</td></tr>
+<tr><td><code>load_local(path)</code>、<code>load_local_path(path)</code>、<code>ensure_requirements(install=true)</code></td><td>返回 LocalModule@、绝对路径、json@；无源码级 include，helper 路径受插件根约束。</td></tr>
+<tr><td><code>create_compositor_layer(name,w,h,x=0,y=0,z=140,click_through=true,high_fps=false,target_fps=0)</code></td><td>返回 bool；创建后可上传帧或绑定共享源。</td></tr>
+<tr><td><code>upload_compositor_frame(name,array&lt;uint8&gt;@ bytes,w,h)</code>、<code>set_compositor_layer_position(name,x,y)</code>、<code>set_compositor_layer_visible(name,visible)</code>、<code>destroy_compositor_layer(name)</code></td><td>图层帧与生命周期操作，返回 bool。</td></tr>
+<tr><td><code>set_compositor_layer_input(name,cursor_pos,mouse_button,cursor_leave,scroll)</code></td><td>设置图层输入回调；对应参数均可省略为 null，返回 bool。</td></tr>
+<tr><td><code>set_compositor_layer_mmf_source(name,mmf)</code>、<code>set_compositor_layer_shared_texture_source(name,handle,w,h)</code>、<code>compositor_gpu_interop_available()</code>、<code>compositor_layer_shared_texture_active(name)</code></td><td>绑定来源和查询能力/激活状态，返回 bool。</td></tr>
+<tr><td><code>engine_call(name,args_json)</code>、<code>engine_list()</code>、<code>engine_on(channel,callback)</code>、<code>engine_off(channel)</code></td><td>前两者接收/返回 JSON 字符串；on/off 管理通用反射回调；另有生成的 <code>sao_engine</code> 命名 wrapper。</td></tr>
+<tr><td><code>ctx.mem.attach/detach/module_base/read_u32/read_u64/read/read_ptr_chain/enumerate_modules</code></td><td>MemAccess@ 独立 typed 读 facade，需对应 array/dictionary addon；反射 <code>mem.*</code> 是另一条路径。</td></tr>
+</tbody></table></div><p>生成的 <code>sao_engine</code> namespace 接收显式 ctx；raw 返回 JSON envelope 字符串，可用宿主 JSON addon 解析并核对内层状态：</p><pre><code>string catalog = sao_engine.list(ctx);
+string raw = sao_engine.call_raw(ctx, "mem.read_u64", "{\"address\":4096}");
+json@ reply = json_parse(raw);
+if (reply is null || !reply.contains("status") || reply.get_int("status", -1) != 0)
+    return;
+</code></pre></section>
+</article></main><script src="assets/scrollspy.js"></script></body></html>

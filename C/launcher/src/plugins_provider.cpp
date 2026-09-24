@@ -2275,6 +2275,8 @@ int32_t clearPlatformOverlayInternal(LauncherPlatformSession& session,
         if (found == session.overlays.end())
             return SAO_ERR_HANDLE_INVALID;
         sdk_token = found->second->sdk_token;
+        if (sdk_token == 0)
+            return loader::SAO_PLUGINS_ERR_BUSY;
     }
     const int32_t status =
         mapSdkStatus(sao_sdk_overlay_clear(&session.sdk_context, sdk_token));
@@ -2296,40 +2298,52 @@ setPlatformOverlay(void*, loader::plugin_context_platform_session_t provider_ses
         spec_json_utf8 == nullptr || out_provider_token == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
     }
+    uint64_t provider_token = 0;
+    sao_sdk_overlay_token_t sdk_token = 0;
     try {
+        auto entry = std::make_shared<LauncherPlatformOverlay>();
         {
             std::lock_guard lock(session->mutex);
             if (!session->accepting_callbacks || !session->sdk_ready)
                 return loader::SAO_PLUGINS_ERR_BUSY;
+            provider_token = nextPlatformTokenLocked(*session);
+            const auto [_, inserted] = session->overlays.emplace(provider_token, entry);
+            if (!inserted)
+                return SAO_ERR_OS_CALL_FAILED;
         }
         SaoSdkOverlaySpec spec{};
         spec.surface_id_utf8 = surface_utf8;
         spec.spec_json_utf8 = reinterpret_cast<const uint8_t*>(spec_json_utf8);
         spec.spec_len = std::strlen(spec_json_utf8);
-        sao_sdk_overlay_token_t sdk_token = 0;
         const int32_t status = mapSdkStatus(
             sao_sdk_overlay_set(&session->sdk_context, &spec, &sdk_token));
-        if (status != SAO_OK)
-            return status;
-        auto entry = std::make_shared<LauncherPlatformOverlay>();
-        entry->sdk_token = sdk_token;
-        uint64_t provider_token = 0;
         {
             std::lock_guard lock(session->mutex);
-            if (session->accepting_callbacks) {
-                provider_token = nextPlatformTokenLocked(*session);
-                const auto [_, inserted] = session->overlays.emplace(provider_token, entry);
-                if (!inserted)
-                    provider_token = 0;
+            if (sdk_token == 0)
+                session->overlays.erase(provider_token);
+            else
+                entry->sdk_token = sdk_token;
+        }
+        if (sdk_token != 0)
+            *out_provider_token = provider_token;
+        return status != SAO_OK ? status
+                                : (sdk_token != 0 ? SAO_OK : SAO_ERR_HANDLE_INVALID);
+    } catch (...) {
+        if (provider_token != 0) {
+            try {
+                std::lock_guard lock(session->mutex);
+                if (const auto found = session->overlays.find(provider_token);
+                    found != session->overlays.end()) {
+                    if (sdk_token == 0)
+                        session->overlays.erase(found);
+                    else {
+                        found->second->sdk_token = sdk_token;
+                        *out_provider_token = provider_token;
+                    }
+                }
+            } catch (...) {
             }
         }
-        if (provider_token == 0) {
-            (void)sao_sdk_overlay_clear(&session->sdk_context, sdk_token);
-            return loader::SAO_PLUGINS_ERR_BUSY;
-        }
-        *out_provider_token = provider_token;
-        return SAO_OK;
-    } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
 }

@@ -110,7 +110,19 @@ std::wstring file_uri(const wchar_t* path) {
 bool same_document(const GuideState& state, const wchar_t* uri) noexcept {
     if (!uri) return false;
     const std::wstring_view value(uri);
-    return value.substr(0, value.find(L'#')) == state.url;
+    const auto page = value.substr(0, value.find(L'#'));
+    if (page == state.url) return true;
+    const auto end = state.url.find_last_of(L'/');
+    if (end == std::wstring::npos || page.substr(0, end + 1) !=
+        std::wstring_view(state.url).substr(0, end + 1)) return false;
+    const auto filename = page.substr(end + 1);
+    constexpr std::wstring_view pages[]{L"plugin-api-reference.html",
+        L"plugin-python.html", L"plugin-lua.html",
+        L"plugin-emma.html", L"plugin-angelscript.html", L"plugin-csharp.html"};
+    for (const auto name : pages) {
+        if (filename == name) return true;
+    }
+    return false;
 }
 
 std::wstring profile_path(bool temporary) {
