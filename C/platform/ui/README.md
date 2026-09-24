@@ -11,7 +11,10 @@ Entity keyboard navigation has root/child focus, skips disabled rows and scrolls
 past the eight visible child slots. Enter/Space use the shared pointer action path;
 Left/Escape return to roots before full close. Publication changes and cancellation
 retire old child focus. Production routing respects focused widgets/panels, guides,
-modifiers and global Home/Insert; no motion timing changed.
+modifiers and the single configurable menu key (Home by default); no motion timing changed.
+The launcher and preview restore a hidden overlay before dispatching Home; they
+check the resulting menu snapshot and reopen it if Home closed an already-open
+front menu, while a menu behind a panel is raised once.
 
 UI ABI1.20 consumes the first reserved byte of the56-byte plugin-tab descriptor for
 Unknown0/Active1/Disabled2. Remaining reserved bytes stay zero and all prefix offsets
@@ -128,6 +131,30 @@ Post-review Debug rebuild and the same probes passed; Hardened acceptance passed
 with 22 PEs and 76 exact files, and the authenticated shipped bundle was refreshed.
 Full product/DPI/external-engine acceptance remains separate from this preview.
 
+Session-83 extends the SDK overlay document path from one selected drawable to the full
+ordered `nodes` composition and raises only that path to 8 MiB, allowing Pillow base64
+RGBA frames plus background/canvas layers. The parser paints the complete panel into a
+transparent union-relative candidate bitmap before compositor replacement, with stable
+within-bitmap z ordering and no generic panel chrome; ordinary panel action/context limits
+and the public UI ABI are unchanged. The union remains one layer, so node z values do not
+interleave across surfaces and drag/hit-test is aggregated at layer scope. Post-review
+targeted/full Debug, three real actions, provider888/0 and Hardened22PE/77-file acceptance
+passed; headless evidence does not establish desktop GPU/DPI rendering.
+
+Script canvases now return the same stable widget shell as both opaque widget and
+canvas handles. Their actual canvas state is held by the widget record and released
+after retirement and in-flight calls drain; a stale handle stays retired even when
+the allocator reuses the state object's address. The previous raw-pointer widget
+identity failed the second create with status -6 because its retired registry key
+survived object deletion. The current Debug probe completes 64 create/destroy cycles,
+reports HANDLE_INVALID for both old handles, and commits a new overlay frame after
+a one-shot panel-upload failure; source/staged plugin menus remain operational.
+The post-fix Hardened acceptance passed five SAO2 packages, 17 authenticated
+inputs, 22 ship PEs, and the exact 77-file inventory with no ship diagnostics.
+The three build/runtime/ship bundles are each 33,071,184 bytes with SHA-256
+`6FD195E37F48F475A9C40D1E60B9AB4291A4E3C456AC9A25561D9580A1D5CA6E`.
+Desktop GPU/device-loss/DPI rendering remains a separate runtime gate.
+
 ## Link Start flight and shutdown (current)
 
 Default blue pillars now finish their full age-squared flight 300ms before the
@@ -172,7 +199,15 @@ acceptance passed (22 PEs/76 files). Final GPU export is 540 frames/9s with all 
 including full close/reopen, and Settings round-trip. LIVE/DPI/device recovery remain
 separate live gates; see `docs/classic_implementation.md` and session-69.
 
-## SaoMenu motion revision (2026-09-19)
+## SaoMenu motion revision (2026-09-24)
+
+SaoMenu-owned open/close, child transitions and slide/stagger, hover, and accent
+timings now run at approximately 130% of the prior rate (durations scaled by
+10/13); root open/close take 346/231ms. Reduced-motion handling is unchanged.
+The native overlay host owns two DPI-aware cursors: an ordinary SC1-inspired
+pointer and a cyan ring/arrow matching the user guide's artwork while SaoMenu
+is visible. Resize/text/wait hints and high-contrast mode retain system cursors;
+leaving or hiding the overlay restores the system pointer.
 
 Entity consumes private resolved child anchor/extension/split values. Root reversals
 preserve current progress; rapid child selection redirects the current trajectory.

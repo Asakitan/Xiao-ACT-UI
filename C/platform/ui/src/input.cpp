@@ -1,6 +1,7 @@
 #include "sao/ui/input.h"
 
 #include "input_router_internal.h"
+#include "overlay_host_internal.h"
 
 #include <algorithm>
 #include <array>
@@ -284,41 +285,6 @@ LRESULT CALLBACK low_level_keyboard_proc(int code, WPARAM wparam, LPARAM lparam)
     return consumed ? 1 : win32_api().call_next_hook_ex(nullptr, code, wparam, lparam);
 }
 
-LPCWSTR cursor_id(int32_t cursor_kind) {
-    switch (cursor_kind) {
-    case SAO_UI_CURSOR_HAND:
-        return IDC_HAND;
-    case SAO_UI_CURSOR_TEXT:
-        return IDC_IBEAM;
-    case SAO_UI_CURSOR_RESIZE_NS:
-        return IDC_SIZENS;
-    case SAO_UI_CURSOR_RESIZE_EW:
-        return IDC_SIZEWE;
-    case SAO_UI_CURSOR_RESIZE_NWSE:
-        return IDC_SIZENWSE;
-    case SAO_UI_CURSOR_RESIZE_NESW:
-        return IDC_SIZENESW;
-    case SAO_UI_CURSOR_CROSSHAIR:
-        return IDC_CROSS;
-    case SAO_UI_CURSOR_WAIT:
-        return IDC_WAIT;
-    case SAO_UI_CURSOR_ARROW:
-    default:
-        return IDC_ARROW;
-    }
-}
-
-void apply_cursor(int32_t cursor_kind) {
-    if (cursor_kind == SAO_UI_CURSOR_HIDDEN) {
-        while (::ShowCursor(FALSE) >= 0) {
-        }
-        return;
-    }
-    while (::ShowCursor(TRUE) < 0) {
-    }
-    ::SetCursor(::LoadCursorW(nullptr, cursor_id(cursor_kind)));
-}
-
 sao_status_t uninstall_hooks(const std::shared_ptr<InputHookContext>& context) {
     if (context == nullptr) return SAO_STATUS_OK;
 
@@ -422,6 +388,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_create(
 extern "C" void SAO_UI_CALL sao_ui_input_router_destroy(sao_ui_input_router_handle_t handle) {
 #if defined(_WIN32)
     if (handle != nullptr) {
+    sao::ui::overlay_host_detail::set_input_cursor(handle->host, SAO_UI_CURSOR_ARROW);
         const auto context = handle->hook_context;
         if (uninstall_hooks(context) != SAO_STATUS_OK) {
             std::lock_guard<std::mutex> global_lock(global_hook_mutex());
@@ -563,7 +530,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_set_cursor(
         handle->cursor_kind = cursor_kind;
     }
 #if defined(_WIN32)
-    apply_cursor(cursor_kind);
+    sao::ui::overlay_host_detail::set_input_cursor(handle->host, cursor_kind);
 #endif
     return SAO_STATUS_OK;
 }

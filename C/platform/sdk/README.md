@@ -39,6 +39,26 @@ panel. Legacy canvas placeholders are removed; canonical panel parsing owns draw
 The platform overlay provider renders bounded canvas/RGBA documents into transparent
 compositor layers and replaces them transactionally; stale tokens never clear a newer
 surface. Native/SDK mutation reentry returns BUSY rather than nesting panel transactions.
+Overlay documents may contain multiple canvas/RGBA-frame nodes and use an overlay-specific
+8 MiB JSON/string budget from language binding through loader, SDK wire and panel parser;
+ordinary action/context JSON retains its smaller contract. The provider rasterizes the
+whole panel before layer replacement, so a failed node/document keeps the prior surface.
+Node z-order is stable only inside that bitmap; the union remains one compositor layer,
+and draggable/rect/alpha hit-test settings are aggregated rather than routed per node.
+Post-review targeted/full Debug, helper/action cleanup, provider 888/0 and Hardened
+22-PE/77-file acceptance passed; desktop GPU/DPI and adversarial concurrency remain separate.
+Canvas operation names are checked at the SDK input boundary before replacement resources
+are allocated, with the panel parser's case and whitespace rules; unsupported operations
+return invalid argument while the previously committed surface stays visible.
+Rectangle/oval `w` and `h` are also checked at admission against the panel's 0..4096
+range. A negative dimension returns invalid argument before a candidate can replace the
+current frame. If upload fails after a candidate begins rendering, the previous layer
+remains visible and cleanup remains owned; an immediate retry may still report an error
+and must not be interpreted as a committed new frame.
+The headless failure probe requires a successful commit within four retries, with
+exact old-frame pixels retained on failed attempts. With the script-canvas handle
+identity repaired, three Debug runs committed on the first retry after a forced
+upload failure; real desktop device-loss recovery remains a separate gate.
 
 - `include/sao/sdk/sao_sdk.h` is the one header a plugin includes.
 - It transitively drags in the sub-tables (UI / event / mem / net /

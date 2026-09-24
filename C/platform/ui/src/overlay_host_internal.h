@@ -32,6 +32,9 @@ namespace sao::ui::overlay_host_detail {
 // geometry.
 inline constexpr uint32_t kInputRegionSkipPrevUnion = 1u << 0u;
 
+void set_menu_cursor(sao_ui_overlay_host_handle_t host, bool visible) noexcept;
+void set_input_cursor(sao_ui_overlay_host_handle_t host, int32_t cursor_kind) noexcept;
+
 sao_status_t set_input_region_ex(sao_ui_overlay_host_handle_t handle,
                                  const SaoOverlayHostInputRect* rects,
                                  size_t rect_count, uint32_t flags) noexcept;

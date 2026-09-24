@@ -24,14 +24,10 @@
 //
 // State machine (mirrors SAOPopUpMenu.play_enter_animation / close):
 //
-//   CLOSED  --show-->  OPENING  --tick 450ms-->  OPEN
-//   OPEN    --hide-->  CLOSING  --tick 300ms-->  CLOSED
-//   OPEN    --child open  -->  CHILD_OPENING --480ms--> CHILD_OPEN
-//   CHILD_OPEN --child close--> CHILD_CLOSING --300ms--> OPEN
-//
-// The top-level 450 ms open / 300 ms close durations come from the
-// production popup fade authority. Child fade, staggered slide, and
-// hover timings mirror the active Python GPU popup authority.
+//   CLOSED  --show-->  OPENING  --tick 346ms-->  OPEN
+//   OPEN    --hide-->  CLOSING  --tick 231ms-->  CLOSED
+//   OPEN    --child open  -->  CHILD_OPENING --369ms--> CHILD_OPEN
+//   CHILD_OPEN --child close--> CHILD_CLOSING --231ms--> OPEN
 //
 // UTF-8 no BOM.
 
@@ -81,20 +77,20 @@ static_assert(SAO_UI_MENU_BTN_DISABLED == 3, "menu button state enum drifted fro
 
 namespace {
 
-constexpr int32_t kMenuOpenMs = 450;
-constexpr int32_t kMenuCloseMs = 300;
-constexpr int32_t kChildFadeInMs = 480;
-constexpr int32_t kChildFadeOutMs = 300;
-constexpr int32_t kChildJoinMs = 120;
-constexpr int32_t kChildMoveMs = 180;
-constexpr int32_t kChildSplitMs = 180;
-constexpr int32_t kChildSlideMs = 240;
-constexpr int32_t kChildSlideStaggerMs = 28;
-constexpr int32_t kRootHoverInMs = 120;
-constexpr int32_t kRootHoverOutMs = 140;
-constexpr int32_t kChildHoverInMs = 100;
-constexpr int32_t kChildHoverOutMs = 100;
-constexpr int32_t kAccentSweepMs = 420;
+constexpr int32_t kMenuOpenMs = 346;
+constexpr int32_t kMenuCloseMs = 231;
+constexpr int32_t kChildFadeInMs = 369;
+constexpr int32_t kChildFadeOutMs = 231;
+constexpr int32_t kChildJoinMs = 92;
+constexpr int32_t kChildMoveMs = 138;
+constexpr int32_t kChildSplitMs = 138;
+constexpr int32_t kChildSlideMs = 185;
+constexpr int32_t kChildSlideStaggerMs = 22;
+constexpr int32_t kRootHoverInMs = 92;
+constexpr int32_t kRootHoverOutMs = 108;
+constexpr int32_t kChildHoverInMs = 77;
+constexpr int32_t kChildHoverOutMs = 77;
+constexpr int32_t kAccentSweepMs = 323;
 constexpr float kGeometrySnapEpsilon = 1.0F / 512.0F;
 
 // Default metrics — from menu.h banner + theme.h metrics table:
@@ -310,7 +306,7 @@ float opening_root_stagger_locked(const sao_ui_menu_s* menu, int32_t index) {
                             ? menu->close_start_rows[static_cast<size_t>(index)]
                             : menu->close_start_t;
     const int32_t stagger_delay = menu->reduced_motion || menu->root_reversing
-                                      ? 0 : std::min(index * 18, kMenuOpenMs - 1);
+                                      ? 0 : std::min(index * 14, kMenuOpenMs - 1);
     const int32_t duration = menu->reduced_motion ? 1 : menu->root_reversing
         ? std::max(1, static_cast<int32_t>(std::ceil(kMenuOpenMs * (1.0F - start))))
         : std::max(1, kMenuOpenMs - stagger_delay);
@@ -327,7 +323,7 @@ float closing_root_stagger_locked(const sao_ui_menu_s* menu, int32_t index) {
                             ? menu->close_start_rows[static_cast<size_t>(index)]
                             : menu->close_start_t;
     const int32_t delay = menu->reduced_motion || menu->root_reversing ? 0
-        : std::min(std::max(0, visible_item_count_locked(menu) - 1 - index) * 12, kMenuCloseMs - 1);
+        : std::min(std::max(0, visible_item_count_locked(menu) - 1 - index) * 9, kMenuCloseMs - 1);
     const int32_t duration = menu->reduced_motion ? 1 : menu->root_reversing
         ? std::max(1, static_cast<int32_t>(std::ceil(kMenuCloseMs * start)))
         : std::max(1, kMenuCloseMs - delay);

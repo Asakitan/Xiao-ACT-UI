@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -18,8 +19,8 @@
 #include <utility>
 #include <vector>
 
-#include <windows.h>
 #include <nlohmann/json.hpp>
+#include <windows.h>
 
 #include "sao/core/thread.h"
 #include "sao/engine/ui_spec.h"
@@ -41,21 +42,36 @@ namespace {
 
 sao_sdk_status_t map_tts_status(sao_status_t status) noexcept {
     switch (status) {
-    case SAO_STATUS_OK: return SAO_SDK_OK;
-    case SAO_STATUS_ERR_INVALID_ARGUMENT: return SAO_SDK_ERR_INVALID_ARGUMENT;
-    case SAO_STATUS_ERR_NOT_INITIALIZED: return SAO_SDK_ERR_NOT_INITIALIZED;
-    case SAO_STATUS_ERR_HANDLE_INVALID: return SAO_SDK_ERR_HANDLE_INVALID;
-    case SAO_STATUS_ERR_BUFFER_TOO_SMALL: return SAO_SDK_ERR_BUFFER_TOO_SMALL;
-    case SAO_STATUS_ERR_NOT_IMPLEMENTED: return SAO_SDK_ERR_NOT_IMPLEMENTED;
-    case SAO_STATUS_ERR_CANCELLED: return SAO_SDK_ERR_BUSY;
-    case SAO_STATUS_ERR_ABI_MISMATCH: return SAO_SDK_ERR_ABI_MISMATCH;
-    case SAO_STATUS_ERR_CAPABILITY_MISSING: return SAO_SDK_ERR_UNSUPPORTED;
-    case SAO_STATUS_ERR_ACCESS_DENIED: return SAO_SDK_ERR_ACCESS_DENIED;
-    case SAO_STATUS_ERR_NOT_FOUND: return SAO_SDK_ERR_NOT_FOUND;
-    case SAO_STATUS_ERR_ALREADY_EXISTS: return SAO_SDK_ERR_ALREADY_EXISTS;
-    case SAO_STATUS_ERR_READ_FAULT: return SAO_SDK_ERR_READ_FAULT;
-    case static_cast<sao_status_t>(-102): return SAO_SDK_ERR_BUSY;
-    default: return SAO_SDK_ERR_INTERNAL;
+    case SAO_STATUS_OK:
+        return SAO_SDK_OK;
+    case SAO_STATUS_ERR_INVALID_ARGUMENT:
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
+    case SAO_STATUS_ERR_NOT_INITIALIZED:
+        return SAO_SDK_ERR_NOT_INITIALIZED;
+    case SAO_STATUS_ERR_HANDLE_INVALID:
+        return SAO_SDK_ERR_HANDLE_INVALID;
+    case SAO_STATUS_ERR_BUFFER_TOO_SMALL:
+        return SAO_SDK_ERR_BUFFER_TOO_SMALL;
+    case SAO_STATUS_ERR_NOT_IMPLEMENTED:
+        return SAO_SDK_ERR_NOT_IMPLEMENTED;
+    case SAO_STATUS_ERR_CANCELLED:
+        return SAO_SDK_ERR_BUSY;
+    case SAO_STATUS_ERR_ABI_MISMATCH:
+        return SAO_SDK_ERR_ABI_MISMATCH;
+    case SAO_STATUS_ERR_CAPABILITY_MISSING:
+        return SAO_SDK_ERR_UNSUPPORTED;
+    case SAO_STATUS_ERR_ACCESS_DENIED:
+        return SAO_SDK_ERR_ACCESS_DENIED;
+    case SAO_STATUS_ERR_NOT_FOUND:
+        return SAO_SDK_ERR_NOT_FOUND;
+    case SAO_STATUS_ERR_ALREADY_EXISTS:
+        return SAO_SDK_ERR_ALREADY_EXISTS;
+    case SAO_STATUS_ERR_READ_FAULT:
+        return SAO_SDK_ERR_READ_FAULT;
+    case static_cast<sao_status_t>(-102):
+        return SAO_SDK_ERR_BUSY;
+    default:
+        return SAO_SDK_ERR_INTERNAL;
     }
 }
 
@@ -69,9 +85,11 @@ constexpr uint32_t kMemoryProviderMinimumSize = SAO_SDK_MEMORY_PROVIDER_REQUIRED
 constexpr size_t kMaximumTtsUtf8Bytes = 64u * 1024u;
 
 bool bounded_utf8_length(const char* value, size_t* out_length) noexcept {
-    if (out_length == nullptr) return false;
+    if (out_length == nullptr)
+        return false;
     *out_length = 0u;
-    if (value == nullptr) return false;
+    if (value == nullptr)
+        return false;
     for (size_t length = 0u; length < kMaximumTtsUtf8Bytes; ++length) {
         if (value[length] == '\0') {
             *out_length = length;
@@ -565,8 +583,8 @@ sao_sdk_status_t rollback_added_registration(ContextState* state,
                                              const SaoSdkProviderVTable& provider,
                                              const CapabilityRegistration& registration,
                                              sao_sdk_status_t insertion_status) {
-    const auto unregister_status = normalize_unregister_status(
-        unregister_provider_token(state, provider, registration));
+    const auto unregister_status =
+        normalize_unregister_status(unregister_provider_token(state, provider, registration));
     if (unregister_status != SAO_SDK_OK)
         return unregister_status;
     finish_registration(state, registration);
@@ -607,10 +625,21 @@ struct PlatformDialogEntry {
     void* user_data = nullptr;
 };
 
+struct PlatformOverlayPaintNode {
+    std::string panel_id;
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t z = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+};
+
 struct PlatformOverlayEntry {
     std::string plugin_id;
     std::string surface_id;
     std::string engine_spec;
+    std::string panel_spec;
+    std::vector<PlatformOverlayPaintNode> paint_nodes;
     sao_ui_compositor_handle_t compositor = nullptr;
     sao_ui_panel_handle_t panel = nullptr;
     sao_ui_layer_handle_t layer = nullptr;
@@ -869,15 +898,13 @@ std::vector<uint16_t> utf8_to_utf16(const char* value) {
         byte_length > static_cast<size_t>(std::numeric_limits<int>::max())) {
         return {};
     }
-    const int length = MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS, value, static_cast<int>(byte_length),
-        nullptr, 0);
+    const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value,
+                                           static_cast<int>(byte_length), nullptr, 0);
     if (length <= 0)
         return {};
     std::vector<uint16_t> result(static_cast<size_t>(length) + 1u);
-    if (MultiByteToWideChar(
-            CP_UTF8, MB_ERR_INVALID_CHARS, value, static_cast<int>(byte_length),
-            reinterpret_cast<wchar_t*>(result.data()), length) != length) {
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, static_cast<int>(byte_length),
+                            reinterpret_cast<wchar_t*>(result.data()), length) != length) {
         return {};
     }
     result[static_cast<size_t>(length)] = 0u;
@@ -887,14 +914,15 @@ std::vector<uint16_t> utf8_to_utf16(const char* value) {
 sao_sdk_status_t SAO_SDK_CALL platform_tts_speak(void*, const char* text_utf8, float volume,
                                                  float rate) {
     try {
-        if (!std::isfinite(volume) || !std::isfinite(rate)) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        if (!std::isfinite(volume) || !std::isfinite(rate))
+            return SAO_SDK_ERR_INVALID_ARGUMENT;
         const auto text = utf8_to_utf16(text_utf8);
         if (text.empty())
             return SAO_SDK_ERR_INVALID_ARGUMENT;
         const int32_t native_rate = static_cast<int32_t>(std::clamp(rate, -10.0f, 10.0f));
         const int32_t native_volume = static_cast<int32_t>(std::clamp(volume, 0.0f, 1.0f) * 100.0f);
-        return map_tts_status(sao_ui_alerts_speak(
-            text.data(), nullptr, native_rate, native_volume));
+        return map_tts_status(
+            sao_ui_alerts_speak(text.data(), nullptr, native_rate, native_volume));
     } catch (...) {
         return SAO_SDK_ERR_INTERNAL;
     }
@@ -1239,16 +1267,22 @@ sao_sdk_status_t map_overlay_status(sao_status_t status) noexcept {
 thread_local PlatformOverlayEntry* g_overlay_callback_entry = nullptr;
 
 class PlatformOverlayCallback {
-    public:
-        explicit PlatformOverlayCallback(PlatformOverlayEntry* entry)
-                : lease_(&entry->callback_activity), previous_(g_overlay_callback_entry) {
-                if (lease_) g_overlay_callback_entry = entry;
-        }
-        ~PlatformOverlayCallback() { g_overlay_callback_entry = previous_; }
-        explicit operator bool() const noexcept { return static_cast<bool>(lease_); }
-    private:
-        CallbackActivityLease lease_;
-        PlatformOverlayEntry* previous_;
+  public:
+    explicit PlatformOverlayCallback(PlatformOverlayEntry* entry)
+        : lease_(&entry->callback_activity), previous_(g_overlay_callback_entry) {
+        if (lease_)
+            g_overlay_callback_entry = entry;
+    }
+    ~PlatformOverlayCallback() {
+        g_overlay_callback_entry = previous_;
+    }
+    explicit operator bool() const noexcept {
+        return static_cast<bool>(lease_);
+    }
+
+  private:
+    CallbackActivityLease lease_;
+    PlatformOverlayEntry* previous_;
 };
 
 class PlatformOverlayOperation {
@@ -1267,7 +1301,10 @@ class PlatformOverlayOperation {
             state_->overlay_operation_active = false;
         }
     }
-    explicit operator bool() const noexcept { return active_; }
+    explicit operator bool() const noexcept {
+        return active_;
+    }
+
   private:
     PlatformProviderState* state_;
     bool active_ = false;
@@ -1276,97 +1313,206 @@ class PlatformOverlayOperation {
 sao_sdk_status_t overlay_document(const SaoSdkOverlaySpec& spec, PlatformOverlayEntry& entry,
                                   std::string& panel_spec) {
     using Json = nlohmann::json;
-    constexpr size_t maximum_bytes = 1U << 20U;
+    constexpr size_t maximum_bytes = 8U << 20U;
     if (spec.spec_json_utf8 == nullptr || spec.spec_len == 0 || spec.spec_len > maximum_bytes)
         return SAO_SDK_ERR_INVALID_ARGUMENT;
     try {
         size_t events = 0;
         const auto bounded = [&events](int depth, Json::parse_event_t, Json& value) {
             if (depth > 32 || ++events > 65536 ||
-                (value.is_string() && value.get_ref<const std::string&>().find('\0') !=
-                                          std::string::npos))
+                (value.is_string() &&
+                 value.get_ref<const std::string&>().find('\0') != std::string::npos))
                 throw std::invalid_argument("overlay bounds");
             return true;
         };
-        Json document = Json::parse(spec.spec_json_utf8, spec.spec_json_utf8 + spec.spec_len,
-                                    bounded);
+        Json document =
+            Json::parse(spec.spec_json_utf8, spec.spec_json_utf8 + spec.spec_len, bounded);
         if (document.is_object() && document.contains("spec"))
             document = Json(document["spec"]);
         if (document.is_object() && document.contains("root"))
             document = Json(document["root"]);
-        Json node;
+        Json nodes = Json::array();
         if (document.is_object() && document.contains("canvas")) {
-            node = document["canvas"];
-            if (!node.is_object()) return SAO_SDK_ERR_INVALID_ARGUMENT;
-            if (!node.contains("type")) node["type"] = "canvas";
+            Json node = document["canvas"];
+            if (!node.is_object())
+                return SAO_SDK_ERR_INVALID_ARGUMENT;
+            if (!node.contains("type"))
+                node["type"] = "canvas";
+            nodes.push_back(std::move(node));
         } else if (document.is_object() && document.contains("nodes")) {
-            const auto& nodes = document["nodes"];
-            if (!nodes.is_array() || nodes.size() != 1) return SAO_SDK_ERR_UNSUPPORTED;
-            node = nodes.front();
+            nodes = document["nodes"];
         } else {
-            node = std::move(document);
+            nodes.push_back(std::move(document));
         }
-        if (!node.is_object()) return SAO_SDK_ERR_INVALID_ARGUMENT;
-        const auto kind = node.value("type", std::string{});
-        if (kind != "canvas" && kind != "rgba_frame") return SAO_SDK_ERR_UNSUPPORTED;
-        if (node.contains("id") && !node["id"].is_string())
+        if (!nodes.is_array() || nodes.empty() || nodes.size() > 64)
             return SAO_SDK_ERR_INVALID_ARGUMENT;
-        for (const auto& [short_key, long_key] :
-             {std::pair{"w", "width"}, std::pair{"h", "height"}}) {
-            if (node.contains(short_key)) {
+        struct node_geometry {
+            int32_t x = 0;
+            int32_t y = 0;
+            int32_t z = 0;
+            int32_t width = 0;
+            int32_t height = 0;
+        };
+        std::vector<node_geometry> geometries;
+        geometries.reserve(nodes.size());
+        int32_t minimum_x = (std::numeric_limits<int32_t>::max)();
+        int32_t minimum_y = (std::numeric_limits<int32_t>::max)();
+        int32_t minimum_z = (std::numeric_limits<int32_t>::max)();
+        int32_t maximum_x = (std::numeric_limits<int32_t>::min)();
+        int32_t maximum_y = (std::numeric_limits<int32_t>::min)();
+        bool draggable = false;
+        bool rect_hit = false;
+        for (size_t index = 0; index < nodes.size(); ++index) {
+            auto& node = nodes[index];
+            if (!node.is_object())
+                return SAO_SDK_ERR_INVALID_ARGUMENT;
+            const auto kind = node.value("type", std::string{});
+            if (kind != "canvas" && kind != "rgba_frame")
+                return SAO_SDK_ERR_UNSUPPORTED;
+            if (const auto ops = node.find("ops"); ops != node.end()) {
+                if (kind != "canvas" || !ops->is_array() || ops->size() > 4000U)
+                    return SAO_SDK_ERR_INVALID_ARGUMENT;
+                for (const auto& operation : *ops) {
+                    if (!operation.is_object())
+                        return SAO_SDK_ERR_INVALID_ARGUMENT;
+                    const auto action = operation.find("op");
+                    if (action == operation.end() || !action->is_string())
+                        return SAO_SDK_ERR_INVALID_ARGUMENT;
+                    std::string name = action->get<std::string>();
+                    const auto first = name.find_first_not_of(" \t\r\n");
+                    if (first == std::string::npos)
+                        return SAO_SDK_ERR_INVALID_ARGUMENT;
+                    name = name.substr(first, name.find_last_not_of(" \t\r\n") - first + 1U);
+                    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
+                        return static_cast<char>(std::tolower(ch));
+                    });
+                    if (name != "line" && name != "rect" && name != "oval" && name != "polygon" &&
+                        name != "text" && name != "ctext")
+                        return SAO_SDK_ERR_INVALID_ARGUMENT;
+                    if (name == "rect" || name == "oval") {
+                        for (const auto* dimension : {"w", "h"}) {
+                            const auto value = operation.find(dimension);
+                            if (value == operation.end())
+                                continue;
+                            if (!value->is_number())
+                                return SAO_SDK_ERR_INVALID_ARGUMENT;
+                            const double number = value->get<double>();
+                            if (!std::isfinite(number) || number < 0 || number > 4096)
+                                return SAO_SDK_ERR_INVALID_ARGUMENT;
+                        }
+                    }
+                }
+            }
+            if (node.contains("id") && !node["id"].is_string())
+                return SAO_SDK_ERR_INVALID_ARGUMENT;
+            if (!node.contains("id"))
+                node["id"] = "sdk.overlay.node." + std::to_string(index);
+            for (const auto& [short_key, long_key] :
+                 {std::pair{"w", "width"}, std::pair{"h", "height"}}) {
+                if (!node.contains(short_key))
+                    continue;
                 if (node.contains(long_key) && node[short_key] != node[long_key])
                     return SAO_SDK_ERR_INVALID_ARGUMENT;
                 node[long_key] = node[short_key];
                 node.erase(short_key);
             }
-        }
-        const auto geometry = [&node](const char* key, int fallback, int minimum, int maximum,
-                                      int32_t& output) {
-            const auto value = node.find(key);
-            if (value == node.end()) { output = fallback; return true; }
-            if (!value->is_number()) return false;
-            const double number = value->get<double>();
-            if (!std::isfinite(number) || number < minimum || number > maximum) return false;
-            output = static_cast<int32_t>(std::nearbyint(number));
-            return true;
-        };
-        if (kind == "rgba_frame") {
-            for (const char* key : {"width", "height"}) {
+            const auto geometry = [&node](const char* key, int fallback, int minimum, int maximum,
+                                          int32_t& output) {
                 const auto value = node.find(key);
-                if (value != node.end() && (!value->is_number() ||
-                    value->get<double>() != std::nearbyint(value->get<double>())))
-                    return SAO_SDK_ERR_INVALID_ARGUMENT;
+                if (value == node.end()) {
+                    output = fallback;
+                    return true;
+                }
+                if (!value->is_number())
+                    return false;
+                const double number = value->get<double>();
+                if (!std::isfinite(number) || number < minimum || number > maximum)
+                    return false;
+                output = static_cast<int32_t>(std::nearbyint(number));
+                return true;
+            };
+            node_geometry geometry_value;
+            if (!geometry("width", 320, 1, 4096, geometry_value.width) ||
+                !geometry("height", kind == "canvas" ? 160 : 480, 1, 4096, geometry_value.height) ||
+                !geometry("x", 0, -32768, 32768, geometry_value.x) ||
+                !geometry("y", 0, -32768, 32768, geometry_value.y) ||
+                !geometry("z", 0, -10000, 10000, geometry_value.z)) {
+                return SAO_SDK_ERR_INVALID_ARGUMENT;
             }
+            if (kind == "rgba_frame") {
+                for (const char* key : {"width", "height"}) {
+                    const auto value = node.find(key);
+                    if (value != node.end() &&
+                        (!value->is_number() ||
+                         value->get<double>() != std::nearbyint(value->get<double>()))) {
+                        return SAO_SDK_ERR_INVALID_ARGUMENT;
+                    }
+                }
+            }
+            if (node.contains("draggable") && !node["draggable"].is_boolean())
+                return SAO_SDK_ERR_INVALID_ARGUMENT;
+            bool node_draggable = node.value("draggable", kind == "rgba_frame");
+            const auto hit_test =
+                node.value("hit_test", std::string(kind == "rgba_frame" ? "rect" : "alpha"));
+            if (hit_test != "alpha" && hit_test != "rect" && hit_test != "none")
+                return SAO_SDK_ERR_INVALID_ARGUMENT;
+            if (hit_test == "none")
+                node_draggable = false;
+            draggable = draggable || node_draggable;
+            rect_hit = rect_hit || (node_draggable && hit_test == "rect");
+            node["width"] = geometry_value.width;
+            node["height"] = geometry_value.height;
+            node["x"] = geometry_value.x;
+            node["y"] = geometry_value.y;
+            node["z"] = geometry_value.z;
+            node["draggable"] = node_draggable;
+            node["hit_test"] = hit_test;
+            const char* background = kind == "canvas" ? "bg" : "background";
+            if (!node.contains(background) ||
+                (node[background].is_string() &&
+                 node[background].get_ref<const std::string&>().find_first_not_of(" \t\r\n") ==
+                     std::string::npos)) {
+                node[background] = "transparent";
+            }
+            minimum_x = (std::min)(minimum_x, geometry_value.x);
+            minimum_y = (std::min)(minimum_y, geometry_value.y);
+            minimum_z = (std::min)(minimum_z, geometry_value.z);
+            maximum_x = (std::max)(maximum_x, geometry_value.x + geometry_value.width);
+            maximum_y = (std::max)(maximum_y, geometry_value.y + geometry_value.height);
+            geometries.push_back(geometry_value);
         }
-        if (!geometry("width", 320, 1, 4096, entry.width) ||
-            !geometry("height", kind == "canvas" ? 160 : 480, 1, 4096, entry.height) ||
-            !geometry("x", 0, -32768, 32768, entry.x) ||
-            !geometry("y", 0, -32768, 32768, entry.y) ||
-            !geometry("z", 0, -10000, 10000, entry.z))
+        const int64_t union_width = static_cast<int64_t>(maximum_x) - minimum_x;
+        const int64_t union_height = static_cast<int64_t>(maximum_y) - minimum_y;
+        if (union_width <= 0 || union_width > 4096 || union_height <= 0 || union_height > 4096)
             return SAO_SDK_ERR_INVALID_ARGUMENT;
-        if (node.contains("draggable") && !node["draggable"].is_boolean())
-            return SAO_SDK_ERR_INVALID_ARGUMENT;
-        entry.draggable = node.value("draggable", kind == "rgba_frame");
-        const auto hit_test = node.value("hit_test", std::string(kind == "rgba_frame" ? "rect" : "alpha"));
-        if (hit_test != "alpha" && hit_test != "rect" && hit_test != "none")
-            return SAO_SDK_ERR_INVALID_ARGUMENT;
-        entry.rect_hit = hit_test == "rect";
-        if (hit_test == "none") entry.draggable = false;
-        node["width"] = entry.width;
-        node["height"] = entry.height;
-        node["x"] = entry.x;
-        node["y"] = entry.y;
-        node["z"] = entry.z;
-        node["draggable"] = entry.draggable;
-        node["hit_test"] = hit_test;
-        const char* background = kind == "canvas" ? "bg" : "background";
-        if (!node.contains(background) || (node[background].is_string() &&
-            node[background].get_ref<const std::string&>().find_first_not_of(" \t\r\n") ==
-                std::string::npos)) node[background] = "transparent";
-        Json canonical{{"version", SAO_UI_SPEC_VERSION}, {"nodes", Json::array({node})}};
-        entry.engine_spec = Json{{"spec", canonical}}.dump();
-        canonical["nodes"][0]["id"] = "sdk.overlay.canvas";
-        panel_spec = canonical.dump();
+        entry.x = minimum_x;
+        entry.y = minimum_y;
+        entry.z = minimum_z;
+        entry.width = static_cast<int32_t>(union_width);
+        entry.height = static_cast<int32_t>(union_height);
+        entry.draggable = draggable;
+        entry.rect_hit = rect_hit;
+        Json engine_nodes = nodes;
+        entry.paint_nodes.clear();
+        entry.paint_nodes.reserve(nodes.size());
+        for (size_t index = 0; index < nodes.size(); ++index) {
+            const std::string panel_id = "sdk.overlay.node." + std::to_string(index);
+            nodes[index]["id"] = panel_id;
+            nodes[index]["x"] = geometries[index].x - minimum_x;
+            nodes[index]["y"] = geometries[index].y - minimum_y;
+            nodes[index]["z"] = 0;
+            entry.paint_nodes.push_back({panel_id, geometries[index].x - minimum_x,
+                                         geometries[index].y - minimum_y, geometries[index].z,
+                                         geometries[index].width, geometries[index].height});
+        }
+        std::stable_sort(entry.paint_nodes.begin(), entry.paint_nodes.end(),
+                         [](const auto& left, const auto& right) { return left.z < right.z; });
+        const Json engine_spec{
+            {"version", SAO_UI_SPEC_VERSION}, {"layout", "absolute"}, {"nodes", engine_nodes}};
+        const Json panel_document{
+            {"version", SAO_UI_SPEC_VERSION}, {"layout", "absolute"}, {"nodes", nodes}};
+        entry.engine_spec = Json{{"spec", engine_spec}}.dump();
+        panel_spec = panel_document.dump();
         return panel_spec.size() <= maximum_bytes ? SAO_SDK_OK : SAO_SDK_ERR_INVALID_ARGUMENT;
     } catch (const std::bad_alloc&) {
         return SAO_SDK_ERR_INTERNAL;
@@ -1378,8 +1524,8 @@ sao_sdk_status_t overlay_document(const SaoSdkOverlaySpec& spec, PlatformOverlay
 void SAO_UI_CALL overlay_cursor(float x, float y, void* user_data) {
     auto* entry = static_cast<PlatformOverlayEntry*>(user_data);
     PlatformOverlayCallback callback_lease(entry);
-    if (!callback_lease || !entry->registry_owned || !entry->dragging ||
-        !std::isfinite(x) || !std::isfinite(y))
+    if (!callback_lease || !entry->registry_owned || !entry->dragging || !std::isfinite(x) ||
+        !std::isfinite(y))
         return;
     const int32_t next_x = static_cast<int32_t>(std::clamp(
         std::nearbyint(static_cast<double>(entry->x) + x - entry->drag_x), -32768.0, 32768.0));
@@ -1394,7 +1540,8 @@ void SAO_UI_CALL overlay_cursor(float x, float y, void* user_data) {
 void SAO_UI_CALL overlay_leave(void* user_data) {
     auto* entry = static_cast<PlatformOverlayEntry*>(user_data);
     PlatformOverlayCallback callback_lease(entry);
-    if (callback_lease) entry->dragging = false;
+    if (callback_lease)
+        entry->dragging = false;
 }
 
 void SAO_UI_CALL overlay_button(int32_t button, int32_t action, int32_t, float x, float y,
@@ -1416,7 +1563,8 @@ sao_sdk_status_t destroy_overlay_native(PlatformOverlayEntry& entry) {
         if (status == SAO_STATUS_OK) {
             status = sao_ui_layer_set_input_callbacks(entry.layer, nullptr, nullptr, nullptr,
                                                       nullptr, nullptr);
-            if (status != SAO_STATUS_OK) return map_overlay_status(status);
+            if (status != SAO_STATUS_OK)
+                return map_overlay_status(status);
             entry.callback_activity.retire_and_wait();
             sao_ui_layer_destroy(entry.layer);
             status = sao_ui_layer_request_redraw(entry.layer);
@@ -1450,41 +1598,61 @@ sao_sdk_status_t paint_overlay_native(PlatformOverlayEntry& entry, const std::st
     sao_status_t status = SAO_STATUS_OK;
     if (entry.panel == nullptr) {
         status = sao_ui_panel_create(nullptr, &config, &entry.panel);
-        if (status != SAO_STATUS_OK) return map_overlay_status(status);
+        if (status != SAO_STATUS_OK)
+            return map_overlay_status(status);
     }
-    status = sao_ui_panel_set_spec(entry.panel,
-        reinterpret_cast<const uint8_t*>(panel_spec.data()), panel_spec.size());
-    if (status != SAO_STATUS_OK) return map_overlay_status(status);
-    sao_ui_widget_handle_t widget = nullptr;
-    status = sao_ui_panel_find_widget(entry.panel, "sdk.overlay.canvas", &widget);
-    if (status != SAO_STATUS_OK) return map_overlay_status(status);
+    status = sao_ui_panel_set_spec(entry.panel, reinterpret_cast<const uint8_t*>(panel_spec.data()),
+                                   panel_spec.size());
+    if (status != SAO_STATUS_OK)
+        return map_overlay_status(status);
+    entry.panel_spec = panel_spec;
+    std::vector<sao_ui_widget_handle_t> widgets;
+    widgets.reserve(entry.paint_nodes.size());
+    for (const auto& node : entry.paint_nodes) {
+        sao_ui_widget_handle_t widget = nullptr;
+        status = sao_ui_panel_find_widget(entry.panel, node.panel_id.c_str(), &widget);
+        if (status != SAO_STATUS_OK)
+            return map_overlay_status(status);
+        widgets.push_back(widget);
+    }
     SaoUiOffscreenRasterDesc desc{static_cast<uint32_t>(entry.width),
                                   static_cast<uint32_t>(entry.height), 0};
     sao_ui_offscreen_raster_handle_t raster = nullptr;
     status = sao_ui_offscreen_raster_create(&desc, &raster);
-    if (status != SAO_STATUS_OK) return map_overlay_status(status);
+    if (status != SAO_STATUS_OK)
+        return map_overlay_status(status);
     const std::unique_ptr<sao_ui_offscreen_raster_s, decltype(&sao_ui_offscreen_raster_destroy)>
         raster_owner(raster, sao_ui_offscreen_raster_destroy);
     sao_ui_paint_ctx_handle_t paint = nullptr;
     status = sao_ui_paint_ctx_create_offscreen(raster, &paint);
-    if (status != SAO_STATUS_OK) return map_overlay_status(status);
-    const std::unique_ptr<sao_ui_paint_ctx_s, decltype(&sao_ui_paint_ctx_destroy)>
-        paint_owner(paint, sao_ui_paint_ctx_destroy);
+    if (status != SAO_STATUS_OK)
+        return map_overlay_status(status);
+    const std::unique_ptr<sao_ui_paint_ctx_s, decltype(&sao_ui_paint_ctx_destroy)> paint_owner(
+        paint, sao_ui_paint_ctx_destroy);
     status = sao_ui_paint_ctx_begin_frame(paint);
-    if (status != SAO_STATUS_OK) return map_overlay_status(status);
-    status = sao_ui_widget_paint(widget, paint, 0, 0, static_cast<float>(entry.width),
-                                 static_cast<float>(entry.height));
-    const auto end_status = sao_ui_paint_ctx_end_frame(paint);
-    if (status == SAO_STATUS_OK) status = end_status;
-    if (status != SAO_STATUS_OK) return map_overlay_status(status);
+    if (status == SAO_STATUS_OK) {
+        for (size_t index = 0; index < widgets.size() && status == SAO_STATUS_OK; ++index) {
+            const auto& node = entry.paint_nodes[index];
+            status = sao_ui_widget_paint(widgets[index], paint, static_cast<float>(node.x),
+                                         static_cast<float>(node.y), static_cast<float>(node.width),
+                                         static_cast<float>(node.height));
+        }
+        const auto end_status = sao_ui_paint_ctx_end_frame(paint);
+        if (status == SAO_STATUS_OK)
+            status = end_status;
+    }
+    if (status != SAO_STATUS_OK)
+        return map_overlay_status(status);
     std::vector<uint8_t> pixels(static_cast<size_t>(entry.width) * entry.height * 4U);
     size_t written = 0;
     uint32_t width = 0, height = 0, stride = 0;
     status = sao_ui_offscreen_raster_snapshot(raster, pixels.data(), pixels.size(), &written,
-                                             &width, &height, &stride);
-    if (status != SAO_STATUS_OK) return map_overlay_status(status);
+                                              &width, &height, &stride);
+    if (status != SAO_STATUS_OK)
+        return map_overlay_status(status);
     if (width != desc.width_px || height != desc.height_px || stride != width * 4U ||
-        written != pixels.size()) return SAO_SDK_ERR_INTERNAL;
+        written != pixels.size())
+        return SAO_SDK_ERR_INTERNAL;
     SaoLayerConfig layer{};
     layer.struct_size = sizeof(layer);
     layer.name_utf8 = name.c_str();
@@ -1497,7 +1665,8 @@ sao_sdk_status_t paint_overlay_native(PlatformOverlayEntry& entry, const std::st
     layer.rect_hit = entry.rect_hit;
     layer.bgra_swizzle = true;
     status = sao_ui_layer_create(entry.compositor, &layer, &entry.layer);
-    if (status == SAO_STATUS_OK) status = sao_ui_layer_set_visible(entry.layer, false);
+    if (status == SAO_STATUS_OK)
+        status = sao_ui_layer_set_visible(entry.layer, false);
     if (status == SAO_STATUS_OK)
         status = sao_ui_layer_update_bgra(entry.layer, pixels.data(), width, height, stride);
     if (status == SAO_STATUS_OK && entry.draggable)
@@ -1509,51 +1678,76 @@ sao_sdk_status_t paint_overlay_native(PlatformOverlayEntry& entry, const std::st
 sao_sdk_status_t SAO_SDK_CALL platform_overlay_set(void* user_data, const char* plugin_id_utf8,
                                                    const SaoSdkOverlaySpec* spec,
                                                    uint64_t* out_provider_token) {
-    if (out_provider_token != nullptr) *out_provider_token = 0;
+    if (out_provider_token != nullptr)
+        *out_provider_token = 0;
     if (user_data == nullptr || plugin_id_utf8 == nullptr || plugin_id_utf8[0] == '\0' ||
         spec == nullptr || spec->surface_id_utf8 == nullptr || spec->surface_id_utf8[0] == '\0' ||
-        out_provider_token == nullptr) return SAO_SDK_ERR_INVALID_ARGUMENT;
+        out_provider_token == nullptr)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     auto& runtime = SharedRuntime::instance();
     sao_ui_compositor_handle_t compositor = nullptr;
     auto result = runtime.get_bound_compositor(&compositor);
-    if (result != SAO_SDK_OK) return result;
+    if (result != SAO_SDK_OK)
+        return result;
     result = map_overlay_status(sao_ui_compositor_require_owner_thread(compositor));
-    if (result != SAO_SDK_OK) return result;
-    if (runtime.render_registry == nullptr) return SAO_SDK_ERR_UNSUPPORTED;
+    if (result != SAO_SDK_OK)
+        return result;
+    if (runtime.render_registry == nullptr)
+        return SAO_SDK_ERR_UNSUPPORTED;
     auto* state = static_cast<PlatformProviderState*>(user_data);
     PlatformOverlayOperation operation(state);
-    if (!operation) return SAO_SDK_ERR_BUSY;
+    if (!operation)
+        return SAO_SDK_ERR_BUSY;
     auto entry = std::make_shared<PlatformOverlayEntry>();
     entry->plugin_id = plugin_id_utf8;
     entry->surface_id = spec->surface_id_utf8;
     entry->compositor = compositor;
     std::string panel_spec;
     result = overlay_document(*spec, *entry, panel_spec);
-    if (result != SAO_SDK_OK) return result;
+    if (result != SAO_SDK_OK)
+        return result;
     const uint64_t token = state->next_token.fetch_add(1);
-    if (token == 0) return SAO_SDK_ERR_INTERNAL;
+    if (token == 0)
+        return SAO_SDK_ERR_INTERNAL;
     std::shared_ptr<PlatformOverlayEntry> previous;
     {
         std::lock_guard lock(state->mutex);
         for (const auto& [unused, candidate] : state->overlays) {
             (void)unused;
             if (candidate->registry_owned && candidate->plugin_id == entry->plugin_id &&
-                candidate->surface_id == entry->surface_id) previous = candidate;
+                candidate->surface_id == entry->surface_id)
+                previous = candidate;
         }
-        if (g_fail_next_platform_overlay_insertion.exchange(false)) return SAO_SDK_ERR_INTERNAL;
-        if (!state->overlays.emplace(token, entry).second) return SAO_SDK_ERR_INTERNAL;
+        if (g_fail_next_platform_overlay_insertion.exchange(false))
+            return SAO_SDK_ERR_INTERNAL;
+        if (!state->overlays.emplace(token, entry).second)
+            return SAO_SDK_ERR_INTERNAL;
     }
-    if (previous != nullptr)
+    const bool reused_panel = previous != nullptr && previous->panel != nullptr &&
+                              previous->width == entry->width && previous->height == entry->height;
+    if (reused_panel)
         entry->panel = std::exchange(previous->panel, nullptr);
     bool previous_hidden = false;
     const auto abandon = [&](sao_sdk_status_t failure) {
         if (previous_hidden) {
-            const auto restore = map_overlay_status(sao_ui_layer_set_visible(previous->layer, true));
-            if (restore != SAO_SDK_OK) failure = restore;
+            const auto restore =
+                map_overlay_status(sao_ui_layer_set_visible(previous->layer, true));
+            if (restore != SAO_SDK_OK)
+                failure = restore;
             previous_hidden = false;
         }
-        if (previous != nullptr && previous->panel == nullptr)
+        sao_sdk_status_t panel_restore = SAO_SDK_OK;
+        if (reused_panel && previous->panel == nullptr) {
+            const bool candidate_updated_panel = !entry->panel_spec.empty() ||
+                                                 failure != SAO_SDK_ERR_INVALID_ARGUMENT;
             previous->panel = std::exchange(entry->panel, nullptr);
+            if (candidate_updated_panel && previous->panel != nullptr &&
+                !previous->panel_spec.empty()) {
+                panel_restore = map_overlay_status(sao_ui_panel_set_spec(
+                    previous->panel, reinterpret_cast<const uint8_t*>(previous->panel_spec.data()),
+                    previous->panel_spec.size()));
+            }
+        }
         const auto cleanup = destroy_overlay_native(*entry);
         if (cleanup != SAO_SDK_OK) {
             *out_provider_token = token;
@@ -1561,24 +1755,30 @@ sao_sdk_status_t SAO_SDK_CALL platform_overlay_set(void* user_data, const char* 
         }
         std::lock_guard lock(state->mutex);
         state->overlays.erase(token);
-        return failure;
+        return panel_restore == SAO_SDK_OK ? failure : panel_restore;
     };
     try {
         result = paint_overlay_native(*entry, panel_spec, token);
-        if (result != SAO_SDK_OK) return abandon(result);
+        if (result != SAO_SDK_OK)
+            return abandon(result);
         result = map_overlay_status(sao_ui_layer_set_visible(entry->layer, true));
-        if (result != SAO_SDK_OK) return abandon(result);
+        if (result != SAO_SDK_OK)
+            return abandon(result);
         if (previous != nullptr && previous->layer != nullptr) {
             previous_hidden = true;
             result = map_overlay_status(sao_ui_layer_set_visible(previous->layer, false));
-            if (result != SAO_SDK_OK) return abandon(result);
+            if (result != SAO_SDK_OK)
+                return abandon(result);
         }
-        result = map_overlay_status(sao_engine_render_hook_set_overlay(runtime.render_registry,
-            plugin_id_utf8, spec->surface_id_utf8,
-            reinterpret_cast<const uint8_t*>(entry->engine_spec.data()), entry->engine_spec.size()));
-        if (result != SAO_SDK_OK) return abandon(result);
+        result = map_overlay_status(sao_engine_render_hook_set_overlay(
+            runtime.render_registry, plugin_id_utf8, spec->surface_id_utf8,
+            reinterpret_cast<const uint8_t*>(entry->engine_spec.data()),
+            entry->engine_spec.size()));
+        if (result != SAO_SDK_OK)
+            return abandon(result);
         entry->registry_owned = true;
-        if (previous != nullptr) previous->registry_owned = false;
+        if (previous != nullptr)
+            previous->registry_owned = false;
         *out_provider_token = token;
         return previous != nullptr ? destroy_overlay_native(*previous) : SAO_SDK_OK;
     } catch (...) {
@@ -1587,25 +1787,32 @@ sao_sdk_status_t SAO_SDK_CALL platform_overlay_set(void* user_data, const char* 
 }
 
 sao_sdk_status_t SAO_SDK_CALL platform_overlay_clear(void* user_data, uint64_t provider_token) {
-    if (user_data == nullptr || provider_token == 0) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (user_data == nullptr || provider_token == 0)
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     auto* state = static_cast<PlatformProviderState*>(user_data);
     PlatformOverlayOperation operation(state);
-    if (!operation) return SAO_SDK_ERR_BUSY;
+    if (!operation)
+        return SAO_SDK_ERR_BUSY;
     std::shared_ptr<PlatformOverlayEntry> entry;
     {
         std::lock_guard lock(state->mutex);
         const auto found = state->overlays.find(provider_token);
-        if (found == state->overlays.end()) return SAO_SDK_ERR_NOT_FOUND;
+        if (found == state->overlays.end())
+            return SAO_SDK_ERR_NOT_FOUND;
         entry = found->second;
     }
     auto status = map_overlay_status(sao_ui_compositor_require_owner_thread(entry->compositor));
-    if (status != SAO_SDK_OK) return status;
+    if (status != SAO_SDK_OK)
+        return status;
     status = destroy_overlay_native(*entry);
-    if (status != SAO_SDK_OK) return status;
+    if (status != SAO_SDK_OK)
+        return status;
     if (entry->registry_owned) {
         status = map_overlay_status(sao_engine_render_hook_clear_overlay(
-            SharedRuntime::instance().render_registry, entry->plugin_id.c_str(), entry->surface_id.c_str()));
-        if (status != SAO_SDK_OK) return status;
+            SharedRuntime::instance().render_registry, entry->plugin_id.c_str(),
+            entry->surface_id.c_str()));
+        if (status != SAO_SDK_OK)
+            return status;
         entry->registry_owned = false;
     }
     std::lock_guard lock(state->mutex);
@@ -1778,8 +1985,8 @@ sao_sdk_status_t prepare_platform_provider_binding(ContextState* state,
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t discard_provider_binding_candidate(
-    ContextState* state, ProviderBindingCandidate* candidate) {
+sao_sdk_status_t discard_provider_binding_candidate(ContextState* state,
+                                                    ProviderBindingCandidate* candidate) {
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
     if (candidate == nullptr)
@@ -1808,8 +2015,7 @@ bool platform_provider_bound(const ContextState* state) {
     if (state == nullptr)
         return false;
     std::lock_guard<std::mutex> lock(const_cast<ContextState*>(state)->mu);
-    return state->provider_bound &&
-           state->provider.user_data == platform_provider()->user_data;
+    return state->provider_bound && state->provider.user_data == platform_provider()->user_data;
 }
 
 sao_sdk_status_t provider_status(const ContextState* state) {
@@ -2218,7 +2424,8 @@ sao_sdk_status_t memory_enumerate_modules(ContextState* state, SaoSdkMemoryModul
 
 sao_sdk_status_t provider_tts_speak(ContextState* state, const char* text_utf8, float volume,
                                     float rate) {
-    if (!std::isfinite(volume) || !std::isfinite(rate)) return SAO_SDK_ERR_INVALID_ARGUMENT;
+    if (!std::isfinite(volume) || !std::isfinite(rate))
+        return SAO_SDK_ERR_INVALID_ARGUMENT;
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
     if (text_utf8 == nullptr)
@@ -2316,7 +2523,7 @@ sao_sdk_status_t provider_render_register_ex(ContextState* state, const SaoSdkRe
                                                       spec->priority});
     } catch (...) {
         return rollback_added_registration(state, provider, registration,
-                                          SAO_SDK_ERR_NOT_INITIALIZED);
+                                           SAO_SDK_ERR_NOT_INITIALIZED);
     }
     *out_token = sdk_token;
     return SAO_SDK_OK;
@@ -2423,7 +2630,7 @@ sao_sdk_status_t provider_hotkey_register(ContextState* state, const char* bindi
         state->hotkeys.push_back(std::move(entry));
     } catch (...) {
         return rollback_added_registration(state, provider, registration,
-                                          SAO_SDK_ERR_NOT_INITIALIZED);
+                                           SAO_SDK_ERR_NOT_INITIALIZED);
     }
     *out_id = sdk_token;
     return SAO_SDK_OK;
@@ -2477,7 +2684,8 @@ sao_sdk_status_t provider_overlay_set(ContextState* state, const SaoSdkOverlaySp
     }
     const std::string surface(spec->surface_id_utf8);
     const auto sdk_token = allocate_capability_token(state);
-    if (sdk_token == 0) return SAO_SDK_ERR_INTERNAL;
+    if (sdk_token == 0)
+        return SAO_SDK_ERR_INTERNAL;
     CapabilityRegistration previous{};
     bool inserted_surface = false;
     {
@@ -2485,21 +2693,25 @@ sao_sdk_status_t provider_overlay_set(ContextState* state, const SaoSdkOverlaySp
         const auto found = state->overlays.find(surface);
         if (found != state->overlays.end()) {
             const auto old_token = reinterpret_cast<uint64_t>(found->second);
-            const auto old_registration = std::find_if(state->capability_registrations.begin(),
-                state->capability_registrations.end(), [old_token](const auto& item) {
+            const auto old_registration = std::find_if(
+                state->capability_registrations.begin(), state->capability_registrations.end(),
+                [old_token](const auto& item) {
                     return item.kind == CapabilityKind::overlay && item.sdk_token == old_token;
                 });
             if (old_token == 0 || old_registration == state->capability_registrations.end() ||
-                old_registration->unregistering) return SAO_SDK_ERR_BUSY;
+                old_registration->unregistering)
+                return SAO_SDK_ERR_BUSY;
             previous = *old_registration;
         }
         try {
-            if (g_fail_next_overlay_state_insertion.exchange(false)) throw std::bad_alloc{};
+            if (g_fail_next_overlay_state_insertion.exchange(false))
+                throw std::bad_alloc{};
             inserted_surface = state->overlays.try_emplace(surface, nullptr).second;
             state->capability_registrations.push_back(
                 {CapabilityKind::overlay, sdk_token, 0, nullptr, nullptr, true});
         } catch (...) {
-            if (inserted_surface) state->overlays.erase(surface);
+            if (inserted_surface)
+                state->overlays.erase(surface);
             return SAO_SDK_ERR_INTERNAL;
         }
         for (auto& item : state->capability_registrations) {
@@ -2521,7 +2733,8 @@ sao_sdk_status_t provider_overlay_set(ContextState* state, const SaoSdkOverlaySp
             if (item.kind == CapabilityKind::overlay && item.sdk_token == previous.sdk_token)
                 item.unregistering = false;
         }
-        if (inserted_surface) state->overlays.erase(surface);
+        if (inserted_surface)
+            state->overlays.erase(surface);
         return status == SAO_SDK_OK ? SAO_SDK_ERR_HANDLE_INVALID : status;
     }
     bool committed = status == SAO_SDK_OK;
@@ -2533,11 +2746,13 @@ sao_sdk_status_t provider_overlay_set(ContextState* state, const SaoSdkOverlaySp
     }
     sao_sdk_status_t cleanup_status = SAO_SDK_OK;
     if (committed && previous.sdk_token != 0 && previous.provider_token != provider_token)
-        cleanup_status = normalize_unregister_status(unregister_provider_token(state, provider, previous));
+        cleanup_status =
+            normalize_unregister_status(unregister_provider_token(state, provider, previous));
     {
         std::lock_guard lock(state->mu);
         for (auto& item : state->capability_registrations) {
-            if (item.kind != CapabilityKind::overlay) continue;
+            if (item.kind != CapabilityKind::overlay)
+                continue;
             if (item.sdk_token == sdk_token) {
                 item.provider_token = provider_token;
                 item.unregistering = false;
@@ -2554,6 +2769,8 @@ sao_sdk_status_t provider_overlay_set(ContextState* state, const SaoSdkOverlaySp
             state->overlays.find(surface)->second = reinterpret_cast<sao_sdk_ui_panel_t>(sdk_token);
     }
     *out_overlay = sdk_token;
+    if (committed)
+        return SAO_SDK_OK;
     return status != SAO_SDK_OK ? status : cleanup_status;
 }
 
@@ -2571,8 +2788,9 @@ sao_sdk_status_t provider_overlay_clear(ContextState* state, sao_sdk_overlay_tok
     SaoSdkProviderVTable provider;
     if (!take_registration(state, CapabilityKind::overlay, overlay, &registration, &provider)) {
         std::lock_guard lock(state->mu);
-        const bool pending = std::any_of(state->capability_registrations.begin(),
-            state->capability_registrations.end(), [overlay](const auto& item) {
+        const bool pending = std::any_of(
+            state->capability_registrations.begin(), state->capability_registrations.end(),
+            [overlay](const auto& item) {
                 return item.kind == CapabilityKind::overlay && item.sdk_token == overlay;
             });
         return pending ? SAO_SDK_ERR_BUSY : SAO_SDK_ERR_NOT_FOUND;
@@ -2593,8 +2811,7 @@ sao_sdk_status_t provider_overlay_clear(ContextState* state, sao_sdk_overlay_tok
     return SAO_SDK_OK;
 }
 
-sao_sdk_status_t provider_overlay_clear_surface(ContextState* state,
-                                                const char* surface_id_utf8) {
+sao_sdk_status_t provider_overlay_clear_surface(ContextState* state, const char* surface_id_utf8) {
     if (state == nullptr)
         return SAO_SDK_ERR_HANDLE_INVALID;
     if (surface_id_utf8 == nullptr || surface_id_utf8[0] == '\0')
@@ -2640,8 +2857,9 @@ sao_sdk_status_t retain_gpu_provider(ContextState* state, SaoSdkProviderVTable* 
 }
 
 #if defined(SAO_SDK_TESTING)
-extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_platform_hotkey_snapshot_user_data(
-    const SaoSdkContext* ctx, sao_sdk_hotkey_id_t hotkey) {
+extern "C" SAO_SDK_API void*
+    SAO_SDK_CALL sao_sdk_test_platform_hotkey_snapshot_user_data(const SaoSdkContext* ctx,
+                                                                 sao_sdk_hotkey_id_t hotkey) {
     ContextApiLease lease(ctx);
     if (!lease)
         return nullptr;
@@ -2649,12 +2867,12 @@ extern "C" SAO_SDK_API void* SAO_SDK_CALL sao_sdk_test_platform_hotkey_snapshot_
     uint64_t provider_token = 0;
     {
         std::lock_guard<std::mutex> lock(state->mu);
-        const auto found = std::find_if(
-            state->capability_registrations.begin(), state->capability_registrations.end(),
-            [hotkey](const CapabilityRegistration& registration) {
-                return registration.kind == CapabilityKind::hotkey &&
-                       registration.sdk_token == hotkey;
-            });
+        const auto found = std::find_if(state->capability_registrations.begin(),
+                                        state->capability_registrations.end(),
+                                        [hotkey](const CapabilityRegistration& registration) {
+                                            return registration.kind == CapabilityKind::hotkey &&
+                                                   registration.sdk_token == hotkey;
+                                        });
         if (found == state->capability_registrations.end() ||
             state->provider.user_data != &platform_provider_state()) {
             return nullptr;
@@ -2674,9 +2892,8 @@ sao_sdk_test_invoke_platform_hotkey_snapshot(void* snapshot_user_data) {
     SaoUiInputEvent event{};
     event.kind = SAO_UI_INPUT_KEY_DOWN;
     auto* snapshot = static_cast<std::shared_ptr<PlatformHotkeyEntry>*>(snapshot_user_data);
-    platform_hotkey_callback(nullptr, &event,
-                             snapshot == nullptr || *snapshot == nullptr ? nullptr
-                                                                        : snapshot->get());
+    platform_hotkey_callback(
+        nullptr, &event, snapshot == nullptr || *snapshot == nullptr ? nullptr : snapshot->get());
 }
 
 extern "C" SAO_SDK_API void SAO_SDK_CALL
@@ -2749,11 +2966,10 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_context_configure_m
     sao_sdk_internal::ContextApiLease lease(ctx);
     if (!lease)
         return lease.status();
-    return sao_sdk_internal::invoke_callback_barrier(
-        [&] {
-            return sao_sdk_internal::configure_memory_provider(
-                lease.state(), provider, sao_sdk_internal::ProviderConfigureOrigin::public_api);
-        });
+    return sao_sdk_internal::invoke_callback_barrier([&] {
+        return sao_sdk_internal::configure_memory_provider(
+            lease.state(), provider, sao_sdk_internal::ProviderConfigureOrigin::public_api);
+    });
 }
 
 extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL
@@ -2975,8 +3191,8 @@ extern "C" SAO_SDK_API sao_sdk_status_t SAO_SDK_CALL sao_sdk_notify_show(
             throw std::bad_alloc{};
         state->banner_ids.push_back(sdk_token);
     } catch (...) {
-        return sao_sdk_internal::rollback_added_registration(
-            state, provider, registration, SAO_SDK_ERR_NOT_INITIALIZED);
+        return sao_sdk_internal::rollback_added_registration(state, provider, registration,
+                                                             SAO_SDK_ERR_NOT_INITIALIZED);
     }
     *out_notify = sdk_token;
     return SAO_SDK_OK;

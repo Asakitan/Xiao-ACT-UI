@@ -237,31 +237,28 @@ struct sao_ui_script_canvas_s {
     // explicit invalidate request lands.
     uint64_t invalidation_seq = 0;
 
-    // Owning widget handle emitted at create.  Test rigs use it to
-    // verify routing; we synthesize a unique per-canvas value so the
-    // pointer never collides with a real widget record.
-    sao_ui_widget_handle_t widget = nullptr;
-    uint64_t generation = 0;
 };
 
 namespace {
 
-struct ScriptCanvasRegistry {
-    std::mutex mutex;
-    std::vector<std::unique_ptr<sao_ui_script_canvas_s>> storage;
-};
-
-ScriptCanvasRegistry& script_canvas_registry() {
-    static ScriptCanvasRegistry registry;
-    return registry;
-}
-
 class CanvasLifecycleLease {
   public:
-    explicit CanvasLifecycleLease(sao_ui_script_canvas_handle_t canvas) noexcept
-        : widget_(reinterpret_cast<sao_ui_widget_handle_t>(canvas)) {
-        acquired_ =
-            widget_ != nullptr && sao::ui::detail::acquire_widget_lifecycle(widget_);
+    explicit CanvasLifecycleLease(sao_ui_script_canvas_handle_t& handle) noexcept {
+        if (handle == nullptr)
+            return;
+        widget_ = reinterpret_cast<sao_ui_widget_handle_t>(handle);
+        acquired_ = sao::ui::detail::acquire_widget_lifecycle(widget_);
+        if (acquired_) {
+            state_ = sao::ui::detail::acquire_widget_handle(
+                widget_, sao::ui::detail::WidgetHandleFamily::script_canvas,
+                SAO_UI_WIDGET_SCRIPTABLE_CANVAS);
+            if (!state_) {
+                sao::ui::detail::release_widget_lifecycle(widget_);
+                acquired_ = false;
+            } else {
+                handle = static_cast<sao_ui_script_canvas_handle_t>(state_.get());
+            }
+        }
     }
 
     ~CanvasLifecycleLease() {
@@ -274,6 +271,7 @@ class CanvasLifecycleLease {
     }
 
   private:
+    std::shared_ptr<void> state_;
     sao_ui_widget_handle_t widget_{};
     bool acquired_{};
 };
@@ -404,68 +402,40 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_script_canvas_create(
 
     sao_ui_widget_handle_t registered_widget = nullptr;
     try {
-        auto canvas = std::make_unique<sao_ui_script_canvas_s>();
+        auto canvas = std::make_shared<sao_ui_script_canvas_s>();
         canvas->spec = *spec;
         if (canvas->spec.max_ops_per_frame <= 0 || canvas->spec.max_ops_per_frame > kMaxCanvasOps) {
             canvas->spec.max_ops_per_frame = kMaxCanvasOps;
         }
-        canvas->widget = reinterpret_cast<sao_ui_widget_handle_t>(canvas.get());
-        registered_widget = canvas->widget;
-        if (!sao::ui::detail::register_external_widget_handle(
-                canvas->widget, sao::ui::detail::WidgetHandleFamily::script_canvas,
-                SAO_UI_WIDGET_SCRIPTABLE_CANVAS, &canvas->generation)) {
+        registered_widget = static_cast<sao_ui_widget_handle_t>(
+            sao::ui::detail::register_widget_handle(
+                sao::ui::detail::WidgetHandleFamily::script_canvas,
+                SAO_UI_WIDGET_SCRIPTABLE_CANVAS, canvas));
+        if (registered_widget == nullptr) {
             return SAO_STATUS_ERR_UNKNOWN;
         }
-        auto* const raw = canvas.get();
-        auto& registry = script_canvas_registry();
-        {
-            std::lock_guard lock(registry.mutex);
-            registry.storage.push_back(std::move(canvas));
-        }
-        *out_canvas = raw;
+        *out_canvas = reinterpret_cast<sao_ui_script_canvas_handle_t>(registered_widget);
         if (out_widget != nullptr)
-            *out_widget = raw->widget;
+            *out_widget = registered_widget;
         return SAO_STATUS_OK;
     } catch (...) {
         if (registered_widget != nullptr)
-            (void)sao::ui::detail::retire_widget_lifecycle(registered_widget);
+            (void)sao::ui::detail::retire_widget_handle(
+                registered_widget, sao::ui::detail::WidgetHandleFamily::script_canvas);
         return SAO_STATUS_ERR_UNKNOWN;
     }
 }
 
 extern "C" void SAO_UI_CALL sao_ui_script_canvas_destroy(sao_ui_script_canvas_handle_t canvas) {
     try {
-        if (canvas == nullptr || !sao::ui::detail::retire_widget_lifecycle(
-            reinterpret_cast<sao_ui_widget_handle_t>(canvas))) {
+        const auto widget = reinterpret_cast<sao_ui_widget_handle_t>(canvas);
+        auto state = sao::ui::detail::retire_widget_handle(
+            widget, sao::ui::detail::WidgetHandleFamily::script_canvas);
+        if (!state) {
             return;
         }
         uint32_t removed = 0;
-        (void)sao::ui::detail::release_widget_event_handlers(canvas->widget, &removed);
-        {
-            std::lock_guard lock(canvas->mu);
-            canvas->pending_ops.clear();
-            canvas->committed_ops.clear();
-            canvas->snapshot_aux_arena.clear();
-            canvas->pending_aux_bytes = 0;
-            canvas->committed_aux_bytes = 0;
-            canvas->bitmaps.clear();
-            canvas->pointer_cb = nullptr;
-            canvas->pointer_ud = nullptr;
-            canvas->draw_open = false;
-        }
-        // Drop the owning unique_ptr — every create+destroy pair used to
-        // leave the struct in the registry forever (unbounded leak). Only
-        // erase AFTER the lifecycle is retired so mid-destroy leases still
-        // fail HANDLE_INVALID rather than dereferencing freed memory.
-        auto& registry = script_canvas_registry();
-        std::lock_guard registry_lock(registry.mutex);
-        const auto it = std::find_if(registry.storage.begin(), registry.storage.end(),
-                                     [canvas](const std::unique_ptr<sao_ui_script_canvas_s>& p) {
-                                         return p.get() == canvas;
-                                     });
-        if (it != registry.storage.end()) {
-            registry.storage.erase(it);
-        }
+        (void)sao::ui::detail::release_widget_event_handlers(widget, &removed);
     } catch (...) {
     }
 }
@@ -1302,7 +1272,7 @@ sao_ui_script_canvas_paint_widget(sao_ui_widget_handle_t widget, sao_ui_paint_ct
         metadata.kind != SAO_UI_WIDGET_SCRIPTABLE_CANVAS) {
         return SAO_STATUS_ERR_HANDLE_INVALID;
     }
-    auto* const canvas = reinterpret_cast<sao_ui_script_canvas_s*>(widget);
+    auto* canvas = reinterpret_cast<sao_ui_script_canvas_s*>(widget);
     CanvasLifecycleLease lifecycle(canvas);
     if (!lifecycle)
         return SAO_STATUS_ERR_HANDLE_INVALID;
@@ -1322,7 +1292,8 @@ sao_ui_script_canvas_paint_widget(sao_ui_widget_handle_t widget, sao_ui_paint_ct
         sao_status_t status = sao_ui_offscreen_raster_create(&desc, &raster);
         if (status != SAO_STATUS_OK)
             return status;
-        status = sao_ui_script_canvas_rasterize(canvas, raster, 0, 0);
+        status = sao_ui_script_canvas_rasterize(
+            reinterpret_cast<sao_ui_script_canvas_handle_t>(widget), raster, 0, 0);
         if (status == SAO_STATUS_OK) {
             size_t bytes = 0;
             uint32_t snapshot_width = 0;

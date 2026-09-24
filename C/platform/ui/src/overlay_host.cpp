@@ -11,6 +11,9 @@
 #endif
 
 #include <atomic>
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <condition_variable>
@@ -103,6 +106,11 @@ struct sao_ui_overlay_host_s {
     bool dpi_pending_bounds = false;
     SaoOverlayHostClientRect dpi_pending_rect{};
     int32_t cursor_hint = 0;
+    int32_t input_cursor_kind = 0;
+    bool menu_cursor_active = false;
+    HCURSOR app_cursor = nullptr;
+    HCURSOR menu_cursor = nullptr;
+    uint32_t cursor_dpi = 0;
     uint32_t captured_mouse_buttons = 0;
     uint64_t last_threat_scan_ms = 0u;
     uint64_t last_process_window_sweep_ms = 0u;
@@ -373,15 +381,210 @@ LPCWSTR cursor_id_for_hint(int32_t hint) noexcept {
     }
 }
 
-void apply_cursor_hint(sao_ui_overlay_host_s* host) noexcept {
-    if (host == nullptr)
-        return;
-    int32_t hint = 0;
+struct CursorPoint { double x, y; };
+
+bool inside_path(double x, double y, const CursorPoint* points, size_t count) noexcept {
+    bool inside = false;
+    for (size_t i = 0, j = count - 1; i < count; j = i++) {
+        const auto& a = points[i];
+        const auto& b = points[j];
+        if ((a.y > y) != (b.y > y) &&
+            x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x)
+            inside = !inside;
+    }
+    return inside;
+}
+
+double segment_distance(double x, double y, CursorPoint a, CursorPoint b) noexcept {
+    const double dx = b.x - a.x, dy = b.y - a.y;
+    const double length2 = dx * dx + dy * dy;
+    const double t = length2 == 0 ? 0 : std::clamp(((x - a.x) * dx + (y - a.y) * dy) / length2, 0.0, 1.0);
+    return std::hypot(x - a.x - t * dx, y - a.y - t * dy);
+}
+
+template <typename Predicate>
+void paint_cursor(uint32_t* pixels, int size, uint32_t color, Predicate&& contains) noexcept {
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            int covered = 0;
+            for (int sy = 0; sy < 4; ++sy)
+                for (int sx = 0; sx < 4; ++sx)
+                    covered += contains((x + (sx + 0.5) / 4.0) * 44.0 / size,
+                                        (y + (sy + 0.5) / 4.0) * 44.0 / size) ? 1 : 0;
+            const uint32_t a = ((color >> 24) * covered + 8) / 16;
+            if (a == 0) continue;
+            uint32_t& dst = pixels[y * size + x];
+            const uint32_t old_a = dst >> 24;
+            const uint32_t inv = 255 - a;
+            const auto channel = [&](int shift) {
+                return ((color >> shift & 255) * a + (dst >> shift & 255) * inv + 127) / 255;
+            };
+            dst = ((a + (old_a * inv + 127) / 255) << 24) |
+                  (channel(16) << 16) | (channel(8) << 8) | channel(0);
+        }
+    }
+}
+
+HCURSOR make_themed_cursor(bool menu, uint32_t dpi) noexcept {
+    const int size = std::clamp(static_cast<int>((44u * std::clamp(dpi, 96u, 192u) + 48u) / 96u), 44, 88);
+    BITMAPV5HEADER header{};
+    header.bV5Size = sizeof(header);
+    header.bV5Width = size;
+    header.bV5Height = -size;
+    header.bV5Planes = 1;
+    header.bV5BitCount = 32;
+    header.bV5Compression = BI_BITFIELDS;
+    header.bV5RedMask = 0x00FF0000;
+    header.bV5GreenMask = 0x0000FF00;
+    header.bV5BlueMask = 0x000000FF;
+    header.bV5AlphaMask = 0xFF000000;
+    void* bits = nullptr;
+    HDC dc = ::GetDC(nullptr);
+    HBITMAP color = dc == nullptr ? nullptr : ::CreateDIBSection(dc, reinterpret_cast<BITMAPINFO*>(&header), DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (dc != nullptr) ::ReleaseDC(nullptr, dc);
+    if (color == nullptr || bits == nullptr) {
+        if (color != nullptr) ::DeleteObject(color);
+        return nullptr;
+    }
+    auto* pixels = static_cast<uint32_t*>(bits);
+    std::fill_n(pixels, size * size, 0u);
+    if (menu) {
+        paint_cursor(pixels, size, 0xB00B657Fu, [](double x, double y) {
+            return std::abs(std::hypot((x - 21) / 14.6, (y - 17) / 6.0) - 1) < 0.15;
+        });
+        paint_cursor(pixels, size, 0xF047D7FFu, [](double x, double y) {
+            return std::abs(std::hypot((x - 21) / 13.2, (y - 17) / 5.0) - 1) < 0.105;
+        });
+        paint_cursor(pixels, size, 0xFFB9F0FFu, [](double x, double y) {
+            return std::hypot(x - 34.6, y - 17) < 1.9 || std::hypot(x - 21, y - 17) < 2.2;
+        });
+    } else {
+        paint_cursor(pixels, size, 0xA00B657Fu, [](double x, double y) {
+            return std::abs(std::hypot(x - 21, y - 24) - 9.0) < 0.9 && x > 14;
+        });
+        paint_cursor(pixels, size, 0xFF47D7FFu, [](double x, double y) {
+            return (std::abs(x - 21) < 0.8 && y > 30 && y < 37) ||
+                   (std::abs(y - 24) < 0.8 && x > 29 && x < 36);
+        });
+    }
+    constexpr std::array<CursorPoint, 7> menu_arrow{{{5.6, 4.4}, {23.4, 14.9}, {17.9, 16.6},
+                                                      {24.2, 24.6}, {19.4, 27}, {7, 12.6}, {5.6, 4.4}}};
+    constexpr std::array<CursorPoint, 7> app_arrow{{{4, 3}, {23, 15}, {16, 16},
+                                                     {23, 28}, {18, 30}, {10, 18}, {4, 3}}};
+    const auto& arrow = menu ? menu_arrow : app_arrow;
+    paint_cursor(pixels, size, 0xFF081D29u, [&](double x, double y) {
+        for (size_t i = 1; i < arrow.size(); ++i)
+            if (segment_distance(x, y, arrow[i - 1], arrow[i]) < 1.6) return true;
+        return false;
+    });
+    paint_cursor(pixels, size, menu ? 0xFF47D7FFu : 0xFF233A48u, [&](double x, double y) {
+        return inside_path(x, y, arrow.data(), arrow.size() - 1);
+    });
+    paint_cursor(pixels, size, menu ? 0xFFFFFFFFu : 0xFFB9F0FFu, [&](double x, double y) {
+        for (size_t i = 1; i < arrow.size(); ++i)
+            if (segment_distance(x, y, arrow[i - 1], arrow[i]) < 0.6) return true;
+        return false;
+    });
+    paint_cursor(pixels, size, menu ? 0xEFFFFFFFu : 0xFF47D7FFu, [&](double x, double y) {
+        return segment_distance(x, y, arrow[0], arrow[1]) < 0.75 ||
+               segment_distance(x, y, arrow[3], arrow[4]) < 0.8;
+    });
+    HBITMAP mask = ::CreateBitmap(size, size, 1, 1, nullptr);
+    if (mask != nullptr) {
+        HDC mask_dc = ::CreateCompatibleDC(nullptr);
+        if (mask_dc != nullptr) {
+            HGDIOBJ old = ::SelectObject(mask_dc, mask);
+            ::PatBlt(mask_dc, 0, 0, size, size, BLACKNESS);
+            ::SelectObject(mask_dc, old);
+            ::DeleteDC(mask_dc);
+        } else { ::DeleteObject(mask); mask = nullptr; }
+    }
+    ICONINFO info{};
+    info.fIcon = FALSE;
+    info.xHotspot = static_cast<DWORD>(size * (menu ? 5.6 : 4.0) / 44.0);
+    info.yHotspot = static_cast<DWORD>(size * (menu ? 4.4 : 3.0) / 44.0);
+    info.hbmColor = color;
+    info.hbmMask = mask;
+    HCURSOR cursor = mask == nullptr ? nullptr : static_cast<HCURSOR>(::CreateIconIndirect(&info));
+    if (mask != nullptr) ::DeleteObject(mask);
+    ::DeleteObject(color);
+    return cursor;
+}
+
+void release_themed_cursors(sao_ui_overlay_host_s* host) noexcept {
+    if ((host->app_cursor != nullptr && ::GetCursor() == host->app_cursor) ||
+        (host->menu_cursor != nullptr && ::GetCursor() == host->menu_cursor))
+        ::SetCursor(::LoadCursorW(nullptr, IDC_ARROW));
+    if (host->app_cursor != nullptr) ::DestroyCursor(host->app_cursor);
+    if (host->menu_cursor != nullptr) ::DestroyCursor(host->menu_cursor);
+    host->app_cursor = host->menu_cursor = nullptr;
+    host->cursor_dpi = 0;
+}
+
+bool cursor_over_host(sao_ui_overlay_host_s* host) noexcept {
+    POINT point{};
+    bool visible = false;
+    {
+        std::lock_guard<std::mutex> lock(host->state_mu);
+        visible = host->visible;
+    }
+    return host->hwnd != nullptr && visible &&
+           ((::GetCursorPos(&point) && ::WindowFromPoint(point) == host->hwnd) ||
+            ::GetCapture() == host->hwnd);
+}
+
+void apply_cursor_hint(sao_ui_overlay_host_s* host, bool force = false) noexcept {
+    if (host == nullptr || host->owner_thread_id != ::GetCurrentThreadId() ||
+        (!force && !cursor_over_host(host))) return;
+    int32_t hint = 0, kind = 0;
+    bool menu = false;
+    uint32_t dpi = 96;
     {
         std::lock_guard<std::mutex> lock(host->state_mu);
         hint = host->cursor_hint;
+        kind = host->input_cursor_kind;
+        menu = host->menu_cursor_active;
+        dpi = host->current_dpi;
     }
-    ::SetCursor(::LoadCursorW(nullptr, cursor_id_for_hint(hint)));
+    HIGHCONTRASTW contrast{sizeof(contrast)};
+    const bool accessible = !::SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) ||
+                            (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+    LPCWSTR system_id = cursor_id_for_hint(hint);
+    if (hint == 0) {
+        switch (kind) {
+        case 1: system_id = IDC_HAND; break;
+        case 2: system_id = IDC_IBEAM; break;
+        case 3: system_id = IDC_SIZENS; break;
+        case 4: system_id = IDC_SIZEWE; break;
+        case 5: system_id = IDC_SIZENWSE; break;
+        case 6: system_id = IDC_SIZENESW; break;
+        case 7: system_id = IDC_CROSS; break;
+        case 8: system_id = IDC_WAIT; break;
+        default: break;
+        }
+    }
+    if (kind == 9 && hint == 0) {
+        ::SetCursor(nullptr);
+        return;
+    }
+    HCURSOR custom = nullptr;
+    if (!accessible && hint == 0 && (kind == 0 || (menu && kind == 1))) {
+        if (host->cursor_dpi != dpi || host->app_cursor == nullptr || host->menu_cursor == nullptr) {
+            HCURSOR app = make_themed_cursor(false, dpi);
+            HCURSOR overlay = make_themed_cursor(true, dpi);
+            if (app != nullptr && overlay != nullptr) {
+                release_themed_cursors(host);
+                host->app_cursor = app;
+                host->menu_cursor = overlay;
+                host->cursor_dpi = dpi;
+            } else {
+                if (app != nullptr) ::DestroyCursor(app);
+                if (overlay != nullptr) ::DestroyCursor(overlay);
+            }
+        }
+        custom = menu ? host->menu_cursor : host->app_cursor;
+    }
+    ::SetCursor(custom != nullptr ? custom : ::LoadCursorW(nullptr, system_id));
 }
 void mark_input_partial(sao_ui_overlay_host_s* host) {
     std::lock_guard<std::mutex> lock(host->state_mu);
@@ -695,6 +898,10 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
         bool externally_destroyed = false;
         {
             std::lock_guard<std::recursive_mutex> window_lock(host->window_mu);
+            if (host->hwnd == hwnd &&
+                ((host->app_cursor != nullptr && ::GetCursor() == host->app_cursor) ||
+                 (host->menu_cursor != nullptr && ::GetCursor() == host->menu_cursor)))
+                ::SetCursor(::LoadCursorW(nullptr, IDC_ARROW));
             std::lock_guard<std::mutex> lock(host->lifetime_mu);
             externally_destroyed =
                 host->lifecycle == sao_ui_overlay_host_s::lifecycle_state::active;
@@ -752,7 +959,9 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     }
 
     if (message == WM_SETCURSOR) {
-        apply_cursor_hint(host);
+        if (LOWORD(lparam) != HTCLIENT)
+            return ::DefWindowProcW(hwnd, message, wparam, lparam);
+        apply_cursor_hint(host, true);
         return TRUE;
     }
 
@@ -783,7 +992,7 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     case WM_MOUSEMOVE: {
         TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
         ::TrackMouseEvent(&track);
-        apply_cursor_hint(host);
+        apply_cursor_hint(host, true);
         dispatch_mouse(host, message, wparam, lparam);
         return 0;
     }
@@ -793,8 +1002,15 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
             std::lock_guard<std::mutex> lock(host->state_mu);
             host->cursor_hint = 0;
         }
-        apply_cursor_hint(host);
+        if (::GetCapture() != hwnd &&
+            ((host->app_cursor != nullptr && ::GetCursor() == host->app_cursor) ||
+             (host->menu_cursor != nullptr && ::GetCursor() == host->menu_cursor)))
+            ::SetCursor(::LoadCursorW(nullptr, IDC_ARROW));
         return 0;
+    case WM_SETTINGCHANGE:
+    case WM_THEMECHANGED:
+        apply_cursor_hint(host);
+        break;
     case WM_MOUSEWHEEL:
         dispatch_mouse(host, message, wparam, lparam);
         return 0;
@@ -1001,6 +1217,7 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
             host->current_dpi = new_dpi;
             ++host->wm_counters.dpichanged_events;
         }
+        apply_cursor_hint(host);
         (void)::DwmFlush();
         if (callback != nullptr) {
             try {
@@ -1067,6 +1284,7 @@ bool destroy_created_host(sao_ui_overlay_host_s* host) {
             return false;
         host->class_atom = 0;
     }
+    release_themed_cursors(host);
     delete host;
     return true;
 }
@@ -1260,7 +1478,7 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_create(
     window_class.style = CS_DBLCLKS;
     window_class.lpfnWndProc = overlay_wndproc;
     window_class.hInstance = host->hinstance;
-    window_class.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+    window_class.hCursor = nullptr;
     window_class.lpszClassName = host->class_name.c_str();
     host->class_atom = ::RegisterClassExW(&window_class);
     if (host->class_atom == 0)
@@ -1411,6 +1629,7 @@ extern "C" bool SAO_UI_CALL sao_ui_overlay_host_destroy(sao_ui_overlay_host_hand
     if (success && !destroy_created_window(handle->owner_hwnd))
         success = false;
     if (success) {
+        release_themed_cursors(handle);
         if (handle->class_atom != 0)
             ::UnregisterClassW(handle->class_name.c_str(), handle->hinstance);
         release_single_instance_lock();
@@ -1620,6 +1839,9 @@ sao_ui_overlay_host_set_visible(sao_ui_overlay_host_handle_t handle, bool visibl
         std::lock_guard<std::mutex> lock(handle->state_mu);
         handle->visible = visible;
     }
+    if (!visible && ((handle->app_cursor != nullptr && ::GetCursor() == handle->app_cursor) ||
+                     (handle->menu_cursor != nullptr && ::GetCursor() == handle->menu_cursor)))
+        ::SetCursor(::LoadCursorW(nullptr, IDC_ARROW));
     if (!visible)
         return SAO_STATUS_OK;
     (void)::DwmFlush();
@@ -2155,6 +2377,31 @@ extern "C" void SAO_UI_CALL sao_ui_overlay_host_set_cursor_hint_(sao_ui_overlay_
         return;
     }
 }
+
+namespace sao::ui::overlay_host_detail {
+
+void set_menu_cursor(sao_ui_overlay_host_handle_t host, bool visible) noexcept {
+    HostLease lease(host);
+    if (!lease) return;
+    {
+        std::lock_guard<std::mutex> lock(host->state_mu);
+        if (host->menu_cursor_active == visible) return;
+        host->menu_cursor_active = visible;
+    }
+    apply_cursor_hint(host);
+}
+
+void set_input_cursor(sao_ui_overlay_host_handle_t host, int32_t cursor_kind) noexcept {
+    HostLease lease(host);
+    if (!lease) return;
+    {
+        std::lock_guard<std::mutex> lock(host->state_mu);
+        host->input_cursor_kind = cursor_kind;
+    }
+    apply_cursor_hint(host);
+}
+
+} // namespace sao::ui::overlay_host_detail
 
 extern "C" sao_status_t SAO_UI_CALL sao_ui_overlay_host_set_hit_test(
     sao_ui_overlay_host_handle_t handle, sao_ui_hit_test_fn_t fn, void* user_data) {

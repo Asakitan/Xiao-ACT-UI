@@ -1621,6 +1621,15 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_input_router_route_event(
             if (state_status != SAO_STATUS_OK)
                 return state_status == SAO_STATUS_ERR_HANDLE_INVALID ? SAO_UI_STATUS_ERR_BUSY
                                                                      : state_status;
+#if defined(_WIN32)
+            int32_t hover_kind = -1;
+            const bool text_field = next_hover != nullptr &&
+                sao_ui_widget_get_kind(next_hover, &hover_kind) == SAO_STATUS_OK &&
+                (hover_kind == SAO_UI_WIDGET_TEXT_FIELD || hover_kind == SAO_UI_WIDGET_INPUT);
+            if (lease->compositor != nullptr)
+                sao::ui::overlay_host_detail::set_input_cursor(
+                    sao_ui_compositor_host(lease->compositor), text_field ? 2 : 0);
+#endif
         }
         if (event->kind == SAO_UI_INPUT_MOUSE_DOWN) {
             const sao_status_t state_status = apply_state(target, sao_ui_widget_set_pressed, true);

@@ -11,6 +11,7 @@
 #include "layer_paint_internal.h"
 #include "menu_visual_internal.h"
 #include "menu_scene_internal.h"
+#include "overlay_host_internal.h"
 #include "panel_motion_internal.h"
 #include "panel_theme_internal.h"
 #include "widget_paint_internal.h"
@@ -3441,6 +3442,10 @@ sao_status_t apply_layer_state_locked(sao_ui_entity_shell_s* shell) {
     status = first_failure(status, sao_ui_layer_set_visible(shell->menu_layer, menu_active));
     status = first_failure(status, sao_ui_layer_set_input_enabled(
                                        shell->menu_layer, menu_active && shell->menu_visible));
+#if defined(_WIN32)
+    if (shell->host != nullptr)
+        sao::ui::overlay_host_detail::set_menu_cursor(shell->host, menu_active);
+#endif
     shell->suppress_layer_input_callbacks.store(callbacks_were_suppressed,
                                                 std::memory_order_release);
     return status;

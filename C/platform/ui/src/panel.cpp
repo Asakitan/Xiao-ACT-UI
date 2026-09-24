@@ -73,9 +73,9 @@ namespace sao::ui::detail {
 static thread_local ScopedPanelMotionOrigin* active_panel_motion_origin{};
 
 ScopedPanelMotionOrigin::ScopedPanelMotionOrigin(sao_ui_compositor_handle_t compositor,
-                                                int32_t host_x, int32_t host_y,
-                                                std::string_view source_id,
-                                                uint64_t scope_token) noexcept
+                                                 int32_t host_x, int32_t host_y,
+                                                 std::string_view source_id,
+                                                 uint64_t scope_token) noexcept
     : compositor_(compositor), previous_(active_panel_motion_origin) {
     source_.origin_x = host_x;
     source_.origin_y = host_y;
@@ -118,9 +118,102 @@ using json = nlohmann::json;
 std::atomic<int32_t> g_body_replace_failure_point{0};
 std::atomic<int32_t> g_theme_upload_failure_count{0};
 std::atomic<int32_t> g_create_theme_switch{-1};
-constexpr size_t kMaximumPanelSpecBytes = 1U << 20U;
+constexpr size_t kMaximumPanelSpecBytes = 8U << 20U;
 constexpr int32_t kMaximumPanelSpecDepth = 8;
 constexpr size_t kMaximumPanelSpecNodes = 400U;
+constexpr size_t kMaximumPanelJsonDepth = 64U;
+constexpr size_t kMaximumPanelJsonEvents = 131072U;
+constexpr size_t kMaximumPanelJsonValues = 65536U;
+
+class BoundedPanelJsonSax final : public json::json_sax_t {
+  public:
+    bool null() override {
+        return consume_value();
+    }
+    bool boolean(bool) override {
+        return consume_value();
+    }
+    bool number_integer(number_integer_t) override {
+        return consume_value();
+    }
+    bool number_unsigned(number_unsigned_t) override {
+        return consume_value();
+    }
+    bool number_float(number_float_t value, const string_t&) override {
+        return std::isfinite(value) && consume_value();
+    }
+    bool string(string_t& value) override {
+        return value.find('\0') == string_t::npos && consume_value();
+    }
+    bool binary(binary_t&) override {
+        return consume_value();
+    }
+    bool start_object(std::size_t) override {
+        return start_container();
+    }
+    bool key(string_t& value) override {
+        return value.find('\0') == string_t::npos && consume_event();
+    }
+    bool end_object() override {
+        return end_container();
+    }
+    bool start_array(std::size_t) override {
+        return start_container();
+    }
+    bool end_array() override {
+        return end_container();
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        return false;
+    }
+
+  private:
+    bool consume_event() noexcept {
+        if (events_ >= kMaximumPanelJsonEvents)
+            return false;
+        ++events_;
+        return true;
+    }
+
+    bool consume_value() noexcept {
+        if (values_ >= kMaximumPanelJsonValues || !consume_event())
+            return false;
+        ++values_;
+        return true;
+    }
+
+    bool start_container() noexcept {
+        if (depth_ >= kMaximumPanelJsonDepth || !consume_value())
+            return false;
+        ++depth_;
+        return true;
+    }
+
+    bool end_container() noexcept {
+        if (depth_ == 0 || !consume_event())
+            return false;
+        --depth_;
+        return true;
+    }
+
+    size_t depth_ = 0;
+    size_t events_ = 0;
+    size_t values_ = 0;
+};
+
+bool panel_json_within_budget(const uint8_t* bytes, size_t length) noexcept {
+    if (length == 0)
+        return true;
+    if (bytes == nullptr)
+        return false;
+    try {
+        BoundedPanelJsonSax sax;
+        const auto* begin = reinterpret_cast<const char*>(bytes);
+        return json::sax_parse(begin, begin + length, &sax);
+    } catch (...) {
+        return false;
+    }
+}
 
 int64_t saturating_add_i64(int64_t left, int64_t right) noexcept {
     if (right > 0 && left > std::numeric_limits<int64_t>::max() - right)
@@ -574,8 +667,8 @@ int32_t resolve_container_layout_mode(const ContainerResponsiveLayout& layout,
     return viewport_width >= threshold ? layout.primary_mode : layout.fallback_mode;
 }
 
-bool canvas_number(const json& object, const char* key, int32_t fallback,
-                   int32_t minimum, int32_t maximum, int32_t* output) {
+bool canvas_number(const json& object, const char* key, int32_t fallback, int32_t minimum,
+                   int32_t maximum, int32_t* output) {
     const auto value = object.find(key);
     if (value == object.end()) {
         *output = fallback;
@@ -595,11 +688,12 @@ bool canvas_color(const json& object, const char* key, std::string_view fallback
     const auto property = object.find(key);
     if (property != object.end() && !property->is_string())
         return false;
-    std::string value = property == object.end() ? std::string(fallback)
-                                                : property->get<std::string>();
+    std::string value =
+        property == object.end() ? std::string(fallback) : property->get<std::string>();
     const auto first = value.find_first_not_of(" \t\r\n");
-    value = first == std::string::npos ? std::string()
-                                      : value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
+    value = first == std::string::npos
+                ? std::string()
+                : value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     if (value.empty())
@@ -619,15 +713,24 @@ bool canvas_color(const json& object, const char* key, std::string_view fallback
     if (value.front() == '#')
         return parse_argb(json(value), output);
     auto token = semantic_accent_token(value);
-    if (value == "white") token = SAO_UI_TOKEN_WHITE;
-    else if (value == "black") token = SAO_UI_TOKEN_BLACK;
-    else if (value == "bg" || value == "body") token = SAO_UI_TOKEN_APP_CARD;
-    else if (value == "border" || value == "sep" || value == "grid") token = SAO_UI_TOKEN_APP_BORDER;
-    else if (value == "header") token = SAO_UI_TOKEN_APP_BG;
-    else if (value == "title") token = SAO_UI_TOKEN_APP_GOLD;
-    else if (value == "subtitle") token = SAO_UI_TOKEN_APP_ACCENT;
-    else if (value == "value" || value == "mono") token = SAO_UI_TOKEN_APP_TEXT;
-    else if (value == "label") token = SAO_UI_TOKEN_APP_TEXT_2;
+    if (value == "white")
+        token = SAO_UI_TOKEN_WHITE;
+    else if (value == "black")
+        token = SAO_UI_TOKEN_BLACK;
+    else if (value == "bg" || value == "body")
+        token = SAO_UI_TOKEN_APP_CARD;
+    else if (value == "border" || value == "sep" || value == "grid")
+        token = SAO_UI_TOKEN_APP_BORDER;
+    else if (value == "header")
+        token = SAO_UI_TOKEN_APP_BG;
+    else if (value == "title")
+        token = SAO_UI_TOKEN_APP_GOLD;
+    else if (value == "subtitle")
+        token = SAO_UI_TOKEN_APP_ACCENT;
+    else if (value == "value" || value == "mono")
+        token = SAO_UI_TOKEN_APP_TEXT;
+    else if (value == "label")
+        token = SAO_UI_TOKEN_APP_TEXT_2;
     if (!token.has_value())
         token = color_token_for_name(value);
     if (!token.has_value())
@@ -651,7 +754,8 @@ bool canvas_spec(const json& props, SaoUiScriptCanvasSpec* spec) {
         !canvas_number(props, "y", 0, -32768, 32768, &position) ||
         !canvas_number(props, "z", 0, -10000, 10000, &position))
         return false;
-    for (const char* key : {"draggable", "antialias", "retain_ops_between_frames", "premultiplied"}) {
+    for (const char* key :
+         {"draggable", "antialias", "retain_ops_between_frames", "premultiplied"}) {
         const auto value = props.find(key);
         if (value != props.end() && !value->is_boolean())
             return false;
@@ -659,14 +763,15 @@ bool canvas_spec(const json& props, SaoUiScriptCanvasSpec* spec) {
     if (frame) {
         for (const char* key : {"width", "height"}) {
             const auto value = props.find(key);
-            if (value != props.end() && value->get<double>() != std::nearbyint(value->get<double>()))
+            if (value != props.end() &&
+                value->get<double>() != std::nearbyint(value->get<double>()))
                 return false;
         }
         if (props.contains("ops"))
             return false;
         const auto hit = props.find("hit_test");
-        if (hit != props.end() && (!hit->is_string() ||
-            (*hit != "none" && *hit != "rect" && *hit != "alpha")))
+        if (hit != props.end() &&
+            (!hit->is_string() || (*hit != "none" && *hit != "rect" && *hit != "alpha")))
             return false;
     }
     spec->draggable_owns_pointer = props.value("draggable", frame);
@@ -694,11 +799,16 @@ bool decode_rgba_frame(const json& props, const SaoUiScriptCanvasSpec& spec,
         return false;
     pixels.reserve(expected);
     const auto sextet = [](char character) -> int {
-        if (character >= 'A' && character <= 'Z') return character - 'A';
-        if (character >= 'a' && character <= 'z') return character - 'a' + 26;
-        if (character >= '0' && character <= '9') return character - '0' + 52;
-        if (character == '+') return 62;
-        if (character == '/') return 63;
+        if (character >= 'A' && character <= 'Z')
+            return character - 'A';
+        if (character >= 'a' && character <= 'z')
+            return character - 'a' + 26;
+        if (character >= '0' && character <= '9')
+            return character - '0' + 52;
+        if (character == '+')
+            return 62;
+        if (character == '/')
+            return 63;
         return -1;
     };
     for (size_t offset = 0; offset < text.size(); offset += 4U) {
@@ -709,12 +819,14 @@ bool decode_rgba_frame(const json& props, const SaoUiScriptCanvasSpec& spec,
         const int c = pad2 ? 0 : sextet(text[offset + 2U]);
         const int d = pad3 ? 0 : sextet(text[offset + 3U]);
         if (a < 0 || b < 0 || c < 0 || d < 0 || (pad2 && !pad3) ||
-            ((pad2 || pad3) && offset + 4U != text.size()) ||
-            (pad2 && (b & 15)) || (pad3 && !pad2 && (c & 3)))
+            ((pad2 || pad3) && offset + 4U != text.size()) || (pad2 && (b & 15)) ||
+            (pad3 && !pad2 && (c & 3)))
             return false;
         pixels.push_back(static_cast<uint8_t>((a << 2) | (b >> 4)));
-        if (!pad2) pixels.push_back(static_cast<uint8_t>((b << 4) | (c >> 2)));
-        if (!pad3) pixels.push_back(static_cast<uint8_t>((c << 6) | d));
+        if (!pad2)
+            pixels.push_back(static_cast<uint8_t>((b << 4) | (c >> 2)));
+        if (!pad3)
+            pixels.push_back(static_cast<uint8_t>((c << 6) | d));
     }
     if (pixels.size() != expected)
         return false;
@@ -757,7 +869,10 @@ struct CanvasSpecOps {
     bool line(int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
         SaoUiCanvasOp op{};
         op.op = SAO_UI_CANVAS_OP_LINE;
-        op.i[0] = x1; op.i[1] = y1; op.i[2] = x2; op.i[3] = y2;
+        op.i[0] = x1;
+        op.i[1] = y1;
+        op.i[2] = x2;
+        op.i[3] = y2;
         return append(op);
     }
 };
@@ -786,8 +901,9 @@ sao_status_t compile_canvas_ops(const json& props, CanvasSpecOps* compiled) {
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         std::string kind = input["op"].get<std::string>();
         const auto first = kind.find_first_not_of(" \t\r\n");
-        kind = first == std::string::npos ? std::string()
-                         : kind.substr(first, kind.find_last_not_of(" \t\r\n") - first + 1);
+        kind = first == std::string::npos
+                   ? std::string()
+                   : kind.substr(first, kind.find_last_not_of(" \t\r\n") - first + 1);
         std::transform(kind.begin(), kind.end(), kind.begin(),
                        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
         if (kind != "line" && kind != "rect" && kind != "oval" && kind != "polygon" &&
@@ -798,8 +914,8 @@ sao_status_t compile_canvas_ops(const json& props, CanvasSpecOps* compiled) {
         int32_t line_width = 0;
         if (!canvas_color(input, "fill", text || kind == "line" ? "value" : "", &fill) ||
             !canvas_color(input, "outline", "", &outline) ||
-            !canvas_number(input, "width", kind == "line" ? 1 : 0,
-                            kind == "line" ? 1 : 0, 20, &line_width))
+            !canvas_number(input, "width", kind == "line" ? 1 : 0, kind == "line" ? 1 : 0, 20,
+                           &line_width))
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         SaoUiCanvasOp op{};
         if (kind == "line") {
@@ -821,9 +937,11 @@ sao_status_t compile_canvas_ops(const json& props, CanvasSpecOps* compiled) {
                 if (pairs && (!vertex.is_array() || vertex.size() != 2U))
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 const auto append_coordinate = [&](const json& value) {
-                    if (!value.is_number()) return false;
+                    if (!value.is_number())
+                        return false;
                     const double number = value.get<double>();
-                    if (!std::isfinite(number) || number < -32768 || number > 32768) return false;
+                    if (!std::isfinite(number) || number < -32768 || number > 32768)
+                        return false;
                     points.push_back(static_cast<int32_t>(std::nearbyint(number)));
                     return true;
                 };
@@ -859,18 +977,24 @@ sao_status_t compile_canvas_ops(const json& props, CanvasSpecOps* compiled) {
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 const std::string anchor = input.value("anchor", std::string("nw"));
                 if (anchor != "nw" && anchor != "n" && anchor != "ne" && anchor != "w" &&
-                    anchor != "center" && anchor != "e" && anchor != "sw" && anchor != "s" && anchor != "se")
+                    anchor != "center" && anchor != "e" && anchor != "sw" && anchor != "s" &&
+                    anchor != "se")
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 float width = 0, height = 0;
-                if (!value.empty() && !sao::ui::detail::measure_text_dwrite(
+                if (!value.empty() &&
+                    !sao::ui::detail::measure_text_dwrite(
                         value.c_str(), static_cast<float>(op.i[2]), &width, &height))
                     return SAO_STATUS_ERR_NOT_INITIALIZED;
-                if (!std::isfinite(width) || !std::isfinite(height) || width > 262144 || height > 262144)
+                if (!std::isfinite(width) || !std::isfinite(height) || width > 262144 ||
+                    height > 262144)
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
                 const float dx = anchor == "n" || anchor == "center" || anchor == "s" ? width * 0.5F
-                                   : anchor == "ne" || anchor == "e" || anchor == "se" ? width : 0.0F;
-                const float dy = anchor == "w" || anchor == "center" || anchor == "e" ? height * 0.5F
-                                   : anchor == "sw" || anchor == "s" || anchor == "se" ? height : 0.0F;
+                                 : anchor == "ne" || anchor == "e" || anchor == "se"  ? width
+                                                                                      : 0.0F;
+                const float dy = anchor == "w" || anchor == "center" || anchor == "e"
+                                     ? height * 0.5F
+                                 : anchor == "sw" || anchor == "s" || anchor == "se" ? height
+                                                                                     : 0.0F;
                 op.i[0] -= static_cast<int32_t>(std::nearbyint(dx));
                 op.i[1] -= static_cast<int32_t>(std::nearbyint(dy));
                 op.op = SAO_UI_CANVAS_OP_TEXT;
@@ -883,32 +1007,38 @@ sao_status_t compile_canvas_ops(const json& props, CanvasSpecOps* compiled) {
                 op.op = kind == "rect" ? SAO_UI_CANVAS_OP_RECT : SAO_UI_CANVAS_OP_OVAL;
             }
         }
-        if (!compiled->color(kind == "line" ? SAO_UI_CANVAS_OP_SET_STROKE : SAO_UI_CANVAS_OP_SET_FILL, fill))
+        if (!compiled->color(
+                kind == "line" ? SAO_UI_CANVAS_OP_SET_STROKE : SAO_UI_CANVAS_OP_SET_FILL, fill))
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
         if (kind == "line" || (outline != 0 && line_width > 0)) {
             SaoUiCanvasOp width{};
             width.op = SAO_UI_CANVAS_OP_SET_LINE_W;
             width.f[0] = static_cast<float>(line_width);
-            if (!compiled->append(width)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+            if (!compiled->append(width))
+                return SAO_STATUS_ERR_INVALID_ARGUMENT;
         }
-        if (!compiled->append(op)) return SAO_STATUS_ERR_INVALID_ARGUMENT;
+        if (!compiled->append(op))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         if (kind != "line" && !text && outline != 0 && line_width > 0) {
             if (!compiled->color(SAO_UI_CANVAS_OP_SET_STROKE, outline))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             auto& points = compiled->points[index];
             if (kind == "rect") {
-                points = {op.i[0], op.i[1], op.i[0] + op.i[2], op.i[1],
-                          op.i[0] + op.i[2], op.i[1] + op.i[3], op.i[0], op.i[1] + op.i[3]};
+                points = {op.i[0],           op.i[1], op.i[0] + op.i[2], op.i[1], op.i[0] + op.i[2],
+                          op.i[1] + op.i[3], op.i[0], op.i[1] + op.i[3]};
             } else if (kind == "oval") {
                 for (int segment = 0; segment < 48; ++segment) {
                     const double angle = segment * 6.283185307179586 / 48.0;
-                    points.push_back(static_cast<int32_t>(std::nearbyint(op.i[0] + op.i[2] * (1.0 + std::cos(angle)) * 0.5)));
-                    points.push_back(static_cast<int32_t>(std::nearbyint(op.i[1] + op.i[3] * (1.0 + std::sin(angle)) * 0.5)));
+                    points.push_back(static_cast<int32_t>(
+                        std::nearbyint(op.i[0] + op.i[2] * (1.0 + std::cos(angle)) * 0.5)));
+                    points.push_back(static_cast<int32_t>(
+                        std::nearbyint(op.i[1] + op.i[3] * (1.0 + std::sin(angle)) * 0.5)));
                 }
             }
             for (size_t point = 0; point < points.size(); point += 2U) {
                 const size_t next = (point + 2U) % points.size();
-                if (!compiled->line(points[point], points[point + 1U], points[next], points[next + 1U]))
+                if (!compiled->line(points[point], points[point + 1U], points[next],
+                                    points[next + 1U]))
                     return SAO_STATUS_ERR_INVALID_ARGUMENT;
             }
         }
@@ -1009,13 +1139,14 @@ sao_status_t apply_owned_widget_props(OwnedWidget* widget) {
         std::vector<uint8_t> pixels;
         if (!canvas_spec(widget->props, &spec) || !decode_rgba_frame(widget->props, spec, pixels))
             return SAO_STATUS_ERR_INVALID_ARGUMENT;
-        const auto canvas = reinterpret_cast<sao_ui_script_canvas_handle_t>(widget->handle);
+        const auto canvas = static_cast<sao_ui_script_canvas_handle_t>(widget->canvas_owner.get());
         int32_t bitmap = 0;
         sao_status_t status = SAO_STATUS_OK;
         if (!pixels.empty())
-            status = sao_ui_script_canvas_register_bitmap(canvas, pixels.data(),
-                static_cast<uint32_t>(spec.width_px), static_cast<uint32_t>(spec.height_px),
-                static_cast<uint32_t>(spec.width_px) * 4U, &bitmap);
+            status = sao_ui_script_canvas_register_bitmap(
+                canvas, pixels.data(), static_cast<uint32_t>(spec.width_px),
+                static_cast<uint32_t>(spec.height_px), static_cast<uint32_t>(spec.width_px) * 4U,
+                &bitmap);
         SaoUiCanvasOp ops[3]{};
         ops[0].op = SAO_UI_CANVAS_OP_SET_FILL;
         ops[0].i[0] = static_cast<int32_t>(spec.bg_argb);
@@ -1041,7 +1172,8 @@ sao_status_t apply_owned_widget_props(OwnedWidget* widget) {
         if (previous_bitmap != 0)
             status = sao_ui_script_canvas_unregister_bitmap(canvas, previous_bitmap);
         for (size_t index = 0; index < widget->canvas_colors.size(); ++index)
-            widget->canvas_colors[index] = sao::ui::detail::panel_theme_color(static_cast<SaoUiColorToken>(index));
+            widget->canvas_colors[index] =
+                sao::ui::detail::panel_theme_color(static_cast<SaoUiColorToken>(index));
         widget->canvas_colors_valid = true;
         return status;
     }
@@ -1050,15 +1182,17 @@ sao_status_t apply_owned_widget_props(OwnedWidget* widget) {
         const sao_status_t parsed = compile_canvas_ops(widget->props, &compiled);
         if (parsed != SAO_STATUS_OK || !widget->props.contains("ops"))
             return parsed;
-        const auto canvas = reinterpret_cast<sao_ui_script_canvas_handle_t>(widget->handle);
+        const auto canvas = static_cast<sao_ui_script_canvas_handle_t>(widget->canvas_owner.get());
         sao_status_t status = sao_ui_script_canvas_begin_draw(canvas);
         if (status == SAO_STATUS_OK)
-            status = sao_ui_script_canvas_submit_ops(canvas, compiled.ops.data(), compiled.ops.size());
+            status =
+                sao_ui_script_canvas_submit_ops(canvas, compiled.ops.data(), compiled.ops.size());
         if (status == SAO_STATUS_OK)
             status = sao_ui_script_canvas_end_draw(canvas);
         if (status == SAO_STATUS_OK) {
             for (size_t index = 0; index < widget->canvas_colors.size(); ++index)
-                widget->canvas_colors[index] = sao::ui::detail::panel_theme_color(static_cast<SaoUiColorToken>(index));
+                widget->canvas_colors[index] =
+                    sao::ui::detail::panel_theme_color(static_cast<SaoUiColorToken>(index));
             widget->canvas_colors_valid = true;
         }
         return status;
@@ -1124,10 +1258,14 @@ sao_status_t retain_manual_canvases(const PanelContent& previous, PanelContent& 
         const OwnedWidget* old = nullptr;
         if (!next->id.empty()) {
             const auto found = previous.by_id.find(next->id);
-            if (found != previous.by_id.end()) old = found->second;
+            if (found != previous.by_id.end())
+                old = found->second;
         } else {
             for (const auto& candidate : previous.widgets)
-                if (candidate->path == next->path) { old = candidate.get(); break; }
+                if (candidate->path == next->path) {
+                    old = candidate.get();
+                    break;
+                }
         }
         if (old == nullptr || old->type != "canvas" || old->props.contains("ops") ||
             old->canvas_owner == nullptr)
@@ -1520,8 +1658,9 @@ bool panel_motion_permitted() noexcept {
     return true;
 }
 
-std::pair<int32_t, int32_t> panel_motion_offset(
-    const SaoPanelState& state, const sao::ui::detail::PanelMotionReturnFocus& source) noexcept {
+std::pair<int32_t, int32_t>
+panel_motion_offset(const SaoPanelState& state,
+                    const sao::ui::detail::PanelMotionReturnFocus& source) noexcept {
     const double dx = static_cast<double>(source.origin_x) - state.x - state.width * 0.5;
     const double dy = static_cast<double>(source.origin_y) - state.y - state.height * 0.5;
     const double distance = std::hypot(dx, dy);
@@ -1546,8 +1685,10 @@ sao_status_t apply_panel_motion_frame(sao_ui_panel_s* panel, const SaoPanelState
             clamp_i64_to_i32(static_cast<int64_t>(state.y) + motion.dy));
         if (status == SAO_STATUS_OK) {
             SaoPanelDescriptor descriptor{};
-            const float owner_alpha = sao_ui_panel_get_descriptor(panel, &descriptor) == SAO_STATUS_OK
-                ? std::clamp(descriptor.initial_opacity, 0.0F, 1.0F) : 1.0F;
+            const float owner_alpha =
+                sao_ui_panel_get_descriptor(panel, &descriptor) == SAO_STATUS_OK
+                    ? std::clamp(descriptor.initial_opacity, 0.0F, 1.0F)
+                    : 1.0F;
             status = sao_ui_layer_set_alpha(panel->layer, owner_alpha * motion.alpha);
         }
     }
@@ -1968,7 +2109,8 @@ json source_nodes_for(const json& input) {
 
 sao_status_t normalize_spec(const uint8_t* bytes, size_t length, json* out_spec,
                             std::string* out_serialized) {
-    if (out_spec == nullptr || out_serialized == nullptr || length > kMaximumPanelSpecBytes)
+    if (out_spec == nullptr || out_serialized == nullptr || length > kMaximumPanelSpecBytes ||
+        !panel_json_within_budget(bytes, length))
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     json input;
     try {
@@ -1983,7 +2125,8 @@ sao_status_t normalize_spec(const uint8_t* bytes, size_t length, json* out_spec,
         input["nodes"].is_array()) {
         *out_spec = std::move(input);
         *out_serialized = out_spec->dump();
-        return SAO_STATUS_OK;
+        return out_serialized->size() <= kMaximumPanelSpecBytes ? SAO_STATUS_OK
+                                                                : SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
 
     const std::string envelope = json{{"spec", input}, {"title", ""}}.dump();
@@ -2009,7 +2152,8 @@ sao_status_t normalize_spec(const uint8_t* bytes, size_t length, json* out_spec,
     } catch (...) {
         return SAO_STATUS_ERR_INVALID_ARGUMENT;
     }
-    return SAO_STATUS_OK;
+    return out_serialized->size() <= kMaximumPanelSpecBytes ? SAO_STATUS_OK
+                                                            : SAO_STATUS_ERR_INVALID_ARGUMENT;
 }
 
 int32_t widget_kind(const std::string& type) {
@@ -2129,16 +2273,20 @@ std::string fit_title(std::string_view text, float width, float size) {
     float measured = 0.0F;
     float measured_height = 0.0F;
     const std::string original(text);
-    if (sao::ui::detail::measure_text_dwrite(original.c_str(), size, &measured, &measured_height) && measured <= width)
+    if (sao::ui::detail::measure_text_dwrite(original.c_str(), size, &measured, &measured_height) &&
+        measured <= width)
         return original;
     size_t low = 0, high = utf8_codepoint_count(text);
     while (low < high) {
         const size_t middle = low + (high - low + 1) / 2;
         const auto candidate = ellipsize_utf8(text, middle);
-        if (!sao::ui::detail::measure_text_dwrite(candidate.c_str(), size, &measured, &measured_height))
+        if (!sao::ui::detail::measure_text_dwrite(candidate.c_str(), size, &measured,
+                                                  &measured_height))
             return ellipsize_utf8(text, static_cast<size_t>(std::max(0.0F, width / size)));
-        if (measured <= width) low = middle;
-        else high = middle - 1;
+        if (measured <= width)
+            low = middle;
+        else
+            high = middle - 1;
     }
     return ellipsize_utf8(text, low);
 }
@@ -2153,7 +2301,8 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
     for (size_t index = 0; index < nodes.size(); ++index) {
         const auto& source_node = nodes[index];
         json canvas_node;
-        if (normalized_type(source_node) == "canvas" || normalized_type(source_node) == "rgba_frame") {
+        if (normalized_type(source_node) == "canvas" ||
+            normalized_type(source_node) == "rgba_frame") {
             SaoUiScriptCanvasSpec native_spec{};
             if (!canvas_spec(source_node, &native_spec))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
@@ -2356,18 +2505,20 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
             SaoUiScriptCanvasSpec native_spec{};
             if (!canvas_spec(node, &native_spec))
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
-            content.canvas_pixels += static_cast<uint64_t>(native_spec.width_px) * native_spec.height_px;
+            content.canvas_pixels +=
+                static_cast<uint64_t>(native_spec.width_px) * native_spec.height_px;
             if (content.canvas_pixels > 16U * 1024U * 1024U)
                 return SAO_STATUS_ERR_INVALID_ARGUMENT;
             if (node.contains("ops") || type == "rgba_frame")
                 native_spec.bg_argb = 0;
             sao_ui_script_canvas_handle_t canvas_handle = nullptr;
-            status = sao_ui_script_canvas_create(nullptr, &native_spec, &owned->handle,
-                                                 &canvas_handle);
+            status =
+                sao_ui_script_canvas_create(nullptr, &native_spec, &owned->handle, &canvas_handle);
             if (status == SAO_STATUS_OK) {
                 owned->owns_handle = false;
                 owned->canvas_owner = std::shared_ptr<void>(canvas_handle, [](void* handle) {
-                    sao_ui_script_canvas_destroy(static_cast<sao_ui_script_canvas_handle_t>(handle));
+                    sao_ui_script_canvas_destroy(
+                        static_cast<sao_ui_script_canvas_handle_t>(handle));
                 });
             }
         } else {
@@ -2424,10 +2575,12 @@ sao_status_t append_nodes(PanelContent& content, sao_ui_layout_node_handle_t par
             float width = 0.0F, height = 0.0F;
             const sao::ui::detail::ScopedTextRole role(sao::ui::detail::ClassicTextRole::Auto);
             if (sao::ui::detail::measure_text_dwrite(text_value.c_str(), 13.0F, &width, &height)) {
-                const int32_t intrinsic_width = std::clamp(static_cast<int32_t>(std::ceil(width)) + 24, 48,
-                    std::max(48, std::min(400, viewport_width - 24)));
+                const int32_t intrinsic_width =
+                    std::clamp(static_cast<int32_t>(std::ceil(width)) + 24, 48,
+                               std::max(48, std::min(400, viewport_width - 24)));
                 spec.fixed_width_px = std::max(spec.min_width_px, intrinsic_width);
-                if (spec.max_width_px > 0) spec.fixed_width_px = std::min(spec.fixed_width_px, spec.max_width_px);
+                if (spec.max_width_px > 0)
+                    spec.fixed_width_px = std::min(spec.fixed_width_px, spec.max_width_px);
                 spec.weight = 0.0F;
             }
         }
@@ -2881,19 +3034,20 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
         close_armed = panel->close_armed;
     }
     if (status == SAO_STATUS_OK)
-        status = sao_ui_paint_ctx_fill_rounded_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
-                                            static_cast<float>(state.height),
-                                            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]),
-                                            theme.colors[SAO_UI_TOKEN_APP_BG]);
+        status = sao_ui_paint_ctx_fill_rounded_rect(
+            context, 0.0F, 0.0F, static_cast<float>(state.width), static_cast<float>(state.height),
+            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]),
+            theme.colors[SAO_UI_TOKEN_APP_BG]);
     if (status == SAO_STATUS_OK and show_titlebar) {
-        status = sao_ui_paint_ctx_fill_rounded_rect(context, 0.0F, 0.0F, static_cast<float>(state.width),
-                                            static_cast<float>(std::max(1, top)),
-                                            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]),
-                                            theme.colors[SAO_UI_TOKEN_APP_CARD]);
+        status = sao_ui_paint_ctx_fill_rounded_rect(
+            context, 0.0F, 0.0F, static_cast<float>(state.width),
+            static_cast<float>(std::max(1, top)),
+            static_cast<float>(theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]),
+            theme.colors[SAO_UI_TOKEN_APP_CARD]);
         if (status == SAO_STATUS_OK)
-            status = sao_ui_paint_ctx_fill_rect(context, 0.0F, static_cast<float>(top / 2),
-                static_cast<float>(state.width), static_cast<float>(top - top / 2),
-                theme.colors[SAO_UI_TOKEN_APP_CARD]);
+            status = sao_ui_paint_ctx_fill_rect(
+                context, 0.0F, static_cast<float>(top / 2), static_cast<float>(state.width),
+                static_cast<float>(top - top / 2), theme.colors[SAO_UI_TOKEN_APP_CARD]);
         if (status == SAO_STATUS_OK and not title.empty()) {
             const int32_t title_padding = theme.metrics[SAO_UI_METRIC_PADDING_M];
             const int32_t marker_space = theme.high_contrast ? 0 : 10;
@@ -2910,10 +3064,11 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                 const sao::ui::detail::ScopedTextRole title_role(
                     sao::ui::detail::ClassicTextRole::Body,
                     sao::ui::detail::ClassicTextWeight::SemiBold);
-                const std::string visible_title = fit_title(title, static_cast<float>(title_width), 16.0F);
+                const std::string visible_title =
+                    fit_title(title, static_cast<float>(title_width), 16.0F);
                 float measured_width = 0.0F, measured_height = 22.0F;
                 (void)sao::ui::detail::measure_text_dwrite(visible_title.c_str(), 16.0F,
-                    &measured_width, &measured_height);
+                                                           &measured_width, &measured_height);
                 status = sao_ui_paint_ctx_draw_utf8(
                     context, static_cast<float>(title_padding + marker_space),
                     std::max(0.0F, (static_cast<float>(top) - measured_height) * 0.5F),
@@ -2986,26 +3141,26 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                                              : section_role ? 0xc8U
                                              : card_role    ? 0xe0U
                                                             : 0xb8U;
-                const uint32_t border = theme_color_with_alpha(
-                    panel_role || section_role || group_role || card_role
-                        ? theme.colors[SAO_UI_TOKEN_APP_BORDER]
-                        : theme.colors[SAO_UI_TOKEN_APP_TEXT_DIM],
-                    border_alpha);
+                const uint32_t border =
+                    theme_color_with_alpha(panel_role || section_role || group_role || card_role
+                                               ? theme.colors[SAO_UI_TOKEN_APP_BORDER]
+                                               : theme.colors[SAO_UI_TOKEN_APP_TEXT_DIM],
+                                           border_alpha);
                 const float radius = static_cast<float>(
                     panel_role || card_role ? theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_LARGE]
                                             : theme.metrics[SAO_UI_METRIC_BORDER_RADIUS_SMALL]);
                 const float paint_inset =
                     static_cast<float>(std::max(1, theme.metrics[SAO_UI_METRIC_PADDING_XS]));
                 constexpr float stroke_width = 1.0F;
-                const float surface_height = card_role && !theme.high_contrast && height > 4.0F
-                    ? height - 2.0F : height;
+                const float surface_height =
+                    card_role && !theme.high_contrast && height > 4.0F ? height - 2.0F : height;
                 if (card_role && !theme.high_contrast && width > 4.0F && height > 4.0F)
-                    status = sao_ui_paint_ctx_fill_rounded_rect(context, x + 1.0F, y + 2.0F,
-                        width - 2.0F, height - 2.0F, radius,
+                    status = sao_ui_paint_ctx_fill_rounded_rect(
+                        context, x + 1.0F, y + 2.0F, width - 2.0F, height - 2.0F, radius,
                         theme_color_with_alpha(theme.colors[SAO_UI_TOKEN_BLACK], 12));
                 if (status == SAO_STATUS_OK && (panel_role || card_role))
-                    status = sao_ui_paint_ctx_fill_rounded_rect(context, x, y, width, surface_height,
-                                                                radius, fill);
+                    status = sao_ui_paint_ctx_fill_rounded_rect(context, x, y, width,
+                                                                surface_height, radius, fill);
                 if (status != SAO_STATUS_OK)
                     break;
                 const float rail_width = section_role && theme.high_contrast ? 1.0F : 0.0F;
@@ -3073,14 +3228,14 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
                                                     static_cast<float>(node_clip.height_px));
                 if (status != SAO_STATUS_OK)
                     break;
-                 if (((widget->type == "canvas" && widget->props.contains("ops")) ||
+                if (((widget->type == "canvas" && widget->props.contains("ops")) ||
                      widget->type == "rgba_frame") &&
                     (!widget->canvas_colors_valid || widget->canvas_colors != theme.colors))
                     status = apply_owned_widget_props(widget);
                 if (status == SAO_STATUS_OK)
                     status = sao_ui_widget_paint_at(widget->handle, context, rect.x_px, rect.y_px,
-                                                std::max(1, rect.width_px),
-                                                std::max(1, rect.height_px), 1.0F);
+                                                    std::max(1, rect.width_px),
+                                                    std::max(1, rect.height_px), 1.0F);
                 const sao_status_t widget_pop = sao_ui_paint_ctx_pop_clip(context);
                 if (status == SAO_STATUS_OK)
                     status = widget_pop;
@@ -3184,9 +3339,9 @@ sao_status_t paint_panel(const std::shared_ptr<PanelContent>& content, const Sao
             static_cast<float>(std::max(1, state.height - 1)), panel_radius, 1.0F,
             theme_color_with_alpha(theme.colors[SAO_UI_TOKEN_APP_BORDER], 0xd0U));
         if (status == SAO_STATUS_OK && !theme.high_contrast && !show_titlebar && state.width > 40) {
-            status = sao_ui_paint_ctx_stroke_line(
-                context, panel_radius + 4.0F, 0.5F, panel_radius + 28.0F, 0.5F, 1.0F,
-                theme.colors[SAO_UI_TOKEN_APP_ACCENT]);
+            status = sao_ui_paint_ctx_stroke_line(context, panel_radius + 4.0F, 0.5F,
+                                                  panel_radius + 28.0F, 0.5F, 1.0F,
+                                                  theme.colors[SAO_UI_TOKEN_APP_ACCENT]);
         }
     }
     const sao_status_t end_status = sao_ui_paint_ctx_end_frame(context);
@@ -4062,8 +4217,10 @@ sao_status_t panel_scroll(sao_ui_panel_s* panel, float dx, float dy) {
     POINT live_pointer{};
     if (host != nullptr && ::GetCursorPos(&live_pointer) != FALSE &&
         ::ScreenToClient(host, &live_pointer) != FALSE) {
-        pointer_x = clamp_i64_to_i32(static_cast<int64_t>(live_pointer.x) - panel_state.x - motion_dx);
-        pointer_y = clamp_i64_to_i32(static_cast<int64_t>(live_pointer.y) - panel_state.y - motion_dy);
+        pointer_x =
+            clamp_i64_to_i32(static_cast<int64_t>(live_pointer.x) - panel_state.x - motion_dx);
+        pointer_y =
+            clamp_i64_to_i32(static_cast<int64_t>(live_pointer.y) - panel_state.y - motion_dy);
         std::lock_guard lock(panel->mutex);
         panel->pointer_x = pointer_x;
         panel->pointer_y = pointer_y;
@@ -4739,10 +4896,10 @@ sao_status_t tick_panel_motion(sao_ui_compositor_handle_t compositor, uint32_t d
             } else {
                 const double t = static_cast<double>(next.elapsed_ms) / next.duration_ms;
                 const double eased = t * t * (3.0 - 2.0 * t);
-                next.dx = static_cast<int32_t>(std::round(
-                    next.from_dx + (next.target_dx - next.from_dx) * eased));
-                next.dy = static_cast<int32_t>(std::round(
-                    next.from_dy + (next.target_dy - next.from_dy) * eased));
+                next.dx = static_cast<int32_t>(
+                    std::round(next.from_dx + (next.target_dx - next.from_dx) * eased));
+                next.dy = static_cast<int32_t>(
+                    std::round(next.from_dy + (next.target_dy - next.from_dy) * eased));
                 const double distance = std::hypot(next.dx, next.dy);
                 if (distance > 20.0) {
                     next.dx = static_cast<int32_t>(next.dx * (20.0 / distance));
@@ -4753,8 +4910,8 @@ sao_status_t tick_panel_motion(sao_ui_compositor_handle_t compositor, uint32_t d
                     static_cast<float>(next.from_alpha + (target_alpha - next.from_alpha) * eased),
                     0.0F, 1.0F);
             }
-            sao_status_t status = apply_panel_motion_frame(
-                panel, state, next, state.visible || next.active);
+            sao_status_t status =
+                apply_panel_motion_frame(panel, state, next, state.visible || next.active);
             if (status != SAO_STATUS_OK) {
                 status = restore_panel_motion_frame(panel, state, previous, status);
                 if (first_status == SAO_STATUS_OK)
@@ -4772,7 +4929,7 @@ sao_status_t tick_panel_motion(sao_ui_compositor_handle_t compositor, uint32_t d
 }
 
 bool take_panel_motion_return_focus(sao_ui_compositor_handle_t compositor, uint64_t scope_token,
-                                   PanelMotionReturnFocus* out_cue) noexcept {
+                                    PanelMotionReturnFocus* out_cue) noexcept {
     if (out_cue == nullptr)
         return false;
     try {
@@ -4952,7 +5109,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_input_current_focus_(
         if (stored->compositor != compositor)
             continue;
         std::lock_guard panel_lock(stored->mutex);
-        if (stored->state.visible && !stored->motion_mutating && stored->focused_widget != nullptr) {
+        if (stored->state.visible && !stored->motion_mutating &&
+            stored->focused_widget != nullptr) {
             *out_widget = stored->focused_widget;
             return SAO_STATUS_OK;
         }
@@ -5507,6 +5665,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
         std::lock_guard render_lock(panel->render_mutex);
         const auto theme = resolve_panel_theme(panel);
         const sao::ui::detail::ScopedPanelPaintTheme theme_scope(theme);
+        if (!panel_json_within_budget(props_json_utf8, props_len))
+            return SAO_STATUS_ERR_INVALID_ARGUMENT;
         const json patch = props_len == 0
                                ? json::object()
                                : json::parse(props_json_utf8, props_json_utf8 + props_len);
@@ -5551,7 +5711,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
         }
         if ((widget->type == "canvas" || widget->type == "rgba_frame") && spec_updated) {
             // Stage the entire panel before publishing any canvas geometry or op changes.
-            return sao_ui_panel_set_spec(panel, reinterpret_cast<const uint8_t*>(candidate_spec.data()),
+            return sao_ui_panel_set_spec(panel,
+                                         reinterpret_cast<const uint8_t*>(candidate_spec.data()),
                                          candidate_spec.size());
         }
         {
@@ -5605,7 +5766,8 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_update_widget(sao_ui_panel_hand
             widget->action_args = std::move(previous_args);
             widget->enabled = previous_enabled;
             (void)apply_owned_widget_props(widget);
-            if (widget->type != "sparkline" && widget->type != "canvas" && widget->type != "rgba_frame")
+            if (widget->type != "sparkline" && widget->type != "canvas" &&
+                widget->type != "rgba_frame")
                 (void)sao_ui_widget_set_enabled(widget->handle, widget->enabled);
         }
         return status;
@@ -5903,11 +6065,11 @@ extern "C" sao_status_t SAO_UI_CALL sao_ui_panel_set_visible(sao_ui_panel_handle
             }
         }
         const bool update_visual = previous.active || next.active;
-        const sao_status_t status = apply_panel_motion_frame(
-            panel, next_state, next, visible || next.active, update_visual);
+        const sao_status_t status = apply_panel_motion_frame(panel, next_state, next,
+                                                             visible || next.active, update_visual);
         if (status != SAO_STATUS_OK)
             return restore_panel_motion_frame(panel, previous_state, previous, status,
-                                               update_visual);
+                                              update_visual);
         {
             std::scoped_lock lock(panel->mutex);
             if (panel->stopping)
