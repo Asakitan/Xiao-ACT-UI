@@ -37,15 +37,17 @@ namespace sao::plugins::sdk_binding {
 inline constexpr size_t kMaximumBindingJsonBytes = 8U * 1024U * 1024U;
 inline constexpr size_t kMaximumBindingJsonDepth = 64U;
 inline constexpr size_t kMaximumBindingJsonNodes = 16384U;
-inline constexpr size_t kMaximumBindingJsonStringBytes = 1024U * 1024U;
-inline constexpr size_t kMaximumBindingJsonTotalStringBytes = 4U * 1024U * 1024U;
+inline constexpr size_t kMaximumBindingJsonStringBytes = 8U * 1024U * 1024U;
+inline constexpr size_t kMaximumBindingJsonTotalStringBytes = 8U * 1024U * 1024U;
 
 inline bool sao_plugins_binding_bounded_json_c_string(const char* value,
-                                                       size_t& out_size) noexcept {
-    if (value == nullptr) return false;
-    const auto* terminator = static_cast<const char*>(
-        std::memchr(value, '\0', kMaximumBindingJsonBytes + 1U));
-    if (terminator == nullptr) return false;
+                                                      size_t& out_size) noexcept {
+    if (value == nullptr)
+        return false;
+    const auto* terminator =
+        static_cast<const char*>(std::memchr(value, '\0', kMaximumBindingJsonBytes + 1U));
+    if (terminator == nullptr)
+        return false;
     out_size = static_cast<size_t>(terminator - value);
     return out_size != 0;
 }
@@ -350,9 +352,10 @@ using sdk_context_panel_action_callback_fn =
 // (binding_engine.h) for vtable slots whose callback shape has no dedicated
 // slot above — e.g. net frame callbacks, render hooks, data source ticks.
 // channel_utf8 names the source ("net.frame", "ui.render_hook", ...).
-using sdk_context_engine_callback_fn =
-    void(SAO_PLUGINS_CALL*)(const char* channel_utf8, const uint8_t* payload_json_utf8,
-                            size_t payload_size, void* user_data);
+using sdk_context_engine_callback_fn = void(SAO_PLUGINS_CALL*)(const char* channel_utf8,
+                                                               const uint8_t* payload_json_utf8,
+                                                               size_t payload_size,
+                                                               void* user_data);
 
 struct sdk_context_call_request {
     const char* args_json_utf8 = nullptr;

@@ -89,6 +89,11 @@ loader 为每个插件建立独立 state，先装标准库、按 manifest 权限
   helper 语法/执行失败保留 Lua 文件名与消息。共享 bridge 的 missing/unsupported
   成功返回空值合同不变。
 
+当路径后缀为 `.py` 时，共享 bridge 使用 pymini priority 10 → CPython priority 100，
+不在 Lua state 内执行 Python。只有 pymini 无执行预检明确不支持才惰性进入 CPython；
+值域限定为有界 JSON-compatible 值与 callable。Pillow base64 RGBA string 的语言桥
+预算为 8 MiB，`script_snake_lua` 已通过该链调用 `candy_render.py` 并提交多层 overlay。
+
 ## 原生 SDK fixture
 
 ``tools/provider_probe/fixture/native_sdk/lua/`` 是一个插件目录，根 manifest 为

@@ -39,6 +39,11 @@ CPython。动态代码生成、任意二进制扩展、真正的事件循环与�
 CPython 的诊断。原生插件不依赖客户机 Python，也不因配置了 Python 而加载其 DLL。
 执行开始后的异常不会切换解释器重跑，避免重复插件副作用。
 
+反射 `ctx.engine_call`/`ctx.engine.list` 使用共享 8 MiB 结果预算一次性派发，严格
+校验非空、NUL 终止及 `status`/`result` 包壳；非零或越界状态抛出错误，不会因
+结果扩容重试可能带副作用的 invoker。高容量缓冲为单次调用局部所有，回调重入不会
+覆盖外层调用结果。
+
 launcher 在缺少可用 Python 时，通过 `sao_plugins_pymini_adapter_requires_python`
 逐插件预检并延期完整 Python 插件及其依赖者；独立原生插件继续启动。
 语法错误、缺失本地文件、强制 `pymini` 的子集外代码仍是插件错误，不变成安装提示。
@@ -146,8 +151,9 @@ execution runtime，故这两项 mini 证据保持。session-82 的全量 Debug 
 - `sao_plugins_pymini_unregister_loader_adapter(owner)` — 先卸载全部
   lifecycle 插件再调用。
 - `sao_plugins_pymini_register_script_engine()` /
-  `sao_plugins_pymini_unregister_script_engine()` — `.py` 的 script_ctx
-  provider (`runtime_bridge` priority=10)，独立于 adapter。
+  `sao_plugins_pymini_unregister_script_engine()` — 注册 `.py` 的 composite
+  script_ctx providers：pymini `priority=10`，可选 CPython helper facade
+  `priority=100`；只有 pymini 无执行预检明确不支持时才进入后者，独立于 plugin adapter。
 - `..._adapter_plugin_count` / `..._adapter_get_last_error` /
   `..._free_string` — 内省。
 
@@ -165,8 +171,14 @@ callback 实参、容器内和返回的 callable 使用同一调用 lease，退�
 entry 与 helper 的 SDK engine callback 均通过 ctx 创建时记录的弱世代身份取得
 lease，过期身份不重新按 ctx 地址绑定，也不形成 attachment→interpreter→owner
 强引用环；`interpreter::call` 固定 callable 强引用，嵌套回调替换原绑定时正在执行的函数仍存活。
-本 helper 生命周期修改经静态调用链、磁盘读回、聚焦独立审阅和全量 Debug / RelWithDebInfo 编译链接检查；
-session-79 未运行跨语言 helper 并发卸载验收，session-80 的原生路由探针证据另列。
+CPython helper 同样由 context-generation attachment 拥有，按 canonical path 缓存，
+以 generation/path hash 组成唯一物理 module ID 防 `sys.modules` 冲突；facade 只传递
+有界 JSON-compatible 值与 callable member。只要 helper handle 或 zombie state 仍在，
+最终 CPython shutdown 就返回 busy 并保留资源供后续重试。
+本 helper 生命周期修改经静态调用链、磁盘读回与独立审阅；同路径同线程递归加载返回
+`BUSY`，其他线程等待首个加载结果，context lease 阻止 active call 期间 retirement。
+session-83 post-Review 的 helper fixture、三真实 action、正常 unload/finalization、定向/完整
+Debug 与 Hardened acceptance 均通过；未执行对抗式调度、finalization 故障注入或长期并发压力。
 `unique_ptr<impl>` 成员 (PyFileObj/PyThreadObj) 的 ctor/dtor 定义在
 `pymini_stdlib2.cpp`。
 
@@ -183,4 +195,6 @@ async-lite、eager generator 与 stdlib-lite；不等同完整 Python。子集�
 `py_error.features` 命名并走委托/UNSUPPORTED 路由。包导入、递归预检与惰性
 CPython 的基线证据记录于 [`session-80`](../../docs/session-log/session-80-pymini-native-runtime.md)，
 本轮扩展语法/stdlib 与全量构建、发布验收记录于
-[`session-82`](../../docs/session-log/session-82-mini-runtimes-vscode-execution.md)。
+[`session-82`](../../docs/session-log/session-82-mini-runtimes-vscode-execution.md)；跨语言
+CPython helper 与真实 AS/Emma/Lua 插件证据见
+[`session-83`](../../docs/session-log/session-83-cross-language-support-runtime.md)。

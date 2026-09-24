@@ -44,14 +44,22 @@ python server_service.py run --service-name SaoUpdateHost --role update --root C
 
 其中 `C:\SAO\update-host` 必须是上述部署包解压后的根目录.
 
-### 当前生产状态（2026-09-20，session-58b）
+Workshop 身份查询默认以只读方式打开同根目录的 `license_server/license.db`；上述纯源码部署包只包含证书与私钥，不包含许可数据库。许可服务若使用另一目录或配置了自定义 `db_path`，需在 Update Host 服务进程的环境中设置 `SAO_WORKSHOP_LICENSE_DB_PATH` 为实际激活库的绝对路径，并确认服务进程具有读取权限。数据库不可访问时身份请求返回 503；每次身份、下载和发布请求均重新核对 token 的完整 SHA-256、HWID v3、有效期和撤销位，用户发布还会在插件锁内复核所有权。管理员发布走单独的 `/api/v1/workshop/admin/plugins/<id>/publish` 路径。
+
+### 当前生产状态（2026-09-24，session-87）
+
+- ECS7348 上的 `SaoAutoUpdateHost` 已原子切换到本地同源 `app.py`（SHA-256 `8F976C5386EC602C034E073FBDFB62735396B58C2D50BC351C7A4226259EAD6F`），保留 `app.py.bak_session87_20260924`，服务为 Running。
+- 本机监听端 `/health`、Workshop 目录和更新 latest 均返回 200；缺失或伪造 Workshop 身份及无 token 下载返回 401。许可库包含 token SHA-256、HWID v3、撤销与到期字段，部署核对时有四条有效激活记录。
+- 本地隔离 SQLite HTTPS fixture 覆盖双用户 marker 分离、跨用户更新 403、双方下载 200 与撤销后 401；真实持证的原生身份交换、上传和下载尚未实测。当前 Hardened 验收为五份 SAO2、17 个输入、22 PE、83 个文件；build/ship bundle 均为 33,188,432 B、SHA-256 `785F233DCF2C57669EBD3775C9114D6E754A7E20026B85083B22BE0AEDF9FFBF`。
+
+### 先前生产快照（2026-09-20，session-58b）
 
 - SCM service 为 `SaoAutoUpdateHost`，部署根为 `C:\ProgramData\SaoAuto\Server`；测得运行PID 9312拥有内部直接TLS listener `0.0.0.0:9973`，公网固定入口为`https://x2.sjcmc.cn:15018`。
 - live certificate SPKI SHA-256为`d3171ec5b86303233b6abda8e83142293d6910099aedd0cdac947d276006db0a`，与native client pin一致。
-- `stable/windows-x64-native`当前release为`0.2.1`：62,162,440 bytes，SHA-256 `1dab8e44cee5a6c3738d7d4da45c15b5566ffbf1ce8c812f6a6be61fa9c887f1`。internal/public `/health`、internal/public `latest.json`、release store artifact与实际下载bytes全部一致。
+- `stable/windows-x64-native`当时的release为`0.2.1`：62,162,440 bytes，SHA-256 `1dab8e44cee5a6c3738d7d4da45c15b5566ffbf1ce8c812f6a6be61fa9c887f1`。当时internal/public `/health`、internal/public `latest.json`、release store artifact与实际下载bytes全部一致。
 - production notes精确为`Canonical native release: strict package contract, bounded helper lifecycle, bound completion receipt, early restart acknowledgement, and safe-mode recovery UI.`
-- genuine `0.2.0` launcher/helper已通过该公网endpoint完成download/apply/restart到`0.2.1`；重启version exit0、installed bootstrap hash匹配current ship，最终local staging/transaction/helper/process residue为0。
-- publication完成后已清空`C:\ProgramData\SaoAuto\Server\incoming`中的三份上传副本和`__pycache__`，active release artifact保留在release store。`SaoAutoUpdateHost.log`审计时共645行，最后traceback/error在572行，之后73行均为成功操作；当前service startup之后无error。更早的asyncio Proactor `ConnectionResetError 10054`是remote peer disconnect，不是publish transaction failure。生产根下无独立cleaner日志/产物或SaoAuto scheduled cleanup task。
+- genuine `0.2.0` launcher/helper已通过该公网endpoint完成download/apply/restart到`0.2.1`；重启version exit0、installed bootstrap hash匹配当时ship，最终local staging/transaction/helper/process residue为0。
+- publication完成后已清空`C:\ProgramData\SaoAuto\Server\incoming`中的三份上传副本和`__pycache__`，active release artifact保留在release store。`SaoAutoUpdateHost.log`当时审计共645行，最后traceback/error在572行，之后73行均为成功操作；当时service startup之后无error。更早的asyncio Proactor `ConnectionResetError 10054`是remote peer disconnect，不是publish transaction failure。生产根下无独立cleaner日志/产物或SaoAuto scheduled cleanup task。
 
 ## 发布新版本
 
@@ -62,9 +70,9 @@ python server_service.py run --service-name SaoUpdateHost --role update --root C
 `sao_dev_publish` 上传：
 
 ```powershell
-$pack = "..\..\C\build\windows-release\bin\RelWithDebInfo\sao_pack.exe"
-$publish = "..\..\C\build\windows-release\bin\RelWithDebInfo\sao_dev_publish.exe"
-$ship = "..\..\C\build\windows-release\ship\bin"
+$pack = "..\..\C\build\windows-hardened\bin\Release\sao_pack.exe"
+$publish = "..\..\C\build\windows-hardened\bin\Release\sao_dev_publish.exe"
+$ship = "..\..\C\build\windows-hardened\ship\bin"
 $version = "0.2.1"
 $out = Join-Path $env:TEMP "SaoAuto-$version"
 # 预先在当前进程设置 SAO_UPDATE_API_KEY；不要把 key 写入脚本或仓库。
@@ -171,8 +179,11 @@ update_host/
 - `POST /update/<channel>/<target>/publish` — 单流上传更新包并推进锚点
 - `GET /update/<channel>/<target>/artifacts/<file>` — 下载更新包
 - `GET /update/<channel>/<target>/history` — 列出已发布 artifacts
-- `GET /api/v1/workshop/plugins`、`GET /api/v1/workshop/plugins/<id>`、`GET /api/v1/workshop/plugins/<id>/download` — Workshop 浏览/详情/下载
-- `POST /api/v1/workshop/plugins/<id>/publish` — Workshop 单流发布（需要 `X-API-Key`）
+- `GET /api/v1/workshop/plugins`、`GET /api/v1/workshop/plugins/<id>` — Workshop 匿名浏览/详情
+- `GET /api/v1/workshop/identity` — 核验许可 token 与 HWID v3，颁发该用户/设备组合的 Workshop marker
+- `GET /api/v1/workshop/plugins/<id>/download` — 仅接受有效许可 token、HWID 与本机 marker 后下载
+- `POST /api/v1/workshop/plugins/<id>/publish` — 用户携带同一身份三元组单流上传；只允许原发布用户更新
+- `POST /api/v1/workshop/admin/plugins/<id>/publish` — 管理员发布（需要 `X-API-Key`）
 - `GET /api/v1/workshop/admin` — Workshop 网页管理界面；API key 仅保存在当前浏览器 tab
 - `GET /api/v1/workshop/admin/plugins` — 管理目录与版本列表（需要 `X-API-Key`）
 - `PATCH /api/v1/workshop/plugins/<id>` — 编辑名称、标签、作者、说明、游戏与最低版本（需要 `X-API-Key`）

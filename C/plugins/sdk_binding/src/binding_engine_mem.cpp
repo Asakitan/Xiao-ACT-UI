@@ -15,8 +15,9 @@
 namespace sao::plugins::sdk_binding {
 namespace {
 
-// mem.read 单次读取上限（binding JSON 总量上限对齐）。
-constexpr uint64_t kMaxMemReadBytes = 8ull * 1024ull * 1024ull;
+// 为结果包预留空间，避免 base64 膨胀挤占 JSON 预算。
+constexpr uint64_t kMaxMemReadBytes = ((kMaximumBindingJsonBytes - 1024U) / 4U) * 3U;
+static_assert(((kMaxMemReadBytes + 2U) / 3U) * 4U + 1024U <= kMaximumBindingJsonBytes);
 
 // ── 槽位探测 ─────────────────────────────────────────────────────
 // vtable 槽可独立为 null：v1.4 前缀槽直接查指针，v1.5 追加槽先走

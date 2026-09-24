@@ -218,7 +218,11 @@ const std::vector<AgentDefinition>& builtin_agents() {
                 "2. API documentation with examples\n"
                 "3. Architecture overviews with diagrams\n"
                 "4. User guides and tutorials\n\n"
-                "Keep documentation accurate and concise.";
+                "Keep documentation accurate and concise. For SAO Auto plugin work, "
+                "consult the five offline language API pages in "
+                "sao_auto/C/launcher/docs/html/plugin-{python,lua,emma,angelscript,csharp}.html "
+                "and plugin-api-reference.html (installed as docs/html/); begin at index.html#plugin-api. "
+                "Check the matching runtime and example before describing an API.";
             agent.tools = {"readFile", "searchFiles", "listFiles", "editFile"};
             agent.icon = "\xF0\x9F\x93\x9D";  // 📝
             agent.when_to_use =

@@ -201,6 +201,39 @@ const std::vector<PromptDefinition>& builtin_prompts() {
             prompt.scope = "builtin";
             result.push_back(std::move(prompt));
         }
+        {
+            PromptDefinition prompt;
+            prompt.id = "sao-plugin-api";
+            prompt.name = "SAO Plugin API";
+            prompt.description =
+                "Use the packaged SAO Auto plugin API docs for Python, Lua, Emma, AngelScript, or C#";
+            prompt.content =
+                "Help with this SAO Auto plugin task: {{task}}\n"
+                "Plugin language: {{language}}\n\n"
+                "Consult the matching complete offline API document before writing code. "
+                "The installed guide is under docs/html/ next to the launcher; "
+                "in the source workspace it is under sao_auto/C/launcher/docs/html/.\n"
+                "Shared exhaustive reference: plugin-api-reference.html "
+                "(complete manifest, host ctx matrix, all 22 UI builders and all 126 engine descriptors).\n"
+                "Python: plugin-python.html (pymini / CPython).\n"
+                "Lua: plugin-lua.html (Lua 5.4).\n"
+                "Emma: plugin-emma.html (native interpreter).\n"
+                "AngelScript: plugin-angelscript.html (typed PluginContext).\n"
+                "C#: plugin-csharp.html (csmini / CoreCLR).\n"
+                "Start at index.html#plugin-api for navigation; read the chosen document's "
+                "manifest, lifecycle, all-context API, example, and runtime restrictions; "
+                "use the shared reference for exact engine argument order and result fields. "
+                "Confirm callback signatures against the real host and plugin source, "
+                "and do not treat mini runtimes as their full-language counterparts.";
+            prompt.variables.push_back(Json{{"name", "language"},
+                {"description", "python | lua | emma | angelscript | csharp"}});
+            prompt.variables.push_back(Json{{"name", "task"},
+                {"description", "What to build or explain using the plugin API"}});
+            prompt.tags = {"plugin", "api", "docs"};
+            prompt.builtin = true;
+            prompt.scope = "builtin";
+            result.push_back(std::move(prompt));
+        }
         return result;
     }();
     return prompts;

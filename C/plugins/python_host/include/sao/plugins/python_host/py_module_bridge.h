@@ -75,6 +75,11 @@ sao_plugins_pyhost_ctx_try_teardown_native(void* pyobject);
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context);
 
+// Helper modules accept only the generated physical ID tied to the loader owner.
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_ctx_bind_loader_context_module(void* pyobject, void* loader_context,
+                                                  const char* module_id_utf8);
+
 // Internal lifecycle transaction for resources registered from on_enable().
 // The caller must hold the CPython GIL. A failed hook rolls back to the
 // checkpoint; a successful hook commits the new resources as enable-scoped;

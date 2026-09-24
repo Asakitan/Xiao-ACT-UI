@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -151,6 +152,42 @@ bool both_int(const emma_value& a, const emma_value& b) {
 bool is_numeric(const emma_value& v) {
     return std::holds_alternative<int64_t>(v) || std::holds_alternative<double>(v) ||
            std::holds_alternative<bool>(v);
+}
+
+std::shared_ptr<callable>
+host_method(std::string name, std::function<emma_value(std::vector<emma_value>)> implementation) {
+    auto result = std::make_shared<callable>();
+    result->name = std::move(name);
+    result->host_impl = std::move(implementation);
+    return result;
+}
+
+[[noreturn]] void throw_method_error(std::string message) {
+    emma_error error;
+    error.kind = error_kind::runtime_error;
+    error.status = SAO_ERR_INVALID_ARGUMENT;
+    error.message = std::move(message);
+    throw emma_exception(std::move(error));
+}
+
+void require_argument_count(const std::vector<emma_value>& arguments, size_t minimum,
+                            size_t maximum, const char* method) {
+    if (arguments.size() < minimum || arguments.size() > maximum)
+        throw_method_error(std::string(method) + ": invalid argument count");
+}
+
+int64_t require_method_index(const emma_value& value, const char* method) {
+    if (const auto* integer = std::get_if<int64_t>(&value))
+        return *integer;
+    if (const auto* boolean = std::get_if<bool>(&value))
+        return *boolean ? 1 : 0;
+    throw_method_error(std::string(method) + ": index must be an integer");
+}
+
+void reserve_list_growth(emma_list& list, size_t additional, const char* method) {
+    if (additional > list.items.max_size() - list.items.size())
+        throw_method_error(std::string(method) + ": result is too large");
+    list.items.reserve(list.items.size() + additional);
 }
 
 } // namespace
@@ -610,6 +647,78 @@ emma_value interpreter::impl::eval_node(node_id id, const std::shared_ptr<scope>
     case node_kind::attr: {
         emma_value obj = eval_node(pool->children[id][0], scp);
         const std::string& name = pool->strings[id];
+        if (std::holds_alternative<std::shared_ptr<emma_list>>(obj)) {
+            auto list = std::get<std::shared_ptr<emma_list>>(obj);
+            if (!list)
+                return nullptr;
+            if (name == "append") {
+                return host_method("list.append", [list](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 1, 1, "list.append");
+                    list->items.push_back(std::move(arguments[0]));
+                    return emma_value(nullptr);
+                });
+            }
+            if (name == "extend") {
+                return host_method("list.extend", [list](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 1, 1, "list.extend");
+                    if (const auto* source = std::get_if<std::shared_ptr<emma_list>>(&arguments[0]);
+                        source != nullptr && *source != nullptr) {
+                        reserve_list_growth(*list, (*source)->items.size(), "list.extend");
+                        if (source->get() == list.get()) {
+                            const auto copy = (*source)->items;
+                            list->items.insert(list->items.end(), copy.begin(), copy.end());
+                        } else {
+                            list->items.insert(list->items.end(), (*source)->items.begin(),
+                                               (*source)->items.end());
+                        }
+                    } else {
+                        throw_method_error("list.extend: expected array");
+                    }
+                    return emma_value(nullptr);
+                });
+            }
+            if (name == "insert") {
+                return host_method("list.insert", [list](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 2, 2, "list.insert");
+                    int64_t index = require_method_index(arguments[0], "list.insert");
+                    if (index < 0)
+                        index += static_cast<int64_t>(list->items.size());
+                    index = std::clamp<int64_t>(index, 0, static_cast<int64_t>(list->items.size()));
+                    list->items.insert(list->items.begin() + static_cast<std::ptrdiff_t>(index),
+                                       std::move(arguments[1]));
+                    return emma_value(nullptr);
+                });
+            }
+            if (name == "pop") {
+                return host_method("list.pop", [list](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 0, 1, "list.pop");
+                    if (list->items.empty())
+                        throw_method_error("list.pop: array is empty");
+                    int64_t index =
+                        arguments.empty() ? -1 : require_method_index(arguments[0], "list.pop");
+                    if (index < 0)
+                        index += static_cast<int64_t>(list->items.size());
+                    if (index < 0 || index >= static_cast<int64_t>(list->items.size()))
+                        throw_method_error("list.pop: index is out of range");
+                    emma_value value = std::move(list->items[static_cast<size_t>(index)]);
+                    list->items.erase(list->items.begin() + static_cast<std::ptrdiff_t>(index));
+                    return value;
+                });
+            }
+            if (name == "clear") {
+                return host_method("list.clear", [list](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 0, 0, "list.clear");
+                    list->items.clear();
+                    return emma_value(nullptr);
+                });
+            }
+            if (name == "copy") {
+                return host_method("list.copy", [list](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 0, 0, "list.copy");
+                    return emma_value(std::make_shared<emma_list>(list->items));
+                });
+            }
+        }
         if (std::holds_alternative<std::shared_ptr<emma_dict>>(obj)) {
             auto& d = std::get<std::shared_ptr<emma_dict>>(obj);
             if (!d)
@@ -617,7 +726,112 @@ emma_value interpreter::impl::eval_node(node_id id, const std::shared_ptr<scope>
             auto it = d->items.find(name);
             if (it != d->items.end())
                 return it->second;
+            if (name == "get") {
+                return host_method("dict.get", [d](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 1, 2, "dict.get");
+                    const std::string key = emma_value_to_string(arguments[0]);
+                    const auto found = d->items.find(key);
+                    if (found != d->items.end())
+                        return found->second;
+                    return arguments.size() == 2 ? arguments[1] : emma_value(nullptr);
+                });
+            }
+            if (name == "keys" || name == "values" || name == "items") {
+                return host_method("dict." + name, [d, name](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 0, 0, ("dict." + name).c_str());
+                    auto result = std::make_shared<emma_list>();
+                    result->items.reserve(d->items.size());
+                    for (const auto& [key, value] : d->items) {
+                        if (name == "keys") {
+                            result->items.emplace_back(key);
+                        } else if (name == "values") {
+                            result->items.push_back(value);
+                        } else {
+                            auto pair = std::make_shared<emma_list>();
+                            pair->items.emplace_back(key);
+                            pair->items.push_back(value);
+                            result->items.emplace_back(std::move(pair));
+                        }
+                    }
+                    return emma_value(std::move(result));
+                });
+            }
+            if (name == "update") {
+                return host_method("dict.update", [d](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 1, 1, "dict.update");
+                    const auto* source = std::get_if<std::shared_ptr<emma_dict>>(&arguments[0]);
+                    if (source == nullptr || !*source)
+                        throw_method_error("dict.update: expected dict");
+                    const auto copy = (*source)->items;
+                    for (const auto& [key, value] : copy)
+                        d->items[key] = value;
+                    return emma_value(nullptr);
+                });
+            }
+            if (name == "pop") {
+                return host_method("dict.pop", [d](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 1, 2, "dict.pop");
+                    const std::string key = emma_value_to_string(arguments[0]);
+                    const auto found = d->items.find(key);
+                    if (found == d->items.end()) {
+                        if (arguments.size() == 2)
+                            return arguments[1];
+                        throw_method_error("dict.pop: key was not found");
+                    }
+                    emma_value value = std::move(found->second);
+                    d->items.erase(found);
+                    return value;
+                });
+            }
+            if (name == "clear") {
+                return host_method("dict.clear", [d](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 0, 0, "dict.clear");
+                    d->items.clear();
+                    return emma_value(nullptr);
+                });
+            }
+            if (name == "copy") {
+                return host_method("dict.copy", [d](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 0, 0, "dict.copy");
+                    return emma_value(std::make_shared<emma_dict>(d->items));
+                });
+            }
             return nullptr;
+        }
+        if (std::holds_alternative<std::string>(obj)) {
+            const std::string text = std::get<std::string>(obj);
+            if (name == "lower" || name == "upper") {
+                return host_method("string." + name, [text,
+                                                      name](std::vector<emma_value> arguments) {
+                    require_argument_count(arguments, 0, 0, ("string." + name).c_str());
+                    std::string result = text;
+                    std::transform(result.begin(), result.end(), result.begin(),
+                                   [name](unsigned char character) {
+                                       if (name == "lower" && character >= 'A' && character <= 'Z')
+                                           return static_cast<char>(character + ('a' - 'A'));
+                                       if (name == "upper" && character >= 'a' && character <= 'z')
+                                           return static_cast<char>(character - ('a' - 'A'));
+                                       return static_cast<char>(character);
+                                   });
+                    return emma_value(std::move(result));
+                });
+            }
+            if (name == "startswith" || name == "endswith") {
+                return host_method(
+                    "string." + name, [text, name](std::vector<emma_value> arguments) {
+                        require_argument_count(arguments, 1, 1, ("string." + name).c_str());
+                        const auto* prefix = std::get_if<std::string>(&arguments[0]);
+                        if (prefix == nullptr)
+                            throw_method_error("string." + name + ": expected string argument");
+                        const bool matched = name == "startswith"
+                                                 ? text.size() >= prefix->size() &&
+                                                       text.compare(0, prefix->size(), *prefix) == 0
+                                                 : text.size() >= prefix->size() &&
+                                                       text.compare(text.size() - prefix->size(),
+                                                                    prefix->size(), *prefix) == 0;
+                        return emma_value(matched);
+                    });
+            }
         }
         return nullptr;
     }

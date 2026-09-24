@@ -67,6 +67,24 @@ build-tree bundle 均更新，本轮未运行 Hardened、发布验收或刷新 s
 
 ## Entity provider/root ABI
 
+同 surface overlay 设置不再直接返回 `ALREADY_EXISTS`：loader 在保留旧 surface
+owner 的同时预留带同名 surface 键的 pending token，交由 SDK 提交候选图层；
+首次设置尚未完成时并发 clear/set 也返回 BUSY，提交成功才切换 surface 键。
+set/clear 在解析与平台调用期间持有 ctx 注册 lease；clear 在平台关闭准入后不再
+启动 provider 清理，避免与 teardown 同时注销同一 token。
+新帧提交后清理旧 provider token 如未完成，旧记录仍由 context teardown 持有并重试；
+提交前设置失败且候选有 provider token 时解除候选 surface 键并保留清理账目，旧帧仍可重试。
+launcher provider 于 SDK 候选提交前预留 token；成功后填写 SDK token，
+失败但返回 token 时仍保留清理账目，零 token 失败则撤销预留。
+launcher 异常退出亦按 SDK 是否已返回 token 保留清理账目或撤销空预留。
+set/clear 在已预留资源后若异常退出，恢复原有 pending 状态；set 在提交新帧后
+清理旧 token 的异常不改变已提交结果，旧记录由 context teardown 重试。
+`sao_dir_probe --overlay-probe` 在原有图层数检查之外已加入首帧/替换帧像素差异
+及非法帧回退像素一致性断言；当前源码还要求首帧和替换帧各自匹配精确 BGRA 值，
+该断言已由主会话复验；后续回退续查三轮证明旧像素/资源清理，独立复审再要求
+上传故障码为 `-20`、失败重试像素不变、最多四次内真正提交新帧，且必经 Flappy Emma
+菜单两帧/关闭动作；稳定 shell 修复后 64/64 及三轮单次恢复、清理全零通过。
+
 ``entity_provider.h`` 提供 adapter-neutral ``context_entity_provider_descriptor``，可携带
 一个 descriptor-owned ``entity_root_contribution_descriptor``。脚本 host 只能在 canonical
 ``plugin_context_t`` 上登记 snapshot/action callbacks；loader 负责：
@@ -150,7 +168,16 @@ tab 名称与 `sao_menu.actions.<id>.label`，Entity 刷新时重新同步。此
    ``tools`` / ``.github`` marker, 找到后再看 ``<workspace>/plugins/``
 
 每根按 ``max_depth`` 递归 (默认 1 = 只扫直接子目录)。每子目录含
-``plugin.json`` 即当作一个插件目录。
+``plugin.json`` 即当作一个插件目录；目录名以 ``_old`` 结尾时视为只读归档，
+扫描器不会递归或注册其中的旧 manifest；传入的扫描根先归一化尾分隔符与 ``.``，
+再按大小写不敏感的末级目录名判定，因此根本身带该后缀时同样直接返回空结果。
+该规则只属于根发现；显式 ``refresh_one`` 与 ``is_plugin_dir`` 的契约不变。
+迁移后的活动包使用不带 ``_old`` 的目录名，
+因此可与原始快照并存而不产生重复插件 ID。
+
+开发 staging 的顶层 CMake 清单与 scanner 规则分离：有 ``SaoAuto`` target 时要求工作区根、
+恰好 14 个唯一 package 和各自 regular manifest 全部存在，package 文件增删触发重新配置；
+复制前删除整个 build-tree ``plugins`` 根，因此 scanner 只会看到本次 curated 输出。
 
 ## vcpkg 依赖
 

@@ -25,8 +25,8 @@
 
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -103,6 +103,14 @@ const emma_value& require_argument(const std::vector<emma_value>& arguments, siz
     return arguments[index];
 }
 
+void require_argument_count(const std::vector<emma_value>& arguments, size_t minimum,
+                            size_t maximum, const char* operation) {
+    if (arguments.size() < minimum || arguments.size() > maximum) {
+        throw_runtime_error(std::string(operation) + ": invalid argument count",
+                            SAO_ERR_INVALID_ARGUMENT);
+    }
+}
+
 std::string require_string(const std::vector<emma_value>& arguments, size_t index,
                            const char* operation) {
     const auto& value = require_argument(arguments, index, operation);
@@ -119,6 +127,16 @@ double numeric_value(const emma_value& value, const char* operation) {
     if (const auto* number = std::get_if<double>(&value))
         return *number;
     throw_runtime_error(std::string(operation) + ": expected numeric argument");
+}
+
+double finite_numeric_argument(const std::vector<emma_value>& arguments, size_t index,
+                               const char* operation) {
+    const double value = numeric_value(require_argument(arguments, index, operation), operation);
+    if (!std::isfinite(value)) {
+        throw_runtime_error(std::string(operation) + ": argument must be finite",
+                            SAO_ERR_INVALID_ARGUMENT);
+    }
+    return value;
 }
 
 emma_value bi_json_encode(std::vector<emma_value> arguments) {
@@ -318,8 +336,8 @@ bool range_integer(const emma_value& value, std::int64_t& output) {
     }
     if (const auto* number = std::get_if<double>(&value)) {
         constexpr double kInt64Limit = 9223372036854775808.0;
-        if (!std::isfinite(*number) || std::trunc(*number) != *number ||
-            *number < -kInt64Limit || *number >= kInt64Limit) {
+        if (!std::isfinite(*number) || std::trunc(*number) != *number || *number < -kInt64Limit ||
+            *number >= kInt64Limit) {
             return false;
         }
         output = static_cast<std::int64_t>(*number);
@@ -343,9 +361,8 @@ std::uint64_t range_item_count(std::int64_t start, std::int64_t stop, std::int64
     const std::uint64_t distance =
         step > 0 ? static_cast<std::uint64_t>(stop) - static_cast<std::uint64_t>(start)
                  : static_cast<std::uint64_t>(start) - static_cast<std::uint64_t>(stop);
-    const std::uint64_t magnitude =
-        step > 0 ? static_cast<std::uint64_t>(step)
-                 : std::uint64_t{0} - static_cast<std::uint64_t>(step);
+    const std::uint64_t magnitude = step > 0 ? static_cast<std::uint64_t>(step)
+                                             : std::uint64_t{0} - static_cast<std::uint64_t>(step);
     return distance / magnitude + (distance % magnitude != 0 ? 1U : 0U);
 }
 
@@ -361,8 +378,7 @@ emma_value bi_range(std::vector<emma_value> arguments) {
     if (arguments.size() == 1) {
         if (!range_integer(arguments[0], stop))
             throw_runtime_error("range arguments must be integers", SAO_ERR_INVALID_ARGUMENT);
-    } else if (!range_integer(arguments[0], start) ||
-               !range_integer(arguments[1], stop) ||
+    } else if (!range_integer(arguments[0], start) || !range_integer(arguments[1], stop) ||
                (arguments.size() == 3 && !range_integer(arguments[2], step))) {
         throw_runtime_error("range arguments must be integers", SAO_ERR_INVALID_ARGUMENT);
     }
@@ -455,8 +471,12 @@ emma_value bi_abs(std::vector<emma_value> args) {
     if (args.empty())
         return static_cast<int64_t>(0);
     const emma_value& v = args[0];
-    if (std::holds_alternative<int64_t>(v))
-        return static_cast<int64_t>(std::abs(std::get<int64_t>(v)));
+    if (std::holds_alternative<int64_t>(v)) {
+        const int64_t integer = std::get<int64_t>(v);
+        if (integer == std::numeric_limits<int64_t>::min())
+            return static_cast<double>(std::numeric_limits<int64_t>::max()) + 1.0;
+        return integer < 0 ? -integer : integer;
+    }
     if (std::holds_alternative<double>(v))
         return std::fabs(std::get<double>(v));
     if (std::holds_alternative<bool>(v))
@@ -557,6 +577,58 @@ emma_value bi_math_sqrt(std::vector<emma_value> args) {
     return x < 0.0 ? 0.0 : std::sqrt(x);
 }
 
+emma_value bi_math_round(std::vector<emma_value> args) {
+    require_argument_count(args, 1, 2, "round");
+    const double value = finite_numeric_argument(args, 0, "round");
+    int64_t digits = 0;
+    if (args.size() > 1) {
+        if (!range_integer(args[1], digits) || digits < -18 || digits > 18)
+            throw_runtime_error("round: digits must be an integer between -18 and 18",
+                                SAO_ERR_INVALID_ARGUMENT);
+    }
+    const int64_t magnitude = digits < 0 ? -digits : digits;
+    const double scale = std::pow(10.0, static_cast<double>(magnitude));
+    double rounded = value;
+    if (digits >= 0) {
+        const double scaled = value * scale;
+        if (std::isfinite(scaled))
+            rounded = std::nearbyint(scaled) / scale;
+    } else {
+        rounded = std::nearbyint(value / scale) * scale;
+    }
+    if (!std::isfinite(rounded))
+        throw_runtime_error("round: result is not finite", SAO_ERR_INVALID_ARGUMENT);
+    if (digits == 0 && rounded >= static_cast<double>(std::numeric_limits<int64_t>::min()) &&
+        rounded < 9223372036854775808.0) {
+        return static_cast<int64_t>(rounded);
+    }
+    return rounded;
+}
+
+emma_value bi_math_sin(std::vector<emma_value> args) {
+    require_argument_count(args, 1, 1, "sin");
+    const double result = std::sin(finite_numeric_argument(args, 0, "sin"));
+    if (!std::isfinite(result))
+        throw_runtime_error("sin: result is not finite", SAO_ERR_INVALID_ARGUMENT);
+    return result;
+}
+
+emma_value bi_math_cos(std::vector<emma_value> args) {
+    require_argument_count(args, 1, 1, "cos");
+    const double result = std::cos(finite_numeric_argument(args, 0, "cos"));
+    if (!std::isfinite(result))
+        throw_runtime_error("cos: result is not finite", SAO_ERR_INVALID_ARGUMENT);
+    return result;
+}
+
+emma_value bi_math_tan(std::vector<emma_value> args) {
+    require_argument_count(args, 1, 1, "tan");
+    const double result = std::tan(finite_numeric_argument(args, 0, "tan"));
+    if (!std::isfinite(result))
+        throw_runtime_error("tan: result is not finite", SAO_ERR_INVALID_ARGUMENT);
+    return result;
+}
+
 } // namespace
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
@@ -587,7 +659,11 @@ sao_plugins_emma_install_stdlib(interpreter* interp) {
         interp->register_global("max", make_host("max", &bi_max));
         interp->register_global("floor", make_host("floor", &bi_math_floor));
         interp->register_global("ceil", make_host("ceil", &bi_math_ceil));
+        interp->register_global("round", make_host("round", &bi_math_round));
         interp->register_global("sqrt", make_host("sqrt", &bi_math_sqrt));
+        interp->register_global("sin", make_host("sin", &bi_math_sin));
+        interp->register_global("cos", make_host("cos", &bi_math_cos));
+        interp->register_global("tan", make_host("tan", &bi_math_tan));
         return SAO_OK;
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
@@ -658,10 +734,10 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_emma_list_builti
     if (out_names == nullptr || out_count == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     static const char* const NAMES[] = {
-        "print", "str",   "int",         "float", "tostring", "tonumber",    "len",
-        "type",  "range", "list",        "dict",  "pairs",    "ipairs",      "abs",
-        "min",   "max",   "floor",       "ceil",  "sqrt",     "json_encode", "json_decode",
-        "time",  "sleep", "load_script", "import"};
+        "print",       "str",  "int",   "float",       "tostring", "tonumber", "len", "type",
+        "range",       "list", "dict",  "pairs",       "ipairs",   "abs",      "min", "max",
+        "floor",       "ceil", "round", "sqrt",        "sin",      "cos",      "tan", "json_encode",
+        "json_decode", "time", "sleep", "load_script", "import"};
     static constexpr size_t COUNT = sizeof(NAMES) / sizeof(NAMES[0]);
     const char** buf = static_cast<const char**>(std::malloc(sizeof(const char*) * COUNT));
     if (buf == nullptr)

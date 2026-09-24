@@ -3,6 +3,7 @@
 #include "sao/plugins/loader/loader_status.h"
 
 #include <algorithm>
+#include <cwctype>
 #include <filesystem>
 #include <new>
 #include <set>
@@ -33,20 +34,39 @@ bool canonical_path(const fs::path& input, fs::path& output) {
     return !error;
 }
 
-int32_t refresh_path(const fs::path& directory, bool user, bool workspace,
-                     scanned_plugin& output) {
+bool is_archived_plugin_directory(const fs::path& directory) {
+    auto normalized = directory.lexically_normal();
+    while (!normalized.empty() && normalized.filename().empty()) {
+        const auto parent = normalized.parent_path();
+        if (parent == normalized)
+            break;
+        normalized = parent;
+    }
+    auto name = normalized.filename().wstring();
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return name.ends_with(L"_old");
+}
+
+int32_t refresh_path(const fs::path& directory, bool user, bool workspace, scanned_plugin& output) {
     output = scanned_plugin{};
     const auto manifest_path = directory / L"plugin.json";
     std::error_code error;
-    if (!fs::is_regular_file(manifest_path, error)) return SAO_PLUGINS_ERR_NOT_FOUND;
-    const auto status = sao_plugins_manifest_load_from_file(manifest_path.c_str(), &output.manifest);
-    if (status != SAO_OK) return status;
-    if (validate_manifest(output.manifest) != SAO_OK) return SAO_ERR_INVALID_ARGUMENT;
+    if (!fs::is_regular_file(manifest_path, error))
+        return SAO_PLUGINS_ERR_NOT_FOUND;
+    const auto status =
+        sao_plugins_manifest_load_from_file(manifest_path.c_str(), &output.manifest);
+    if (status != SAO_OK)
+        return status;
+    if (validate_manifest(output.manifest) != SAO_OK)
+        return SAO_ERR_INVALID_ARGUMENT;
     const auto entry_path = directory / fs::u8path(output.manifest.entry);
-    if (!fs::is_regular_file(entry_path, error)) return SAO_PLUGINS_ERR_NOT_FOUND;
+    if (!fs::is_regular_file(entry_path, error))
+        return SAO_PLUGINS_ERR_NOT_FOUND;
     if (!output.manifest.native_entry.empty()) {
         const auto native_path = directory / fs::u8path(output.manifest.native_entry);
-        if (!fs::is_regular_file(native_path, error)) return SAO_PLUGINS_ERR_NOT_FOUND;
+        if (!fs::is_regular_file(native_path, error))
+            return SAO_PLUGINS_ERR_NOT_FOUND;
     }
     output.is_user_installed = user;
     output.is_workspace_plugin = workspace;
@@ -59,19 +79,26 @@ int32_t refresh_path(const fs::path& directory, bool user, bool workspace,
 void scan_root(const fs::path& root, uint32_t max_depth, bool user, bool workspace,
                std::set<std::wstring>& seen, std::vector<scanned_plugin>& output) {
     std::error_code error;
-    if (!fs::is_directory(root, error)) return;
-    fs::recursive_directory_iterator iterator(
-        root, fs::directory_options::skip_permission_denied, error);
+    if (is_archived_plugin_directory(root) || !fs::is_directory(root, error))
+        return;
+    fs::recursive_directory_iterator iterator(root, fs::directory_options::skip_permission_denied,
+                                              error);
     const fs::recursive_directory_iterator end;
     for (; !error && iterator != end; iterator.increment(error)) {
-        if (!iterator->is_directory(error)) continue;
+        if (!iterator->is_directory(error))
+            continue;
         const auto depth = static_cast<uint32_t>(iterator.depth() + 1);
         if (depth > max_depth) {
             iterator.disable_recursion_pending();
             continue;
         }
         const auto directory = iterator->path();
-        if (!fs::is_regular_file(directory / L"plugin.json", error)) continue;
+        if (is_archived_plugin_directory(directory)) {
+            iterator.disable_recursion_pending();
+            continue;
+        }
+        if (!fs::is_regular_file(directory / L"plugin.json", error))
+            continue;
         fs::path canonical;
         if (!canonical_path(directory, canonical) || !seen.insert(canonical.native()).second) {
             iterator.disable_recursion_pending();
@@ -88,7 +115,8 @@ void scan_root(const fs::path& root, uint32_t max_depth, bool user, bool workspa
 bool has_workspace_marker(const fs::path& directory) {
     std::error_code error;
     for (const auto* marker : {L".git", L"sao_auto", L"tools", L".vscode", L".github"}) {
-        if (fs::exists(directory / marker, error) && !error) return true;
+        if (fs::exists(directory / marker, error) && !error)
+            return true;
         error.clear();
     }
     return false;
@@ -96,32 +124,38 @@ bool has_workspace_marker(const fs::path& directory) {
 
 } // namespace
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_scanner_discover(const scan_config* cfg,
-                             scanned_plugin** out_plugins,
-                             size_t* out_count) {
-    if (out_plugins == nullptr || out_count == nullptr || cfg == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_scanner_discover(
+    const scan_config* cfg, scanned_plugin** out_plugins, size_t* out_count) {
+    if (out_plugins == nullptr || out_count == nullptr || cfg == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
     *out_plugins = nullptr;
     *out_count = 0;
     try {
         std::vector<scanned_plugin> discovered;
         std::set<std::wstring> seen;
         const auto depth = std::max<uint32_t>(1, cfg->max_depth);
-        for (const auto& root : cfg->builtin_roots) scan_root(root, depth, false, false, seen, discovered);
-        for (const auto& root : cfg->user_roots) scan_root(root, depth, true, false, seen, discovered);
+        for (const auto& root : cfg->builtin_roots)
+            scan_root(root, depth, false, false, seen, discovered);
+        for (const auto& root : cfg->user_roots)
+            scan_root(root, depth, true, false, seen, discovered);
         if (cfg->enable_workspace_walkup) {
             auto current = fs::current_path();
             while (!current.empty() && !has_workspace_marker(current)) {
                 const auto parent = current.parent_path();
-                if (parent == current) { current.clear(); break; }
+                if (parent == current) {
+                    current.clear();
+                    break;
+                }
                 current = parent;
             }
-            if (!current.empty()) scan_root(current / L"plugins", depth, false, true, seen, discovered);
+            if (!current.empty())
+                scan_root(current / L"plugins", depth, false, true, seen, discovered);
         }
         std::sort(discovered.begin(), discovered.end(), [](const auto& left, const auto& right) {
             return left.manifest.plugin_id < right.manifest.plugin_id;
         });
-        if (discovered.empty()) return SAO_OK;
+        if (discovered.empty())
+            return SAO_OK;
         auto result = std::make_unique<scanned_plugin[]>(discovered.size());
         std::move(discovered.begin(), discovered.end(), result.get());
         *out_count = discovered.size();
@@ -132,15 +166,15 @@ sao_plugins_scanner_discover(const scan_config* cfg,
     }
 }
 
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_plugins_scanner_free(scanned_plugin* plugins, size_t) {
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_scanner_free(scanned_plugin* plugins,
+                                                                          size_t) {
     delete[] plugins;
 }
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_scanner_refresh_one(const wchar_t* plugin_dir,
-                                scanned_plugin* out_plugin) {
-    if (plugin_dir == nullptr || out_plugin == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+sao_plugins_scanner_refresh_one(const wchar_t* plugin_dir, scanned_plugin* out_plugin) {
+    if (plugin_dir == nullptr || out_plugin == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
     try {
         return refresh_path(fs::path(plugin_dir), false, false, *out_plugin);
     } catch (...) {
@@ -151,10 +185,12 @@ sao_plugins_scanner_refresh_one(const wchar_t* plugin_dir,
 
 extern "C" SAO_PLUGINS_API uint64_t SAO_PLUGINS_CALL
 sao_plugins_scanner_signature(const scan_config* cfg) {
-    if (cfg == nullptr) return 0;
+    if (cfg == nullptr)
+        return 0;
     scanned_plugin* plugins = nullptr;
     size_t count = 0;
-    if (sao_plugins_scanner_discover(cfg, &plugins, &count) != SAO_OK) return 0;
+    if (sao_plugins_scanner_discover(cfg, &plugins, &count) != SAO_OK)
+        return 0;
     uint64_t hash = 1469598103934665603ULL;
     for (size_t index = 0; index < count; ++index) {
         const auto& plugin = plugins[index];
@@ -168,11 +204,13 @@ sao_plugins_scanner_signature(const scan_config* cfg) {
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_scanner_find_workspace_root(const wchar_t* start_dir, wchar_t** out_root_path) {
-    if (start_dir == nullptr || out_root_path == nullptr) return SAO_ERR_INVALID_ARGUMENT;
+    if (start_dir == nullptr || out_root_path == nullptr)
+        return SAO_ERR_INVALID_ARGUMENT;
     *out_root_path = nullptr;
     try {
         fs::path current;
-        if (!canonical_path(fs::path(start_dir), current)) return SAO_PLUGINS_ERR_NOT_FOUND;
+        if (!canonical_path(fs::path(start_dir), current))
+            return SAO_PLUGINS_ERR_NOT_FOUND;
         while (!current.empty()) {
             if (has_workspace_marker(current)) {
                 const auto value = current.native();
@@ -183,7 +221,8 @@ sao_plugins_scanner_find_workspace_root(const wchar_t* start_dir, wchar_t** out_
                 return SAO_OK;
             }
             const auto parent = current.parent_path();
-            if (parent == current) break;
+            if (parent == current)
+                break;
             current = parent;
         }
         return SAO_PLUGINS_ERR_NOT_FOUND;
@@ -192,14 +231,14 @@ sao_plugins_scanner_find_workspace_root(const wchar_t* start_dir, wchar_t** out_
     }
 }
 
-extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL
-sao_plugins_scanner_free_wstring(wchar_t* str) {
+extern "C" SAO_PLUGINS_API void SAO_PLUGINS_CALL sao_plugins_scanner_free_wstring(wchar_t* str) {
     delete[] str;
 }
 
 extern "C" SAO_PLUGINS_API bool SAO_PLUGINS_CALL
 sao_plugins_scanner_is_plugin_dir(const wchar_t* plugin_dir) {
-    if (plugin_dir == nullptr) return false;
+    if (plugin_dir == nullptr)
+        return false;
     std::error_code error;
     return fs::is_regular_file(fs::path(plugin_dir) / L"plugin.json", error) && !error;
 }

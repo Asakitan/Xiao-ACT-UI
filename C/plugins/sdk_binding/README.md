@@ -47,8 +47,8 @@ C ABI 暴露给自己的语言。这一层做**类型转换 + 异常屏障**, �
   loader-ctx-only 方法族与 compositor×11（platform-internal）如实
   UNSUPPORTED。完整覆盖矩阵见 `docs/plugin-abi.md` 的
   “`sao_plugins_sdk_context_dispatch` 覆盖模型”一节。
-- overlay 为 surface-keyed ctx-scoped：`set_overlay` 走 ui-table replace
-  语义（同 surface 旧 overlay 自动先清），`clear_overlay` 走 session-44
+- overlay 为 surface-keyed ctx-scoped：`set_overlay` 走 ui-table 事务替换
+  （新帧提交前保留旧帧，提交后再清旧 token），`clear_overlay` 走 session-44
   新增的 `sao_sdk_overlay_clear_surface` 导出；`dismiss_notify` 消费
   `sao_sdk_notify_show` 返回的 token。
 - 回调 owner/release：provider_release 优先，legacy_release 为兼容位；
@@ -72,6 +72,9 @@ AngelScript、managed C# 和 csmini 中走宿主本地的 Entity provider 注册
   `sao_plugins_sdk_context_dispatch` 的 `method_engine_call`/`method_engine_list`
   JSON 分发；二进制参数统一 `*_b64`，provider 缺失按 `engine_no_provider`
   fail-closed。
+- `mem.read` 的 `bytes_b64` 必须连同 JSON 包落在 8 MiB 结果预算内，
+  单次原始请求上限为 6 MiB - 768 B，预留 1024 B 给外层字段与状态。
+  更大的读取由调用方分块，不影响 typed `SaoSdkMemTable::read`。
 - **vt 组（12 项，session-61）**：`vt.provider_status` / `vt.status` /
   `vt.capabilities` / `vt.probe` / `vt.perf_stats` / `vt.list_hooks` /
   `vt.read_phys`（gpa+size→`data_b64`）/ `vt.write_phys`（gpa+`data_b64`）/

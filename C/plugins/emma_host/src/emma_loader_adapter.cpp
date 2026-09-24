@@ -214,9 +214,6 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
             erase_failed_load(owner, plugin);
             return status == SAO_OK ? SAO_ERR_NOT_INITIALIZED : status;
         }
-        sao::plugins::script_ctx::ctx_surface_advisory_check(
-            sao::plugins::loader::engine_kind::emma, context, manifest);
-
         const wchar_t* plugin_dir = sao::plugins::loader::sao_plugins_ctx_path(context);
         const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(context);
         if (plugin_dir == nullptr || plugin_dir[0] == L'\0' || plugin_id == nullptr ||
@@ -246,6 +243,9 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
             load_reserved = false;
             return SAO_OK;
         }
+
+        sao::plugins::script_ctx::ctx_surface_advisory_check(
+            sao::plugins::loader::engine_kind::emma, context, manifest);
 
         {
             std::lock_guard lock(g_owner_mutex);

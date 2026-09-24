@@ -73,6 +73,12 @@ helper 与入口一样执行 legacy source rewrite、条件注入 ``PluginContex
 保留函数、位置与异常文本，``LocalModule.call/get`` 的失败转成脚本异常。
 共享 missing / unsupported / path_only 成功空模块语义保持不变。
 
+当 `ctx.load_local()` 指向 `.py` 时，调用进入共享 pymini-first/CPython-second provider，
+不在 AngelScript state 内执行 Python。只有 pymini 预检明确不支持才惰性初始化 CPython；
+跨语言只暴露 JSON-compatible member 与 callable。`script_world_clock_angelscript`
+已通过该链调用 Pillow `candy_render.py`，提交多节点 overlay 并完成正常 unload；这不改变
+本宿主没有源码级 `#include` 预处理的边界。
+
 源码核对发现入口与 helper 都直接 ``AddScriptSection``，没有 ``#include`` 文件预处理；
 本切片没有变更入口编译器或引入 include loader，fixture 使用实际支持的
 ``ctx.load_local``，不宣称 ``#include`` 兼容。

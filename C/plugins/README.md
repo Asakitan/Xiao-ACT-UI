@@ -42,6 +42,10 @@ eager generator、包导入及 `uuid`/`secrets`/`statistics`/`importlib`；csmin
 Python composite 注册不加载 CPython；只有选中完整 Python 的插件真正加载时才初始化。
 缺少 Python 时，launcher 延期相应插件和依赖者，独立 pymini 插件仍可原生运行。
 语法/文件错误与运行期异常保留插件错误，执行后不换解释器重试。
+AS/Emma/Lua 的 `ctx.load_local("*.py")` 共享同一规则：pymini priority 10 先做无执行
+预检，明确不支持才选择 priority 100 的 CPython helper facade；注册/发现不加载 Python，
+跨语言只传递有界 JSON-compatible 值与 callable。该链不把三种宿主改成 Python 解释器，
+也不承诺任意 Python 对象或第三方 package 可跨语言使用。
 托管 C# 当前通用加载器只接受预编译 DLL；不存在自动 Roslyn 源编译链。
 csmini 注册只保存配置，原生 `.cs` 不加载 .NET；有效托管 DLL 实际加载才初始化。
 launcher 缺 .NET 时仅延期托管插件及依赖者；显式 `plugins.dotnet_root` 是唯一
@@ -106,6 +110,53 @@ lifecycle.load(handle)                       → 派发 vtable.load_plugin
 lifecycle.call_on_load(handle)               → 每 host 的 vtable.call_on_load(ctx)
 lifecycle.call_on_enable(handle)             → 用户已启用时立即激活
 ```
+
+## 工作区活动插件包
+
+工作区级插件源码位于 ``E:/VC/SAO-UI/plugins``，与本目录的宿主实现分离。顶层
+CMake 将固定活动包清单同步到各配置的 ``bin/<config>/plugins``，供 native 开发运行
+直接发现；有 ``SaoAuto`` target 时，工作区根、恰好 14 个唯一清单项及各自 regular
+``plugin.json`` 都是配置期硬门，package 文件增删会触发自动重配。同步过滤按大小写不敏感
+路径排除 ``__pycache__``、``obj``、开发工具与调试
+符号，并单独排除桌宠 ``bin``/``refs``；每次同步先重建 staging 根，非清单旧包不会残留。
+这些文件不进入认证的第一方 PE bundle 或 release exact inventory。插件发布仍由独立插件
+分发链负责。
+
+目录名以 ``_old`` 结尾的是不可变迁移输入；loader 扫描时忽略这些归档。活动插件使用
+不带后缀的目录名并保持原逻辑 ``id``，从而让旧源码与新 SDK 包并存而不会重复注册；
+即使调用方把一个 ``_old`` 目录本身配置为扫描根，也会直接拒扫。
+
+当前 14 个活动包已在重建 Debug 的工作区 root 与 staged root 分别完成同进程
+discover/load/enable/menu/disable/unload，均为 0 failure，最终 shutdown 与 compositor/timer
+owner 清理成功；131 个 staged 文件逐文件 SHA-256 等于源。该证据证明宿主、声明式 UI、
+Entity/插件栏动作及生命周期，不外推真实目标游戏、外部桌宠引擎、packet/memory provider、
+游戏输入或 GPU/DPI 行为。后续 Review 补齐 CPython overlay 8 MiB/同 surface owner 更新、
+MIDI disable 失败传播、归档根路径归一化、清单 staging fail-closed 及 engine 单次 dispatch；
+mandatory final Review 又严格拒绝 engine 空/缺字段/越界 status 结果，令 GGD/Wardogs provider
+资源和桌宠 timer/process/pipe/MMF/layer/managed context 在清理失败时保留所有权，桌宠 MMF/pipe
+使用单调 generation。补修后已重跑全量 Debug、source/staged 双矩阵、重点动作、
+CPython surface probe；本轮主会话再复核修复 GGD attach/read 失败时遗失 provider lease、
+Wardogs void 操作 status 被忽略和清理失败丢 owner、Emma `on_disable=false` 静默完成、
+MIDI 后台线程直接触发 native 渲染，
+以及 pymini 反射结果扩容时重复执行 engine invoker。Debug 双 14 包矩阵、三重点动作、
+GGD/MIDI 故障模拟、Emma BUSY fixture 及 pymini/provider 探针均通过；
+该 SDK 截点的 Hardened acceptance 为 17 inputs/22 PE/77 exact files；当时 bundle 33,071,184B，
+build/runtime/ship SHA-256 均为
+``6FD195E37F48F475A9C40D1E60B9AB4291A4E3C456AC9A25561D9580A1D5CA6E``。
+该历史制品覆盖 UI 稳定句柄、launcher 异常路径修复及像素精确断言；后者的运行证据来自 Debug 探针。
+当前包含插件 API 手册的 Hardened ship 为 83 文件、33,188,432B bundle，证据见
+[session-86](../docs/session-log/session-86-plugin-api-guide.md)。
+活动 Star Resonance 包只实现原生面板/语义事件适配；冻结旧包中的 DPS/packet/trigger/
+AutoKey 业务链尚未功能对等迁移。开发 staging 仍与独立插件正式分发分开。
+
+2026-09-24 SDK 复核发现早前 CPython 的同 surface 更新仍先 clear 后 set，其他
+loader 宿主将重复 set 误判为 `ALREADY_EXISTS`。现统一由 loader/SDK 事务替换，
+新帧提交前失败时保留旧图层；SDK 在资源分配前核对 canvas 操作名，未知操作
+返回 INVALID_ARGUMENT。`sao_dir_probe --overlay-probe` 实测双帧、非法帧回退与
+清理 `pass=1`，并核对新旧像素及错误帧后的旧像素保留。首次设置的同名 BUSY
+预留与失败候选 token 留账均随此次 Debug/ship 复验；provider888/0、双 14 包菜单、
+逐包动作与六宿主深层菜单通过。
+反射 `mem.read` 以 8 MiB JSON 结果预算限制单次原始请求为 6 MiB - 768 B。
 
 ## Emma 是什么
 

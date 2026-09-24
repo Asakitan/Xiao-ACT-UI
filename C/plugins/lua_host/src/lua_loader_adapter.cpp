@@ -5,9 +5,9 @@
 #include "sao/plugins/loader/plugin_lifecycle.h"
 #include "sao/plugins/lua_host/lua_call.h"
 #include "sao/plugins/lua_host/lua_error.h"
-#include "sao/plugins/script_ctx/ctx_surface.h"
 #include "sao/plugins/lua_host/lua_sandbox.h"
 #include "sao/plugins/lua_host/lua_stdlib.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
 
 #include <windows.h>
 
@@ -216,9 +216,9 @@ int32_t create_plugin_runtime(lua_loader_adapter_owner_s* owner,
         }
         return false;
     };
-    const bool declared_hotkeys =
-        !manifest.hotkeys.empty() || declares("hotkeys") || declares("hotkey") ||
-        declares_bind("ctx.register_hotkey") || declares_bind("ctx.unregister_hotkey");
+    const bool declared_hotkeys = !manifest.hotkeys.empty() || declares("hotkeys") ||
+                                  declares("hotkey") || declares_bind("ctx.register_hotkey") ||
+                                  declares_bind("ctx.unregister_hotkey");
     const bool unsafe = has_permission(manifest, "unsafe");
     const bool allow_fs = unsafe || has_permission(manifest, "fs");
     const bool allow_process = unsafe || has_permission(manifest, "process");
@@ -401,9 +401,6 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
 
         sao::plugins::loader::plugin_context_t* context = nullptr;
         int32_t status = sao::plugins::loader::sao_plugins_lifecycle_get_context(plugin, &context);
-        if (status == SAO_OK && context != nullptr)
-            sao::plugins::script_ctx::ctx_surface_advisory_check(
-                sao::plugins::loader::engine_kind::lua, context, manifest);
         std::string error;
         if (status == SAO_OK) {
             status = create_plugin_runtime(owner, *manifest, context, host, lua_plugin, error);
@@ -413,6 +410,8 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
                                 error.empty() ? "Lua plugin load failed" : std::move(error));
             return status;
         }
+        sao::plugins::script_ctx::ctx_surface_advisory_check(sao::plugins::loader::engine_kind::lua,
+                                                             context, manifest);
 
         {
             std::lock_guard lock(g_adapter_mutex);

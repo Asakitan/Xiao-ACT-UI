@@ -7,8 +7,8 @@
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
 #include "sao/plugins/loader/plugin_lifecycle.h"
-#include "sao/plugins/script_ctx/ctx_surface.h"
 #include "sao/plugins/loader/plugin_manifest.h"
+#include "sao/plugins/script_ctx/ctx_surface.h"
 #include "sao/sdk/sao_sdk.h"
 #include "sao/sdk/sao_sdk_provider.h"
 
@@ -228,10 +228,8 @@ int32_t with_plugin(loader_plugin_handle_t plugin, void* user_data, Callback&& c
     return status == SAO_OK ? callback(lease.script()) : status;
 }
 
-int32_t rollback_adapter_load(as_loader_adapter_owner_s* owner,
-                              loader_plugin_handle_t plugin,
-                              adapter_plugin_record& pending,
-                              int32_t failure,
+int32_t rollback_adapter_load(as_loader_adapter_owner_s* owner, loader_plugin_handle_t plugin,
+                              adapter_plugin_record& pending, int32_t failure,
                               std::string retained_error) noexcept {
     adapter_resource_snapshot snapshot = take_resources(pending);
     int32_t cleanup_status = SAO_OK;
@@ -283,9 +281,6 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
             if (status == SAO_OK)
                 status = SAO_ERR_NOT_INITIALIZED;
         } else {
-            sao::plugins::script_ctx::ctx_surface_advisory_check(
-                sao::plugins::loader::engine_kind::angelscript,
-                pending.loader_context, manifest);
             status = sao_plugins_ashost_create(&owner->config, &pending.host);
         }
         if (status == SAO_OK) {
@@ -310,6 +305,10 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
                                                     manifest->plugin_id.c_str(),
                                                     pending.loader_context, &pending.script);
         }
+        if (status == SAO_OK) {
+            sao::plugins::script_ctx::ctx_surface_advisory_check(
+                sao::plugins::loader::engine_kind::angelscript, pending.loader_context, manifest);
+        }
         if (status != SAO_OK) {
             std::string retained_error = "AngelScript plugin runtime load failed";
             if (pending.host != nullptr) {
@@ -320,8 +319,7 @@ int32_t SAO_PLUGINS_CALL adapter_load(loader_plugin_handle_t plugin,
                 }
                 std::free(host_error);
             }
-            return rollback_adapter_load(owner, plugin, pending, status,
-                                         std::move(retained_error));
+            return rollback_adapter_load(owner, plugin, pending, status, std::move(retained_error));
         }
 
         bool owner_changed = false;
@@ -445,8 +443,8 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* use
                 found->second.lifecycle == adapter_plugin_record::state::unloading) {
                 restore_resources(found->second, snapshot);
                 found->second.lifecycle = was_cleanup_pending
-                                               ? adapter_plugin_record::state::cleanup_pending
-                                               : adapter_plugin_record::state::ready;
+                                              ? adapter_plugin_record::state::cleanup_pending
+                                              : adapter_plugin_record::state::ready;
             }
             return status;
         }
@@ -470,8 +468,8 @@ int32_t SAO_PLUGINS_CALL adapter_unload(loader_plugin_handle_t plugin, void* use
                 found->second.lifecycle == adapter_plugin_record::state::unloading) {
                 restore_resources(found->second, snapshot);
                 found->second.lifecycle = was_cleanup_pending
-                                               ? adapter_plugin_record::state::cleanup_pending
-                                               : adapter_plugin_record::state::ready;
+                                              ? adapter_plugin_record::state::cleanup_pending
+                                              : adapter_plugin_record::state::ready;
             }
         }
         return SAO_ERR_OS_CALL_FAILED;

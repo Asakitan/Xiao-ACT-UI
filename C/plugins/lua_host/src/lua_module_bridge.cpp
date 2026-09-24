@@ -134,8 +134,8 @@ struct passive_resource {
 // receive a single common user_data pointer).  `record_ids` holds the
 // event_callback_record dispatch ids looked up through g_callback_map.
 struct compositor_input_dispatch {
-    std::array<uintptr_t, 4> record_ids{};  // cursor_pos, mouse_button, cursor_leave, scroll
-    std::string key;                        // layer name
+    std::array<uintptr_t, 4> record_ids{}; // cursor_pos, mouse_button, cursor_leave, scroll
+    std::string key;                       // layer name
     std::atomic_bool closing{false};
     std::uint64_t sequence = 0;
 };
@@ -306,12 +306,15 @@ void forget_callback(const event_callback_record& callback) noexcept {
 
 int protected_registry_ref(lua_State* state, int index) {
     lua_pushvalue(state, index);
-    const int status = detail::protected_function(state, [](lua_State* current) {
-        lua_pushvalue(current, 1);
-        const int reference = luaL_ref(current, LUA_REGISTRYINDEX);
-        lua_pushinteger(current, reference);
-        return 1;
-    }, 1, 1);
+    const int status = detail::protected_function(
+        state,
+        [](lua_State* current) {
+            lua_pushvalue(current, 1);
+            const int reference = luaL_ref(current, LUA_REGISTRYINDEX);
+            lua_pushinteger(current, reference);
+            return 1;
+        },
+        1, 1);
     if (status != LUA_OK) {
         detail::capture_state_error_locked(state, -1);
         lua_pop(state, 1);
@@ -531,8 +534,9 @@ void release_action_handler_refs(action_handler_bridge& handler) noexcept {
     release_registry_ref(handler.state, handler.persistent_ref);
 }
 
-int32_t unregister_entity_provider_ids(
-    bridge_state& bridge, const std::vector<std::string_view>& local_provider_ids) noexcept {
+int32_t
+unregister_entity_provider_ids(bridge_state& bridge,
+                               const std::vector<std::string_view>& local_provider_ids) noexcept {
     if (bridge.context == nullptr || local_provider_ids.empty())
         return SAO_OK;
     try {
@@ -709,8 +713,7 @@ struct menu_materialization {
 };
 
 bool build_menu_snapshot(menu_bridge* bridge, menu_materialization& materialized,
-                         const menu_navigation::State* requested_navigation,
-                         std::string& error) {
+                         const menu_navigation::State* requested_navigation, std::string& error) {
     lua_State* state = bridge->state;
     const int base = lua_gettop(state);
     lua_rawgeti(state, LUA_REGISTRYINDEX, bridge->builder_ref);
@@ -736,8 +739,8 @@ bool build_menu_snapshot(menu_bridge* bridge, menu_materialization& materialized
         actions.reserve(count);
         const void* root_identity = lua_topointer(state, -1);
         materialized.ancestors.insert(root_identity);
-        materialized.frames.push_back({materialized.hold(-1), root_identity, nullptr,
-                                        &materialized.tree, count, 0, {}, {}});
+        materialized.frames.push_back(
+            {materialized.hold(-1), root_identity, nullptr, &materialized.tree, count, 0, {}, {}});
         lua_settop(state, base);
         std::size_t admitted_nodes = count;
         std::size_t total_bytes = 0;
@@ -775,10 +778,9 @@ bool build_menu_snapshot(menu_bridge* bridge, menu_materialization& materialized
             if (!table_menu_string(state, row_index, "label", true, row.label, error) ||
                 !table_menu_string(state, row_index, "icon", false, row.icon, error) ||
                 !table_menu_payload(state, row_index, row.payload_json, error) ||
-                !table_menu_flag(state, row_index, "keep_menu_open", false, row.keep_open,
+                !table_menu_flag(state, row_index, "keep_menu_open", false, row.keep_open, error) ||
+                !table_menu_flag(state, row_index, "close_menu_before", false, row.close_before,
                                  error) ||
-                !table_menu_flag(state, row_index, "close_menu_before", false,
-                                 row.close_before, error) ||
                 !table_menu_flag(state, row_index, "disabled", false, disabled, error) ||
                 !table_menu_flag(state, row_index, "separator", false, separator, error)) {
                 lua_settop(state, base);
@@ -818,7 +820,8 @@ bool build_menu_snapshot(menu_bridge* bridge, menu_materialization& materialized
                 lua_settop(state, base);
                 return false;
             }
-            row.can_activate = row.can_activate && requested_can_activate && !disabled && !separator;
+            row.can_activate =
+                row.can_activate && requested_can_activate && !disabled && !separator;
 
             auto& explicit_identity = materialized.explicit_identity;
             explicit_identity.clear();
@@ -906,16 +909,22 @@ bool build_menu_snapshot(menu_bridge* bridge, menu_materialization& materialized
                 }
                 admitted_nodes += child_count;
                 node.children.reserve(child_count);
-                materialized.frames.push_back({children_ref, child_identity, row_identity,
-                                                &node.children, child_count, 0,
-                                                path_identity, {}});
+                materialized.frames.push_back({children_ref,
+                                               child_identity,
+                                               row_identity,
+                                               &node.children,
+                                               child_count,
+                                               0,
+                                               path_identity,
+                                               {}});
             } else {
                 materialized.ancestors.erase(row_identity);
             }
             lua_settop(state, base);
         }
 
-        auto navigation = requested_navigation == nullptr ? bridge->navigation : *requested_navigation;
+        auto navigation =
+            requested_navigation == nullptr ? bridge->navigation : *requested_navigation;
         if (!navigation.replace(materialized.tree, error)) {
             lua_settop(state, base);
             return false;
@@ -961,15 +970,15 @@ struct menu_snapshot_build_context {
 int build_menu_snapshot_body(lua_State* state) {
     auto* context = static_cast<menu_snapshot_build_context*>(lua_touserdata(state, 1));
     context->succeeded = build_menu_snapshot(context->bridge, context->materialized,
-                                            context->requested_navigation, *context->error);
+                                             context->requested_navigation, *context->error);
     return 0;
 }
 
-int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
-    void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes,
-    std::uint32_t* out_count, std::uint64_t* out_revision,
-    sao::plugins::loader::entity_snapshot_content_token_t* out_content_token,
-    std::uint32_t* out_row_stride_bytes, void* user_data) {
+int32_t SAO_PLUGINS_CALL
+native_menu_snapshot_v2(void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes,
+                        std::uint32_t* out_count, std::uint64_t* out_revision,
+                        sao::plugins::loader::entity_snapshot_content_token_t* out_content_token,
+                        std::uint32_t* out_row_stride_bytes, void* user_data) {
     if (out_count == nullptr || out_revision == nullptr || out_content_token == nullptr ||
         out_row_stride_bytes == nullptr || user_data == nullptr ||
         (capacity > 0 && rows == nullptr) || (rows == nullptr && row_stride_bytes != 0)) {
@@ -1010,8 +1019,7 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
         *out_row_stride_bytes =
             bridge->rows.empty()
                 ? 0
-                : static_cast<std::uint32_t>(
-                      sizeof(sao::plugins::loader::entity_menu_row_v2));
+                : static_cast<std::uint32_t>(sizeof(sao::plugins::loader::entity_menu_row_v2));
         if (capacity < bridge->rows.size()) {
             return SAO_ERR_BUFFER_TOO_SMALL;
         }
@@ -1049,9 +1057,9 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
     }
 }
 
-int32_t submit_action_result(
-    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
-    void* result_sink_user_data, bool handled, const char* result_json_utf8) noexcept {
+int32_t submit_action_result(sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+                             void* result_sink_user_data, bool handled,
+                             const char* result_json_utf8) noexcept {
     if (result_sink == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     const sao::plugins::loader::entity_action_result_v2 result{
@@ -1064,10 +1072,9 @@ int32_t submit_action_result(
     return result_sink(&result, result_sink_user_data);
 }
 
-int32_t submit_lua_action_result(
-    lua_State* state, int index, bool nil_is_decline,
-    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
-    void* result_sink_user_data, std::string& conversion_error) {
+int32_t submit_lua_action_result(lua_State* state, int index, bool nil_is_decline,
+                                 sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+                                 void* result_sink_user_data, std::string& conversion_error) {
     if (lua_isnil(state, index))
         return submit_action_result(result_sink, result_sink_user_data, !nil_is_decline, nullptr);
 
@@ -1080,10 +1087,29 @@ int32_t submit_lua_action_result(
     return submit_action_result(result_sink, result_sink_user_data, true, serialized.c_str());
 }
 
-int32_t SAO_PLUGINS_CALL native_menu_action_v2(
-    const char* action_id_utf8, const char* payload_json_utf8,
-    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
-    void* result_sink_user_data, void* user_data) {
+void log_retained_state_error(lua_State* state) noexcept {
+    std::string error = detail::take_state_error_locked(state);
+    if (error.empty())
+        return;
+    try {
+        loader_context_t* context = nullptr;
+        {
+            std::lock_guard lock(g_bridge_map_mutex);
+            const auto found = g_bridge_map.find(state);
+            if (found != g_bridge_map.end())
+                context = found->second->context;
+        }
+        if (context != nullptr)
+            sao::plugins::loader::sao_plugins_ctx_log(context, error.c_str());
+    } catch (...) {
+    }
+    detail::set_state_error_locked(state, std::move(error));
+}
+
+int32_t SAO_PLUGINS_CALL
+native_menu_action_v2(const char* action_id_utf8, const char* payload_json_utf8,
+                      sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+                      void* result_sink_user_data, void* user_data) {
     if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
         user_data == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
@@ -1106,7 +1132,8 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
             detail::clear_state_error_locked(state);
             std::string error;
             menu_snapshot_build_context context{bridge, &error, &navigation};
-            if (detail::protected_trampoline(state, build_menu_snapshot_body, &context, 0) != LUA_OK) {
+            if (detail::protected_trampoline(state, build_menu_snapshot_body, &context, 0) !=
+                LUA_OK) {
                 detail::capture_state_error_locked(state, -1);
                 lua_pop(state, 1);
                 return SAO_ERR_OS_CALL_FAILED;
@@ -1118,8 +1145,8 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
             }
             return submit_action_result(result_sink, result_sink_user_data, true, nullptr);
         }
-        const auto visible = std::find_if(bridge->rows.begin(), bridge->rows.end(),
-            [action_id_utf8](const menu_row& row) {
+        const auto visible = std::find_if(
+            bridge->rows.begin(), bridge->rows.end(), [action_id_utf8](const menu_row& row) {
                 return row.action_id == action_id_utf8 && row.can_activate;
             });
         if (visible == bridge->rows.end())
@@ -1137,14 +1164,17 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
         detail::clear_state_error_locked(state);
         if (lua_pcall(state, 0, 1, 0) != LUA_OK) {
             detail::capture_state_error_locked(state, -1);
+            log_retained_state_error(state);
             lua_settop(state, base);
             return SAO_ERR_OS_CALL_FAILED;
         }
         std::string conversion_error;
         const int32_t result_status = submit_lua_action_result(
             state, -1, false, result_sink, result_sink_user_data, conversion_error);
-        if (!conversion_error.empty())
+        if (!conversion_error.empty()) {
             detail::set_state_error_locked(state, std::move(conversion_error));
+            log_retained_state_error(state);
+        }
         lua_settop(state, base);
         return result_status;
     } catch (...) {
@@ -1152,10 +1182,10 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
     }
 }
 
-int32_t SAO_PLUGINS_CALL native_action_handler_v2(
-    const char* action_id_utf8, const char* payload_json_utf8,
-    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
-    void* result_sink_user_data, void* user_data) {
+int32_t SAO_PLUGINS_CALL
+native_action_handler_v2(const char* action_id_utf8, const char* payload_json_utf8,
+                         sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+                         void* result_sink_user_data, void* user_data) {
     if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
         user_data == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
@@ -1248,8 +1278,8 @@ int32_t register_menu_provider(bridge_state& bridge, menu_bridge& menu) noexcept
         provider.root_contribution = &root;
         provider.action_handler_v2 = native_menu_action_v2;
         provider.action_user_data = &menu;
-        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3(
-            bridge.context, &provider);
+        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3(bridge.context,
+                                                                                 &provider);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -1448,7 +1478,9 @@ int32_t render_hook_callback(const char* surface_utf8, const char* payload_json_
         struct stack_guard final {
             lua_State* state;
             int base;
-            ~stack_guard() { lua_settop(state, base); }
+            ~stack_guard() {
+                lua_settop(state, base);
+            }
         } stack{state, base};
         lua_rawgeti(state, LUA_REGISTRYINDEX, callback->function_ref);
         std::string conversion_error;
@@ -1494,7 +1526,7 @@ int32_t panel_render_callback(const char* payload, char** output, void* user_dat
     if (panel == nullptr || !panel->render)
         return SAO_ERR_HANDLE_INVALID;
     return render_hook_callback(nullptr, payload, output,
-                                 reinterpret_cast<void*>(panel->render->dispatch_id));
+                                reinterpret_cast<void*>(panel->render->dispatch_id));
 }
 
 int32_t panel_action_callback(const char* action, const char* payload, char** output,
@@ -1503,11 +1535,11 @@ int32_t panel_action_callback(const char* action, const char* payload, char** ou
     if (panel == nullptr || !panel->action)
         return SAO_ERR_HANDLE_INVALID;
     return render_hook_callback(action == nullptr ? "" : action, payload, output,
-                                 reinterpret_cast<void*>(panel->action->dispatch_id));
+                                reinterpret_cast<void*>(panel->action->dispatch_id));
 }
 
-int32_t release_panel_callbacks(bridge_state& bridge, lua_State* state,
-                                bool pending_only, bool enable_only) {
+int32_t release_panel_callbacks(bridge_state& bridge, lua_State* state, bool pending_only,
+                                bool enable_only) {
     for (auto entry = bridge.panels.begin(); entry != bridge.panels.end();) {
         auto& panel = *entry->second;
         if ((pending_only && !panel.pending_enable) || (enable_only && !panel.enable_scoped)) {
@@ -1579,8 +1611,7 @@ std::wstring utf8_to_wide_string(const char* value) {
     try {
         const std::string_view view(value);
         return std::filesystem::path(
-                   std::u8string_view(reinterpret_cast<const char8_t*>(value),
-                                      view.size()))
+                   std::u8string_view(reinterpret_cast<const char8_t*>(value), view.size()))
             .wstring();
     } catch (...) {
         return {};
@@ -1595,11 +1626,10 @@ enum compositor_input_slot : std::size_t {
     compositor_input_scroll = 3,
 };
 
-std::shared_ptr<event_callback_record> find_compositor_record(
-    compositor_input_dispatch* dispatch, std::size_t slot) noexcept {
+std::shared_ptr<event_callback_record> find_compositor_record(compositor_input_dispatch* dispatch,
+                                                              std::size_t slot) noexcept {
     if (dispatch == nullptr || slot >= dispatch->record_ids.size() ||
-        dispatch->closing.load(std::memory_order_acquire) ||
-        dispatch->record_ids[slot] == 0) {
+        dispatch->closing.load(std::memory_order_acquire) || dispatch->record_ids[slot] == 0) {
         return nullptr;
     }
     return find_callback(reinterpret_cast<void*>(dispatch->record_ids[slot]));
@@ -1656,24 +1686,22 @@ void compositor_invoke(void* user_data, std::size_t slot, double arg_a, double a
     }
 }
 
-void SAO_PLUGINS_CALL compositor_cursor_pos_dispatch(float x, float y,
-                                                     void* user_data) noexcept {
+void SAO_PLUGINS_CALL compositor_cursor_pos_dispatch(float x, float y, void* user_data) noexcept {
     compositor_invoke(user_data, compositor_input_cursor_pos, static_cast<double>(x),
                       static_cast<double>(y), false, 2);
 }
 
 void SAO_PLUGINS_CALL compositor_mouse_button_dispatch(uint32_t button, bool pressed,
                                                        void* user_data) noexcept {
-    compositor_invoke(user_data, compositor_input_mouse_button,
-                      static_cast<double>(button), pressed ? 1.0 : 0.0, true, 2);
+    compositor_invoke(user_data, compositor_input_mouse_button, static_cast<double>(button),
+                      pressed ? 1.0 : 0.0, true, 2);
 }
 
 void SAO_PLUGINS_CALL compositor_cursor_leave_dispatch(void* user_data) noexcept {
     compositor_invoke(user_data, compositor_input_cursor_leave, 0.0, 0.0, false, 0);
 }
 
-void SAO_PLUGINS_CALL compositor_scroll_dispatch(float dx, float dy,
-                                                 void* user_data) noexcept {
+void SAO_PLUGINS_CALL compositor_scroll_dispatch(float dx, float dy, void* user_data) noexcept {
     compositor_invoke(user_data, compositor_input_scroll, static_cast<double>(dx),
                       static_cast<double>(dy), false, 2);
 }
@@ -1732,9 +1760,9 @@ struct script_module_box {
     std::shared_ptr<script_ctx::script_module> module;
 };
 
-int script_value_dispatch(lua_State* state) noexcept;   // forward
-int script_module_index(lua_State* state) noexcept;     // forward
-int script_module_member_call(lua_State* state) noexcept;  // forward
+int script_value_dispatch(lua_State* state) noexcept;     // forward
+int script_module_index(lua_State* state) noexcept;       // forward
+int script_module_member_call(lua_State* state) noexcept; // forward
 
 int script_value_gc(lua_State* state) noexcept {
     auto* box = static_cast<script_value_box*>(lua_touserdata(state, 1));
@@ -1775,8 +1803,8 @@ void ensure_script_module_metatable(lua_State* state) {
 }
 
 bool push_script_box(lua_State* state, script_ctx::script_value_ptr value) {
-    auto* box = static_cast<script_value_box*>(lua_newuserdatauv(
-        state, sizeof(script_value_box), 0));
+    auto* box =
+        static_cast<script_value_box*>(lua_newuserdatauv(state, sizeof(script_value_box), 0));
     if (box == nullptr)
         return false;
     try {
@@ -1790,10 +1818,9 @@ bool push_script_box(lua_State* state, script_ctx::script_value_ptr value) {
     return true;
 }
 
-bool push_script_module_box(lua_State* state,
-                            std::shared_ptr<script_ctx::script_module> module) {
-    auto* box = static_cast<script_module_box*>(lua_newuserdatauv(
-        state, sizeof(script_module_box), 0));
+bool push_script_module_box(lua_State* state, std::shared_ptr<script_ctx::script_module> module) {
+    auto* box =
+        static_cast<script_module_box*>(lua_newuserdatauv(state, sizeof(script_module_box), 0));
     if (box == nullptr)
         return false;
     try {
@@ -1838,8 +1865,7 @@ bool push_script_value(lua_State* state, const script_ctx::script_value_ptr& val
         return true;
     case kind::list: {
         if (value->items.size() > kMaximumScriptValueItems ||
-            value->items.size() > static_cast<std::size_t>(
-                                      std::numeric_limits<int>::max())) {
+            value->items.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
             error = "script list value is too large for Lua";
             return false;
         }
@@ -1878,8 +1904,7 @@ bool push_script_value(lua_State* state, const script_ctx::script_value_ptr& val
 
 // lua → script_value (positional args for module->call).
 bool lua_to_script_value(lua_State* state, int index, script_ctx::script_value_ptr& out,
-                         std::string& error, int depth,
-                         std::vector<const void*>& active_tables) {
+                         std::string& error, int depth, std::vector<const void*>& active_tables) {
     if (depth > kMaximumScriptValueDepth) {
         error = "Lua value nesting exceeds its depth budget";
         return false;
@@ -1910,15 +1935,13 @@ bool lua_to_script_value(lua_State* state, int index, script_ctx::script_value_p
     case LUA_TSTRING: {
         std::size_t length = 0;
         const char* text = lua_tolstring(state, index, &length);
-        out = script_ctx::script_value::make_string(
-            std::string(text == nullptr ? "" : text, length));
+        out =
+            script_ctx::script_value::make_string(std::string(text == nullptr ? "" : text, length));
         return true;
     }
     case LUA_TUSERDATA: {
-        auto* box = static_cast<script_value_box*>(luaL_testudata(state, index,
-                                                                "SaoScriptValue"));
-        if (box != nullptr && box->value != nullptr &&
-            box->value->k == kind::function) {
+        auto* box = static_cast<script_value_box*>(luaL_testudata(state, index, "SaoScriptValue"));
+        if (box != nullptr && box->value != nullptr && box->value->k == kind::function) {
             out = box->value;
             return true;
         }
@@ -1972,8 +1995,7 @@ bool lua_to_script_value(lua_State* state, int index, script_ctx::script_value_p
                 error = "Lua table script-value keys must be strings or positive integers";
                 return false;
             }
-            if (!lua_to_script_value(state, -1, item.value, error, depth + 1,
-                                     active_tables)) {
+            if (!lua_to_script_value(state, -1, item.value, error, depth + 1, active_tables)) {
                 lua_pop(state, 2);
                 return false;
             }
@@ -1992,9 +2014,8 @@ bool lua_to_script_value(lua_State* state, int index, script_ctx::script_value_p
             std::vector<std::pair<std::string, script_ctx::script_value_ptr>> object;
             object.reserve(items.size());
             for (auto& item : items) {
-                const std::string key = item.integer_key
-                                            ? std::to_string(item.integer)
-                                            : std::move(item.string_key);
+                const std::string key =
+                    item.integer_key ? std::to_string(item.integer) : std::move(item.string_key);
                 object.emplace_back(std::move(key), std::move(item.value));
             }
             out = script_ctx::script_value::make_map(std::move(object));
@@ -2023,9 +2044,8 @@ bool lua_to_script_value(lua_State* state, int index, script_ctx::script_value_p
 // Executes a bundled .lua file inside the plugin's own lua_State under a fresh
 // _ENV and exposes the result table (or the env table when the chunk returns
 // nil) through the shared script_module ABI.
-class lua_local_module final
-    : public script_ctx::script_module,
-      public std::enable_shared_from_this<lua_local_module> {
+class lua_local_module final : public script_ctx::script_module,
+                               public std::enable_shared_from_this<lua_local_module> {
   public:
     lua_local_module(lua_State* state, int table_ref, std::string id)
         : state_(detail::main_thread(state)), table_ref_(table_ref), id_(std::move(id)) {}
@@ -2137,10 +2157,8 @@ class lua_local_module final
         return result;
     }
 
-    int32_t call(const std::string& name,
-                 const std::vector<script_ctx::script_value_ptr>& args,
-                 script_ctx::script_value_ptr* out_value,
-                 std::string* out_error) override {
+    int32_t call(const std::string& name, const std::vector<script_ctx::script_value_ptr>& args,
+                 script_ctx::script_value_ptr* out_value, std::string* out_error) override {
         if (state_ == nullptr) {
             if (out_error != nullptr)
                 *out_error = "lua module state is closed";
@@ -2186,9 +2204,8 @@ class lua_local_module final
                 } else if (lua_pcall(state, argument_count, 1, 0) != LUA_OK) {
                     const char* message = lua_tostring(state, -1);
                     if (out_error != nullptr) {
-                        *out_error = message == nullptr
-                                         ? "lua module member call failed"
-                                         : std::string(message);
+                        *out_error = message == nullptr ? "lua module member call failed"
+                                                        : std::string(message);
                     }
                     detail::capture_state_error_locked(state, -1);
                     result = SAO_ERR_OS_CALL_FAILED;
@@ -2217,7 +2234,7 @@ class lua_local_module final
 
 // ── runtime_bridge provider (lua engine, priority 50) ────────────────────
 int32_t lua_engine_probe(loader_context_t* ctx, const wchar_t*, std::string& note,
-                      void* /*user_data*/) noexcept try {
+                         void* /*user_data*/) noexcept try {
     if (find_state_for_context(ctx) == nullptr) {
         note = "lua engine has no live state for this context";
         return SAO_ERR_HANDLE_INVALID;
@@ -2237,8 +2254,8 @@ struct local_chunk_data {
 
 int load_local_chunk_body(lua_State* state) {
     auto* data = static_cast<local_chunk_data*>(lua_touserdata(state, 1));
-    if (luaL_loadbufferx(state, data->source.data(), data->source.size(),
-                        data->name.c_str(), "t") != LUA_OK) {
+    if (luaL_loadbufferx(state, data->source.data(), data->source.size(), data->name.c_str(),
+                         "t") != LUA_OK) {
         data->status = SAO_ERR_INVALID_ARGUMENT;
         return lua_error(state);
     }
@@ -2326,8 +2343,7 @@ int32_t SAO_PLUGINS_CALL lua_engine_load_module(
                 *out_error = "lua load_module: cannot open file: " + wide_to_utf8(abs_path);
             return SAO_ERR_OS_CALL_FAILED;
         }
-        std::string source{std::istreambuf_iterator<char>(input),
-                           std::istreambuf_iterator<char>()};
+        std::string source{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
         if (!input.eof() && input.fail()) {
             if (out_error != nullptr)
                 *out_error = "lua load_module: read failed: " + wide_to_utf8(abs_path);
@@ -2338,22 +2354,23 @@ int32_t SAO_PLUGINS_CALL lua_engine_load_module(
         struct stack_guard {
             lua_State* state;
             int base;
-            ~stack_guard() { lua_settop(state, base); }
+            ~stack_guard() {
+                lua_settop(state, base);
+            }
         } stack{state, base};
         const std::string chunk_name = "@" + wide_to_utf8(abs_path);
         local_chunk_data data{source, chunk_name, bridge->context_ref};
         if (detail::protected_trampoline(state, load_local_chunk_body, &data, 0) != LUA_OK) {
             const char* message = lua_tostring(state, -1);
             if (out_error != nullptr) {
-                *out_error = message == nullptr ? "lua chunk failed: " + chunk_name
-                                              : std::string(message);
+                *out_error =
+                    message == nullptr ? "lua chunk failed: " + chunk_name : std::string(message);
             }
             detail::capture_state_error_locked(state, -1);
             return data.status;
         }
         try {
-            entry->second = std::make_shared<lua_local_module>(state, data.table_ref,
-                                                              logical_name);
+            entry->second = std::make_shared<lua_local_module>(state, data.table_ref, logical_name);
         } catch (...) {
             luaL_unref(state, LUA_REGISTRYINDEX, data.table_ref);
             throw;
@@ -2362,8 +2379,11 @@ int32_t SAO_PLUGINS_CALL lua_engine_load_module(
         return SAO_OK;
     } catch (...) {
         if (out_error != nullptr) {
-            try { *out_error = "lua load_module: internal error"; }
-            catch (...) { out_error->clear(); }
+            try {
+                *out_error = "lua load_module: internal error";
+            } catch (...) {
+                out_error->clear();
+            }
         }
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -2373,7 +2393,7 @@ const char* const kLuaScriptExtensions[] = {"lua", nullptr};
 
 const script_ctx::script_engine_ops kLuaEngineOps = {
     "lua",
-    50,   // priority: below python hosts — lowest-priority probing provider wins
+    50, // priority: below python hosts — lowest-priority probing provider wins
     kLuaScriptExtensions,
     &lua_engine_probe,
     &lua_engine_load_module,
@@ -2381,11 +2401,9 @@ const script_ctx::script_engine_ops kLuaEngineOps = {
 };
 
 int script_value_dispatch(lua_State* state) noexcept {
-    auto* box = static_cast<script_value_box*>(
-        luaL_checkudata(state, 1, "SaoScriptValue"));
+    auto* box = static_cast<script_value_box*>(luaL_checkudata(state, 1, "SaoScriptValue"));
     if (box == nullptr || box->value == nullptr ||
-        box->value->k != script_ctx::script_value::kind::function ||
-        !box->value->call) {
+        box->value->k != script_ctx::script_value::kind::function || !box->value->call) {
         return luaL_error(state, "script callable is not invokable");
     }
     const int top = lua_gettop(state);
@@ -2399,8 +2417,7 @@ int script_value_dispatch(lua_State* state) noexcept {
         script_ctx::script_value_ptr value;
         std::string error;
         if (!lua_to_script_value(state, index, value, error)) {
-            return luaL_error(state, "script call argument is not marshalable: %s",
-                              error.c_str());
+            return luaL_error(state, "script call argument is not marshalable: %s", error.c_str());
         }
         args.push_back(std::move(value));
     }
@@ -2408,19 +2425,17 @@ int script_value_dispatch(lua_State* state) noexcept {
     std::string error;
     const int32_t status = box->value->call(args, &result, &error);
     if (status != SAO_OK) {
-        return luaL_error(state, "script call failed with status %d: %s",
-                          static_cast<int>(status), error.c_str());
+        return luaL_error(state, "script call failed with status %d: %s", static_cast<int>(status),
+                          error.c_str());
     }
     if (!push_script_value(state, result, error)) {
-        return luaL_error(state, "script call result is not marshalable: %s",
-                          error.c_str());
+        return luaL_error(state, "script call result is not marshalable: %s", error.c_str());
     }
     return 1;
 }
 
 int script_module_index(lua_State* state) noexcept {
-    auto* box = static_cast<script_module_box*>(
-        luaL_checkudata(state, 1, "SaoScriptModule"));
+    auto* box = static_cast<script_module_box*>(luaL_checkudata(state, 1, "SaoScriptModule"));
     const char* name = luaL_checkstring(state, 2);
     if (box != nullptr && box->module != nullptr && name != nullptr && name[0] != '\0') {
         script_ctx::script_value_ptr value;
@@ -2435,8 +2450,8 @@ int script_module_index(lua_State* state) noexcept {
         try {
             for (const auto& member : box->module->member_names()) {
                 if (member == name) {
-                    lua_pushvalue(state, 1);  // box udata keeps module alive
-                    lua_pushvalue(state, 2);  // member name
+                    lua_pushvalue(state, 1); // box udata keeps module alive
+                    lua_pushvalue(state, 2); // member name
                     lua_pushcclosure(state, script_module_member_call, 2);
                     return 1;
                 }
@@ -2449,8 +2464,7 @@ int script_module_index(lua_State* state) noexcept {
 }
 
 int script_module_member_call(lua_State* state) noexcept {
-    auto* box = static_cast<script_module_box*>(
-        lua_touserdata(state, lua_upvalueindex(1)));
+    auto* box = static_cast<script_module_box*>(lua_touserdata(state, lua_upvalueindex(1)));
     const char* name = lua_tostring(state, lua_upvalueindex(2));
     if (box == nullptr || box->module == nullptr || name == nullptr) {
         return luaL_error(state, "script module handle is closed");
@@ -2466,8 +2480,7 @@ int script_module_member_call(lua_State* state) noexcept {
         script_ctx::script_value_ptr value;
         std::string error;
         if (!lua_to_script_value(state, index, value, error)) {
-            return luaL_error(state, "script call argument is not marshalable: %s",
-                              error.c_str());
+            return luaL_error(state, "script call argument is not marshalable: %s", error.c_str());
         }
         args.push_back(std::move(value));
     }
@@ -2480,8 +2493,7 @@ int script_module_member_call(lua_State* state) noexcept {
     }
     std::string push_error;
     if (!push_script_value(state, result, push_error)) {
-        return luaL_error(state, "module result is not marshalable: %s",
-                          push_error.c_str());
+        return luaL_error(state, "module result is not marshalable: %s", push_error.c_str());
     }
     return 1;
 }
@@ -2899,7 +2911,8 @@ int ctx_register_ui_panel(lua_State* state) {
     if ((has_render && !lua_isfunction(state, 4)) || (has_action && !lua_isfunction(state, 5)))
         return push_status_error(state, "register_ui_panel callbacks", SAO_ERR_INVALID_ARGUMENT);
     if (bridge->panels.contains(panel_id))
-        return push_status_error(state, "register_ui_panel", sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS);
+        return push_status_error(state, "register_ui_panel",
+                                 sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS);
     auto panel = std::make_shared<panel_callback_record>();
     panel->pending_enable = bridge->enable_checkpoint_active;
     try {
@@ -2919,8 +2932,10 @@ int ctx_register_ui_panel(lua_State* state) {
         bridge->context, panel_id, metadata.c_str(), has_render ? panel_render_callback : nullptr,
         has_action ? panel_action_callback : nullptr, panel.get());
     if (status != SAO_OK) {
-        const int32_t cleanup = status == sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS ?
-            SAO_OK : sao::plugins::loader::sao_plugins_ctx_unregister_ui_panel(bridge->context, panel_id);
+        const int32_t cleanup = status == sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS
+                                    ? SAO_OK
+                                    : sao::plugins::loader::sao_plugins_ctx_unregister_ui_panel(
+                                          bridge->context, panel_id);
         if (cleanup == SAO_OK || cleanup == SAO_ERR_HANDLE_INVALID) {
             if (panel->render)
                 release_callback_ref(state, *panel->render);
@@ -2940,8 +2955,7 @@ int ctx_register_action_handler(lua_State* state) {
         return push_status_error(state, "register_action_handler", SAO_ERR_INVALID_ARGUMENT);
     const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge->context);
     if (plugin_id == nullptr || plugin_id[0] == '\0')
-        return push_status_error(state, "register_action_handler context",
-                                 SAO_ERR_HANDLE_INVALID);
+        return push_status_error(state, "register_action_handler context", SAO_ERR_HANDLE_INVALID);
 
     const int candidate_ref = protected_registry_ref(state, 2);
     registry_ref_guard candidate_guard(bridge->state, candidate_ref);
@@ -2949,9 +2963,8 @@ int ctx_register_action_handler(lua_State* state) {
     if (status != SAO_OK)
         return push_status_error(state, "action handler provider registration", status);
 
-    int& committed_ref = bridge->enable_checkpoint_active
-                             ? bridge->action_handler.enable_ref
-                             : bridge->action_handler.persistent_ref;
+    int& committed_ref = bridge->enable_checkpoint_active ? bridge->action_handler.enable_ref
+                                                          : bridge->action_handler.persistent_ref;
     const int replaced_ref = committed_ref;
     committed_ref = candidate_ref;
     candidate_guard.release();
@@ -3210,14 +3223,12 @@ int ctx_open_file(lua_State* state) {
     if (!lua_isnoneornil(state, 2)) {
         if (lua_istable(state, 2)) {
             if (!detail::stack_to_json(state, 2, filters, error)) {
-                return push_status_error(state, "open_file filters",
-                                         SAO_ERR_INVALID_ARGUMENT);
+                return push_status_error(state, "open_file filters", SAO_ERR_INVALID_ARGUMENT);
             }
         } else {
             const char* text = luaL_checkstring(state, 2);
             if (text == nullptr) {
-                return push_status_error(state, "open_file filters",
-                                         SAO_ERR_INVALID_ARGUMENT);
+                return push_status_error(state, "open_file filters", SAO_ERR_INVALID_ARGUMENT);
             }
             const std::string_view raw(text);
             if (raw.find('|') != std::string_view::npos) {
@@ -3234,16 +3245,15 @@ int ctx_open_file(lua_State* state) {
                     cursor = bar + 1;
                 }
                 for (std::size_t index = 0; index + 1 < tokens.size(); index += 2) {
-                    filters.push_back({{"name", tokens[index]},
-                                       {"spec", tokens[index + 1]}});
+                    filters.push_back({{"name", tokens[index]}, {"spec", tokens[index + 1]}});
                 }
                 if (filters.empty())
                     filters = nullptr;
             } else {
                 filters = detail::json::array(
-                    {{{"name", raw}, {"spec", raw.find('*') != std::string_view::npos
-                                                     ? std::string(raw)
-                                                     : std::string("*.*")}}});
+                    {{{"name", raw},
+                      {"spec", raw.find('*') != std::string_view::npos ? std::string(raw)
+                                                                       : std::string("*.*")}}});
             }
         }
     }
@@ -3276,8 +3286,8 @@ int ctx_open_window(lua_State* state) {
     const char* panel_id = luaL_optstring(state, 2, "");
     const auto width = static_cast<uint32_t>(luaL_optinteger(state, 3, 0));
     const auto height = static_cast<uint32_t>(luaL_optinteger(state, 4, 0));
-    const int32_t status = sao::plugins::loader::sao_plugins_ctx_open_window(
-        bridge->context, panel_id, width, height);
+    const int32_t status =
+        sao::plugins::loader::sao_plugins_ctx_open_window(bridge->context, panel_id, width, height);
     if (status != SAO_OK) {
         return push_status_error(state, "open_window", status);
     }
@@ -3308,8 +3318,8 @@ int ctx_load_local(lua_State* state) {
     std::wstring abs_path;
     std::string diag;
     const int32_t status = script_ctx::runtime_bridge_load_local(
-        bridge->context, plugin_id == nullptr ? "" : plugin_id, root_dir, rel, &kind,
-        &module, &abs_path, &diag);
+        bridge->context, plugin_id == nullptr ? "" : plugin_id, root_dir, rel, &kind, &module,
+        &abs_path, &diag);
     if (status != SAO_OK) {
         throw method_failure{"load_local", status, diag};
     }
@@ -3346,13 +3356,11 @@ int ctx_create_compositor_layer(lua_State* state) {
     const auto x = static_cast<int32_t>(luaL_optinteger(state, 5, 0));
     const auto y = static_cast<int32_t>(luaL_optinteger(state, 6, 0));
     const auto z = static_cast<int32_t>(luaL_optinteger(state, 7, 140));
-    const bool click_through =
-        lua_isnoneornil(state, 8) || lua_toboolean(state, 8) != 0;
+    const bool click_through = lua_isnoneornil(state, 8) || lua_toboolean(state, 8) != 0;
     const bool high_fps = lua_toboolean(state, 9) != 0;
     const auto target_fps = static_cast<uint32_t>(luaL_optinteger(state, 10, 0));
     const int32_t status = sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
-        bridge->context, name, width, height, x, y, z, click_through, high_fps,
-        target_fps);
+        bridge->context, name, width, height, x, y, z, click_through, high_fps, target_fps);
     if (status != SAO_OK) {
         return push_status_error(state, "create_compositor_layer", status);
     }
@@ -3370,12 +3378,11 @@ int ctx_upload_compositor_frame(lua_State* state) {
     const auto width = static_cast<uint32_t>(luaL_checkinteger(state, 4));
     const auto height = static_cast<uint32_t>(luaL_checkinteger(state, 5));
     if (bytes == nullptr || bytes_length == 0) {
-        return push_status_error(state, "upload_compositor_frame",
-                                 SAO_ERR_INVALID_ARGUMENT);
+        return push_status_error(state, "upload_compositor_frame", SAO_ERR_INVALID_ARGUMENT);
     }
     const int32_t status = sao::plugins::loader::sao_plugins_ctx_upload_compositor_frame(
-        bridge->context, name, reinterpret_cast<const uint8_t*>(bytes), bytes_length,
-        width, height);
+        bridge->context, name, reinterpret_cast<const uint8_t*>(bytes), bytes_length, width,
+        height);
     if (status != SAO_OK) {
         return push_status_error(state, "upload_compositor_frame", status);
     }
@@ -3400,8 +3407,8 @@ int ctx_set_compositor_layer_mmf_source(lua_State* state) {
     auto* bridge = checked_bridge(state);
     constexpr const char* operation = "set_compositor_layer_mmf_source";
     const char* name = compositor_source_string(state, 2, false, operation);
-    const char* mmf = lua_isnoneornil(state, 3)
-                          ? "" : compositor_source_string(state, 3, true, operation);
+    const char* mmf =
+        lua_isnoneornil(state, 3) ? "" : compositor_source_string(state, 3, true, operation);
     const int32_t status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_mmf_source(
         bridge->context, name, mmf);
     if (status != SAO_OK)
@@ -3466,9 +3473,8 @@ int ctx_set_compositor_layer_position(lua_State* state) {
     const char* name = luaL_checkstring(state, 2);
     const auto x = static_cast<int32_t>(luaL_checkinteger(state, 3));
     const auto y = static_cast<int32_t>(luaL_checkinteger(state, 4));
-    const int32_t status =
-        sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_position(
-            bridge->context, name, x, y);
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_position(
+        bridge->context, name, x, y);
     if (status != SAO_OK) {
         return push_status_error(state, "set_compositor_layer_position", status);
     }
@@ -3481,9 +3487,8 @@ int ctx_set_compositor_layer_visible(lua_State* state) {
     const char* name = luaL_checkstring(state, 2);
     luaL_checktype(state, 3, LUA_TBOOLEAN);
     const bool visible = lua_toboolean(state, 3) != 0;
-    const int32_t status =
-        sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_visible(
-            bridge->context, name, visible);
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_visible(
+        bridge->context, name, visible);
     if (status != SAO_OK) {
         return push_status_error(state, "set_compositor_layer_visible", status);
     }
@@ -3498,8 +3503,7 @@ int ctx_set_compositor_layer_input(lua_State* state) {
     auto* bridge = checked_bridge(state);
     const char* name = luaL_checkstring(state, 2);
     if (name == nullptr || name[0] == '\0') {
-        return push_status_error(state, "set_compositor_layer_input",
-                                 SAO_ERR_INVALID_ARGUMENT);
+        return push_status_error(state, "set_compositor_layer_input", SAO_ERR_INVALID_ARGUMENT);
     }
     if (lua_isnoneornil(state, 3)) {
         const int32_t status = release_compositor_input_locked(*bridge, state, name);
@@ -3516,8 +3520,8 @@ int ctx_set_compositor_layer_input(lua_State* state) {
         return 1;
     }
 
-    constexpr const char* kInputFields[4] = {"cursor_pos", "mouse_button",
-                                             "cursor_leave", "scroll"};
+    constexpr const char* kInputFields[4] = {"cursor_pos", "mouse_button", "cursor_leave",
+                                             "scroll"};
     auto dispatch = std::make_shared<compositor_input_dispatch>();
     dispatch->key = name;
     dispatch->sequence = bridge->next_resource_sequence++;
@@ -3548,24 +3552,20 @@ int ctx_set_compositor_layer_input(lua_State* state) {
         staged_records.emplace(record->dispatch_id, record);
     }
     if (staged_records.empty()) {
-        return push_status_error(state, "set_compositor_layer_input",
-                                 SAO_ERR_INVALID_ARGUMENT);
+        return push_status_error(state, "set_compositor_layer_input", SAO_ERR_INVALID_ARGUMENT);
     }
     // Swap out any existing dispatch first so a BUSY old record fails before
     // the native registration changes hands.
-    const int32_t release_status =
-        release_compositor_input_locked(*bridge, state, name);
+    const int32_t release_status = release_compositor_input_locked(*bridge, state, name);
     if (release_status != SAO_OK) {
         for (const auto& [_, record] : staged_records) {
             release_callback_ref(state, *record);
         }
         return push_status_error(state, "set_compositor_layer_input", release_status);
     }
-    const int32_t status =
-        sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
-            bridge->context, name, compositor_cursor_pos_dispatch,
-            compositor_mouse_button_dispatch, compositor_cursor_leave_dispatch,
-            compositor_scroll_dispatch, dispatch.get());
+    const int32_t status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
+        bridge->context, name, compositor_cursor_pos_dispatch, compositor_mouse_button_dispatch,
+        compositor_cursor_leave_dispatch, compositor_scroll_dispatch, dispatch.get());
     if (status != SAO_OK) {
         for (const auto& [_, record] : staged_records) {
             release_callback_ref(state, *record);
@@ -3573,8 +3573,7 @@ int ctx_set_compositor_layer_input(lua_State* state) {
         return push_status_error(state, "set_compositor_layer_input", status);
     }
     try {
-        bridge->compositor_records.insert(staged_records.begin(),
-                                          staged_records.end());
+        bridge->compositor_records.insert(staged_records.begin(), staged_records.end());
         bridge->compositor_inputs.emplace(name, std::move(dispatch));
     } catch (...) {
         for (const auto& [_, record] : staged_records) {
@@ -3596,8 +3595,7 @@ int ctx_destroy_compositor_layer(lua_State* state) {
         return push_status_error(state, "destroy_compositor_layer", release_status);
     }
     const int32_t status =
-        sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(bridge->context,
-                                                                       name);
+        sao::plugins::loader::sao_plugins_ctx_destroy_compositor_layer(bridge->context, name);
     if (status != SAO_OK) {
         return push_status_error(state, "destroy_compositor_layer", status);
     }
@@ -3626,14 +3624,13 @@ int ctx_ui_dispatch(lua_State* state) noexcept {
                               method == nullptr ? "?" : method, error.c_str());
         }
         args = converted.is_object() ? std::move(converted)
-                                   : detail::json::array({std::move(converted)});
+                                     : detail::json::array({std::move(converted)});
     } else {
         args = detail::json::array();
         for (int index = first; index <= top; ++index) {
             detail::json value;
             if (!detail::stack_to_json(state, index, value, error)) {
-                return luaL_error(state,
-                                  "ctx.ui.%s argument is not JSON serializable: %s",
+                return luaL_error(state, "ctx.ui.%s argument is not JSON serializable: %s",
                                   method == nullptr ? "?" : method, error.c_str());
             }
             args.push_back(std::move(value));
@@ -3641,10 +3638,10 @@ int ctx_ui_dispatch(lua_State* state) noexcept {
     }
     detail::json node;
     std::string build_error;
-    if (!sao::plugins::script_ctx::script_ui_build(
-            method == nullptr ? "" : method, args, node, build_error)) {
-        return luaL_error(state, "ctx.ui.%s failed: %s",
-                          method == nullptr ? "?" : method, build_error.c_str());
+    if (!sao::plugins::script_ctx::script_ui_build(method == nullptr ? "" : method, args, node,
+                                                   build_error)) {
+        return luaL_error(state, "ctx.ui.%s failed: %s", method == nullptr ? "?" : method,
+                          build_error.c_str());
     }
     if (!detail::protected_push_json(state, node, error)) {
         return luaL_error(state, "ctx.ui.%s result is not representable in Lua",
@@ -3670,8 +3667,7 @@ struct engine_call_failure final {
 };
 
 [[noreturn]] void raise_engine_call_failed(const char* name, int32_t status) {
-    throw engine_call_failure{std::string("engine call ") +
-                              (name == nullptr ? "?" : name) +
+    throw engine_call_failure{std::string("engine call ") + (name == nullptr ? "?" : name) +
                               " failed: " + std::to_string(status)};
 }
 
@@ -3680,8 +3676,7 @@ struct engine_call_failure final {
 // resolved through bridge->engine_callbacks under the dedicated mutex; the
 // record's gate/state checks then mirror event_callback.
 void SAO_PLUGINS_CALL engine_channel_dispatch(const char* channel_utf8,
-                                              const uint8_t* payload_json_utf8,
-                                              size_t payload_size,
+                                              const uint8_t* payload_json_utf8, size_t payload_size,
                                               void* user_data) noexcept {
     try {
         auto* bridge = static_cast<bridge_state*>(user_data);
@@ -3731,8 +3726,7 @@ void SAO_PLUGINS_CALL engine_channel_dispatch(const char* channel_utf8,
         const char* payload_data = payload_json_utf8 == nullptr
                                        ? "null"
                                        : reinterpret_cast<const char*>(payload_json_utf8);
-        const std::size_t payload_length =
-            payload_json_utf8 == nullptr ? 4 : payload_size;
+        const std::size_t payload_length = payload_json_utf8 == nullptr ? 4 : payload_size;
         if (!detail::parse_json(payload_data, payload_length, payload, conversion_error) ||
             !detail::protected_push_json(callback_state, payload, conversion_error, true)) {
             lua_settop(callback_state, base);
@@ -3750,9 +3744,8 @@ void SAO_PLUGINS_CALL engine_channel_dispatch(const char* channel_utf8,
 // method_engine_list dispatch, and decode the {"status","result"} envelope.
 // Returns the `result` member; raises engine_call_failure on any nonzero
 // transport or envelope status and method_failure on decode errors.
-detail::json engine_run_call(
-    bridge_state* bridge, sao::plugins::sdk_binding::sdk_method_id method,
-    const char* display_name, detail::json&& request_json) {
+detail::json engine_run_call(bridge_state* bridge, sao::plugins::sdk_binding::sdk_method_id method,
+                             const char* display_name, detail::json&& request_json) {
     if (bridge == nullptr || bridge->closing || bridge->context == nullptr) {
         raise_engine_call_failed(display_name, SAO_ERR_HANDLE_INVALID);
     }
@@ -3802,13 +3795,13 @@ detail::json engine_run_call(
         request.out_capacity = buffer.size();
         required = 0;
         request.out_required = &required;
-        status = sao::plugins::sdk_binding::sao_plugins_sdk_context_dispatch(
-            &bridge->sdk_ctx, method, &request);
+        status = sao::plugins::sdk_binding::sao_plugins_sdk_context_dispatch(&bridge->sdk_ctx,
+                                                                             method, &request);
         if (status == SAO_OK) {
             if (buffer.empty() && required != 0 &&
                 required <= sao::plugins::sdk_binding::kMaximumBindingJsonBytes) {
                 buffer.assign(required, '\0');
-                continue;  // probe pass completed — run the fill pass
+                continue; // probe pass completed — run the fill pass
             }
             break;
         }
@@ -3824,12 +3817,10 @@ detail::json engine_run_call(
     }
     detail::json envelope;
     const std::size_t length =
-        buffer.empty()
-            ? 0
-            : (required != 0 && required <= buffer.size() ? required - 1
-                                                          : std::strlen(buffer.data()));
-    if (length == 0 ||
-        !detail::parse_json(buffer.data(), length, envelope, error)) {
+        buffer.empty() ? 0
+                       : (required != 0 && required <= buffer.size() ? required - 1
+                                                                     : std::strlen(buffer.data()));
+    if (length == 0 || !detail::parse_json(buffer.data(), length, envelope, error)) {
         throw method_failure{"engine call result", SAO_ERR_INVALID_ARGUMENT};
     }
     int64_t inner_status = 0;
@@ -3852,10 +3843,9 @@ detail::json engine_run_call(
 }
 
 int engine_push_result(lua_State* state, bridge_state* bridge,
-                       sao::plugins::sdk_binding::sdk_method_id method,
-                       const char* display_name, detail::json&& request_json) {
-    detail::json result =
-        engine_run_call(bridge, method, display_name, std::move(request_json));
+                       sao::plugins::sdk_binding::sdk_method_id method, const char* display_name,
+                       detail::json&& request_json) {
+    detail::json result = engine_run_call(bridge, method, display_name, std::move(request_json));
     std::string push_error;
     if (!detail::protected_push_json(state, result, push_error, true)) {
         throw method_failure{"engine call result", SAO_ERR_INVALID_ARGUMENT};
@@ -3929,16 +3919,15 @@ int engine_call_push_result(lua_State* state, bridge_state* bridge, const char* 
         }
     }
     request_json["args"] = std::move(args);
-    return engine_push_result(
-        state, bridge, sao::plugins::sdk_binding::sdk_method_id::method_engine_call, name,
-        std::move(request_json));
+    return engine_push_result(state, bridge,
+                              sao::plugins::sdk_binding::sdk_method_id::method_engine_call, name,
+                              std::move(request_json));
 }
 
 int engine_invoke_named_impl(lua_State* state) {
     auto* desc = static_cast<const sao::plugins::sdk_binding::sdk_engine_function_desc*>(
         lua_touserdata(state, lua_upvalueindex(1)));
-    auto* bridge =
-        static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(2)));
+    auto* bridge = static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(2)));
     if (desc == nullptr || desc->name == nullptr || bridge == nullptr) {
         return push_status_error(state, "engine call", SAO_ERR_HANDLE_INVALID);
     }
@@ -3959,8 +3948,7 @@ int engine_invoke_named(lua_State* state) noexcept {
     } catch (const engine_call_failure& failure) {
         return luaL_error(state, "%s", failure.message.c_str());
     } catch (const method_failure& failure) {
-        return luaL_error(state, "%s failed with status %d", failure.operation,
-                          failure.status);
+        return luaL_error(state, "%s failed with status %d", failure.operation, failure.status);
     } catch (...) {
         return luaL_error(state, "engine call failed with status %d",
                           static_cast<int>(SAO_ERR_OS_CALL_FAILED));
@@ -3968,8 +3956,7 @@ int engine_invoke_named(lua_State* state) noexcept {
 }
 
 int engine_list_impl(lua_State* state) {
-    auto* bridge =
-        static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(1)));
+    auto* bridge = static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(1)));
     if (bridge == nullptr) {
         return push_status_error(state, "engine list", SAO_ERR_HANDLE_INVALID);
     }
@@ -3985,8 +3972,7 @@ int engine_list_fn(lua_State* state) noexcept {
     } catch (const engine_call_failure& failure) {
         return luaL_error(state, "%s", failure.message.c_str());
     } catch (const method_failure& failure) {
-        return luaL_error(state, "%s failed with status %d", failure.operation,
-                          failure.status);
+        return luaL_error(state, "%s failed with status %d", failure.operation, failure.status);
     } catch (...) {
         return luaL_error(state, "engine list failed with status %d",
                           static_cast<int>(SAO_ERR_OS_CALL_FAILED));
@@ -3994,8 +3980,7 @@ int engine_list_fn(lua_State* state) noexcept {
 }
 
 int engine_on_impl(lua_State* state) {
-    auto* bridge =
-        static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(1)));
+    auto* bridge = static_cast<bridge_state*>(lua_touserdata(state, lua_upvalueindex(1)));
     if (bridge == nullptr || bridge->closing || bridge->context == nullptr) {
         return push_status_error(state, "engine on", SAO_ERR_HANDLE_INVALID);
     }
@@ -4044,8 +4029,7 @@ int engine_on_fn(lua_State* state) noexcept {
     try {
         return engine_on_impl(state);
     } catch (const method_failure& failure) {
-        return luaL_error(state, "%s failed with status %d", failure.operation,
-                          failure.status);
+        return luaL_error(state, "%s failed with status %d", failure.operation, failure.status);
     } catch (...) {
         return luaL_error(state, "engine on failed with status %d",
                           static_cast<int>(SAO_ERR_OS_CALL_FAILED));
@@ -4068,8 +4052,7 @@ int ctx_engine_call(lua_State* state) {
         }
         std::string error;
         detail::json converted;
-        if (!detail::stack_to_json(state, 3, converted, error) ||
-            !converted.is_object()) {
+        if (!detail::stack_to_json(state, 3, converted, error) || !converted.is_object()) {
             return push_status_error(state, "engine_call", SAO_ERR_INVALID_ARGUMENT);
         }
         args = std::move(converted);
@@ -4083,8 +4066,7 @@ int ctx_engine_call_wrapped(lua_State* state) noexcept {
     } catch (const engine_call_failure& failure) {
         return luaL_error(state, "%s", failure.message.c_str());
     } catch (const method_failure& failure) {
-        return luaL_error(state, "%s failed with status %d", failure.operation,
-                          failure.status);
+        return luaL_error(state, "%s failed with status %d", failure.operation, failure.status);
     } catch (...) {
         return luaL_error(state, "engine_call failed with status %d",
                           static_cast<int>(SAO_ERR_OS_CALL_FAILED));
@@ -4103,8 +4085,7 @@ int ctx_index(lua_State* state) noexcept {
     const char* key = lua_tostring(state, 2);
     auto* bridge = static_cast<bridge_state*>(nullptr);
     if (key != nullptr && lua_isuserdata(state, 1)) {
-        auto** slot = static_cast<bridge_state**>(
-            luaL_testudata(state, 1, "SaoPluginContext"));
+        auto** slot = static_cast<bridge_state**>(luaL_testudata(state, 1, "SaoPluginContext"));
         if (slot != nullptr)
             bridge = *slot;
     }
@@ -4113,22 +4094,19 @@ int ctx_index(lua_State* state) noexcept {
         return 1;
     }
     if (std::strcmp(key, "plugin_id") == 0) {
-        const char* value =
-            sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge->context);
+        const char* value = sao::plugins::loader::sao_plugins_ctx_plugin_id(bridge->context);
         if (value == nullptr) {
             lua_pushnil(state);
         } else {
             lua_pushstring(state, value);
         }
     } else if (std::strcmp(key, "path") == 0) {
-        const wchar_t* value =
-            sao::plugins::loader::sao_plugins_ctx_path(bridge->context);
+        const wchar_t* value = sao::plugins::loader::sao_plugins_ctx_path(bridge->context);
         const std::string utf8 = wide_to_utf8(value);
         lua_pushlstring(state, utf8.data(), utf8.size());
     } else if (std::strcmp(key, "should_stop") == 0) {
-        lua_pushboolean(
-            state,
-            sao::plugins::loader::sao_plugins_ctx_should_stop(bridge->context) ? 1 : 0);
+        lua_pushboolean(state,
+                        sao::plugins::loader::sao_plugins_ctx_should_stop(bridge->context) ? 1 : 0);
     } else {
         lua_pushnil(state);
     }
@@ -4137,25 +4115,83 @@ int ctx_index(lua_State* state) noexcept {
 
 // Names noted for ctx_surface (canonical Python surface spelling).
 const char* const kCtxSurfaceNames[] = {
-    "log", "time", "set_defaults", "get_setting", "setting", "set_setting",
-    "snapshot_value", "register_ui_panel", "register_menu_category",
-    "register_menu_surface", "register_action_handler", "subscribe",
-    "subscribe_once", "unsubscribe", "emit", "publish", "get_snapshot",
-    "recent_events", "register_render_hook", "unregister_render_hook",
-    "set_overlay", "clear_overlay", "request_redraw", "register_hotkey",
-    "unregister_hotkey", "set_interval", "set_timeout", "clear_timer", "notify",
-    "toast", "dismiss_notify", "register_engine", "get_engine", "open_file",
-    "open_window", "load_local", "ensure_requirements",
-    "create_compositor_layer", "upload_compositor_frame",
-    "set_compositor_layer_mmf_source", "set_compositor_layer_shared_texture_source",
-    "compositor_gpu_interop_available", "compositor_layer_shared_texture_active",
-    "set_compositor_layer_position", "set_compositor_layer_visible",
-    "set_compositor_layer_input", "destroy_compositor_layer", "engine",
-    "engine_call", "engine.list", "engine.on", "plugin_id",
-    "path", "should_stop", "ui", "ui.badge", "ui.bar", "ui.button", "ui.canvas",
-    "ui.card", "ui.ctext", "ui.divider", "ui.group", "ui.input", "ui.kv",
-    "ui.line", "ui.oval", "ui.panel", "ui.rect", "ui.rgba_frame", "ui.row",
-    "ui.section", "ui.spacer", "ui.slider", "ui.table", "ui.text", "ui.title",
+    "log",
+    "time",
+    "set_defaults",
+    "get_setting",
+    "setting",
+    "set_setting",
+    "snapshot_value",
+    "register_ui_panel",
+    "register_menu_category",
+    "register_menu_surface",
+    "register_action_handler",
+    "subscribe",
+    "subscribe_once",
+    "unsubscribe",
+    "emit",
+    "publish",
+    "get_snapshot",
+    "recent_events",
+    "register_render_hook",
+    "unregister_render_hook",
+    "set_overlay",
+    "clear_overlay",
+    "request_redraw",
+    "register_hotkey",
+    "unregister_hotkey",
+    "set_interval",
+    "set_timeout",
+    "clear_timer",
+    "notify",
+    "toast",
+    "dismiss_notify",
+    "register_engine",
+    "get_engine",
+    "open_file",
+    "open_window",
+    "load_local",
+    "ensure_requirements",
+    "create_compositor_layer",
+    "upload_compositor_frame",
+    "set_compositor_layer_mmf_source",
+    "set_compositor_layer_shared_texture_source",
+    "compositor_gpu_interop_available",
+    "compositor_layer_shared_texture_active",
+    "set_compositor_layer_position",
+    "set_compositor_layer_visible",
+    "set_compositor_layer_input",
+    "destroy_compositor_layer",
+    "engine",
+    "engine_call",
+    "engine.list",
+    "engine.on",
+    "plugin_id",
+    "path",
+    "should_stop",
+    "ui",
+    "ui.badge",
+    "ui.bar",
+    "ui.button",
+    "ui.canvas",
+    "ui.card",
+    "ui.ctext",
+    "ui.divider",
+    "ui.group",
+    "ui.input",
+    "ui.kv",
+    "ui.line",
+    "ui.oval",
+    "ui.panel",
+    "ui.rect",
+    "ui.rgba_frame",
+    "ui.row",
+    "ui.section",
+    "ui.spacer",
+    "ui.slider",
+    "ui.table",
+    "ui.text",
+    "ui.title",
     nullptr,
 };
 
@@ -4205,8 +4241,7 @@ int register_ctx_body(lua_State* state) {
     auto* bridge = static_cast<bridge_state*>(lua_touserdata(state, 1));
     if (bridge == nullptr)
         return luaL_error(state, "invalid ctx bridge");
-    sao::plugins::script_ctx::ctx_surface_note_all(loader::engine_kind::lua,
-                                                 kCtxSurfaceNames);
+    sao::plugins::script_ctx::ctx_surface_note_all(loader::engine_kind::lua, kCtxSurfaceNames);
     auto** slot = static_cast<bridge_state**>(lua_newuserdatauv(state, sizeof(bridge_state*), 0));
     *slot = bridge;
     if (luaL_newmetatable(state, "SaoPluginContext") != 0) {
@@ -4248,26 +4283,23 @@ int register_ctx_body(lua_State* state) {
         set_method(state, "open_window", safe_method<ctx_open_window>);
         set_method(state, "load_local", safe_method<ctx_load_local>);
         set_method(state, "ensure_requirements", safe_method<ctx_ensure_requirements>);
-        set_method(state, "create_compositor_layer",
-                   safe_method<ctx_create_compositor_layer>);
-        set_method(state, "upload_compositor_frame",
-                   safe_method<ctx_upload_compositor_frame>);
+        set_method(state, "create_compositor_layer", safe_method<ctx_create_compositor_layer>);
+        set_method(state, "upload_compositor_frame", safe_method<ctx_upload_compositor_frame>);
         set_method(state, "set_compositor_layer_mmf_source",
-                 safe_method<ctx_set_compositor_layer_mmf_source>);
+                   safe_method<ctx_set_compositor_layer_mmf_source>);
         set_method(state, "set_compositor_layer_shared_texture_source",
-                 safe_method<ctx_set_compositor_layer_shared_texture_source>);
+                   safe_method<ctx_set_compositor_layer_shared_texture_source>);
         set_method(state, "compositor_gpu_interop_available",
-                 safe_method<ctx_compositor_gpu_interop_available>);
+                   safe_method<ctx_compositor_gpu_interop_available>);
         set_method(state, "compositor_layer_shared_texture_active",
-                 safe_method<ctx_compositor_layer_shared_texture_active>);
+                   safe_method<ctx_compositor_layer_shared_texture_active>);
         set_method(state, "set_compositor_layer_position",
                    safe_method<ctx_set_compositor_layer_position>);
         set_method(state, "set_compositor_layer_visible",
                    safe_method<ctx_set_compositor_layer_visible>);
         set_method(state, "set_compositor_layer_input",
                    safe_method<ctx_set_compositor_layer_input>);
-        set_method(state, "destroy_compositor_layer",
-                   safe_method<ctx_destroy_compositor_layer>);
+        set_method(state, "destroy_compositor_layer", safe_method<ctx_destroy_compositor_layer>);
         set_method(state, "engine_call", ctx_engine_call_wrapped);
         // ctx.engine — named functions bound from the FULL reflective engine
         // catalog (sdk_engine_catalog_at); '.' maps to '_'
@@ -4276,8 +4308,7 @@ int register_ctx_body(lua_State* state) {
         // instead of hiding catalog entries at bind time.
         lua_newtable(state);
         const int engine_table = lua_absindex(state, -1);
-        const std::size_t engine_count =
-            sao::plugins::sdk_binding::sdk_engine_catalog_size();
+        const std::size_t engine_count = sao::plugins::sdk_binding::sdk_engine_catalog_size();
         for (std::size_t index = 0; index < engine_count; ++index) {
             const auto* desc = sao::plugins::sdk_binding::sdk_engine_catalog_at(index);
             if (desc == nullptr || desc->name == nullptr)
@@ -4302,10 +4333,8 @@ int register_ctx_body(lua_State* state) {
         lua_newtable(state);
         const int ui_table = lua_absindex(state, -1);
         std::size_t ui_count = 0;
-        for (const char* const* name =
-                 sao::plugins::script_ctx::script_ui_methods(&ui_count);
-             ui_count != 0 && name != nullptr && *name != nullptr;
-             ++name, --ui_count) {
+        for (const char* const* name = sao::plugins::script_ctx::script_ui_methods(&ui_count);
+             ui_count != 0 && name != nullptr && *name != nullptr; ++name, --ui_count) {
             lua_pushstring(state, *name);
             lua_pushvalue(state, ui_table);
             lua_pushcclosure(state, ctx_ui_dispatch, 2);
@@ -4552,10 +4581,9 @@ int32_t quiesce_ctx_menu_providers(lua_State* state) noexcept {
                                            : std::string(plugin_id) + "/" + menu->provider_id);
             }
             if (valid_registry_ref(current_action_handler_ref(bridge->action_handler))) {
-                provider_ids.push_back(plugin_id == nullptr
-                                           ? std::string(kActionProviderId)
-                                           : std::string(plugin_id) + "/" +
-                                                 std::string(kActionProviderId));
+                provider_ids.push_back(plugin_id == nullptr ? std::string(kActionProviderId)
+                                                            : std::string(plugin_id) + "/" +
+                                                                  std::string(kActionProviderId));
             }
         }
         if (context == nullptr || provider_ids.empty())
@@ -4673,9 +4701,8 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
         for (const auto& [layer_name, dispatch] : bridge->compositor_inputs) {
             dispatch->closing.store(true, std::memory_order_release);
         }
-        bridge->retired_compositor_dispatches.reserve(
-            bridge->retired_compositor_dispatches.size() +
-            bridge->compositor_inputs.size());
+        bridge->retired_compositor_dispatches.reserve(bridge->retired_compositor_dispatches.size() +
+                                                      bridge->compositor_inputs.size());
         for (const auto& [layer_name, dispatch] : bridge->compositor_inputs) {
             bridge->retired_compositor_dispatches.push_back(dispatch);
         }
@@ -4683,8 +4710,7 @@ int32_t teardown_ctx_bridge_locked(lua_State* state) noexcept {
         std::vector<std::shared_ptr<event_callback_record>> callbacks;
         callbacks.reserve(bridge->callbacks.size() + bridge->hotkeys.size() +
                           bridge->timers.size() + bridge->render_hooks.size() +
-                          bridge->compositor_records.size() +
-                          bridge->engine_callbacks.size());
+                          bridge->compositor_records.size() + bridge->engine_callbacks.size());
         for (const auto& [_, callback] : bridge->callbacks) {
             callbacks.push_back(callback);
         }
@@ -4969,8 +4995,7 @@ extern "C" SAO_PLUGINS_API
         // side throw from failing the whole ctx registration (the script would
         // then die in load_script before on_load ever runs).
         try {
-            const char* plugin_id =
-                sao::plugins::loader::sao_plugins_ctx_plugin_id(context);
+            const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(context);
             if (plugin_id != nullptr && plugin_id[0] != '\0' &&
                 sao_sdk_bind_context(plugin_id, nullptr, &bridge_ptr->sdk_ctx) == SAO_SDK_OK) {
                 bridge_ptr->sdk_ctx_bound = true;

@@ -10,9 +10,11 @@ Static support library linked by every script host.  Three pieces:
 - `runtime_bridge` — `ctx.load_local` dispatch + cross-language module
   proxies (`script_value`, `script_module`, `script_engine_ops` registry).
   Extension-keyed providers are registered by host adapters:
-  `pymini` (priority 10) provides `.py`; no CPython fallback provider is
-  registered in the current tree. CPython's own `load_local` uses its native
-  import path and reports foreign script modules as unsupported. Non-script
+  `pymini` (priority 10) and CPython helper facade (priority 100) provide
+  `.py`. Registration and pymini preflight do not initialize Python; only an
+  explicit pymini `NOT_IMPLEMENTED` result advances to the CPython provider.
+  Once either provider starts loading/executing, its result is terminal.
+  CPython's own plugin-local imports still use its native import path. Non-script
   payloads return `path_only`; built-in `.py/.lua/.emma/.as/.cs` files remain
   scripts even when their runtime is absent. Only an unsupported provider
   preflight advances to the next candidate. Once execution starts, its result
@@ -39,6 +41,13 @@ distinct managed and native-subset csmini implementations. Lua and AngelScript
 module providers require an existing state for the caller's context; the
 managed C# provider does not compile source modules or expose a callable
 foreign-module proxy through its JSON result.
+
+The CPython `.py` helper provider is context-generation owned and canonical-path
+cached. It uses a unique physical module identity while preserving the helper's
+logical module ID, and exposes only bounded JSON-compatible values plus callable
+module members. Bytes and arbitrary Python objects do not cross the facade.
+Missing Python or helper dependencies remain explicit unsupported/failure results;
+the bridge never downloads a runtime or package.
 
 Emma exported module callables retain their module owner, including callables
 nested in containers or returned by another callable. Exceptional helper-load
@@ -73,5 +82,9 @@ through a reused context address. Calls pin their callable
 across nested callbacks that replace the original binding. Provider removal
 alone is not teardown.
 
-This review used source/diff inspection and editor diagnostics only; it does
-not establish build, unload, cross-language runtime or full-language coverage.
+The ownership review used source/diff inspection and editor diagnostics. Same-thread
+recursive CPython helper loads return `BUSY`; concurrent callers wait for the first
+load result, and context leases block retirement while calls are active. Session-83
+records the post-review helper fixture, three real plugin actions, clean unload/finalization,
+full Debug and Hardened acceptance; it does not establish adversarial scheduling,
+fault-injected finalization or full-language coverage.

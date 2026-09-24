@@ -40,6 +40,8 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <new>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -1810,60 +1812,57 @@ struct ctx_builder {
     // method_engine_list).  Once engine.on() has armed a channel the
     // generic engine_callback trampoline rides on every request so
     // callback-capable entries can deliver (channel, payload) to script.
-    PyRef engine_dispatch_call(sdk_binding::sdk_method_id method,
-                               const std::string& args_text,
+    PyRef engine_dispatch_call(sdk_binding::sdk_method_id method, const std::string& args_text,
                                const std::string& err_subject) {
         const SaoSdkContext* sdk = engine_ctx();
-        std::string buf(static_cast<std::size_t>(256) * 1024U, '\0');
-        int32_t st = SAO_OK;
-        for (int attempt = 0; attempt < 2; ++attempt) {
-            std::size_t required = 0;
-            sdk_binding::sdk_context_call_request request{};
-            request.args_json_utf8 = args_text.data();
-            request.args_size = args_text.size();
-            if (engine_cb_hub != nullptr) {
-                request.engine_callback = &tr_engine_channel;
-                request.callback_user_data = engine_cb_hub;
-            }
-            request.out_result_json_utf8 = buf.data();
-            request.out_capacity = buf.size();
-            request.out_required = &required;
-            st = sdk_binding::sao_plugins_sdk_context_dispatch(sdk, method,
-                                                             &request);
-            if (st == SAO_ERR_BUFFER_TOO_SMALL && attempt == 0 &&
-                required > buf.size() &&
-                required <= sdk_binding::kMaximumBindingJsonBytes + 1U) {
-                buf.assign(required, '\0');
-                continue;
-            }
-            break;
+        const std::size_t capacity = sdk_binding::kMaximumBindingJsonBytes + 1U;
+        std::unique_ptr<char[]> buf{new (std::nothrow) char[capacity]};
+        if (!buf)
+            i.raise_exc("MemoryError", "engine result allocation failed", {});
+        buf[0] = '\0';
+        std::size_t required = 0;
+        sdk_binding::sdk_context_call_request request{};
+        request.args_json_utf8 = args_text.data();
+        request.args_size = args_text.size();
+        if (engine_cb_hub != nullptr) {
+            request.engine_callback = &tr_engine_channel;
+            request.callback_user_data = engine_cb_hub;
         }
+        request.out_result_json_utf8 = buf.get();
+        request.out_capacity = capacity;
+        request.out_required = &required;
+        const int32_t st = sdk_binding::sao_plugins_sdk_context_dispatch(sdk, method, &request);
         if (st != SAO_OK)
             i.raise_exc("RuntimeError",
-                        "engine call " + err_subject +
-                            " failed: " + std::to_string(st),
-                        {});
-        nlohmann::json env;
-        int64_t inner = 0;
-        const nlohmann::json* result = nullptr;
-        try {
-            env = nlohmann::json::parse(buf);
-            if (env.is_object()) {
-                const auto st_it = env.find("status");
-                if (st_it != env.end() && st_it->is_number())
-                    inner = st_it->get<int64_t>();
-                const auto r_it = env.find("result");
-                if (r_it != env.end())
-                    result = &*r_it;
-            }
-        } catch (...) {
+                        "engine call " + err_subject + " failed: " + std::to_string(st), {});
+        if (required <= 1 || required > capacity || buf[required - 1] != '\0')
+            i.raise_exc("RuntimeError",
+                        "engine call " + err_subject + " returned an invalid result size", {});
+        const auto env = nlohmann::json::parse(buf.get(), buf.get() + required - 1, nullptr, false);
+        if (env.is_discarded() || !env.is_object() || !env.contains("status") ||
+            !env.contains("result") ||
+            (!env["status"].is_number_integer() && !env["status"].is_number_unsigned())) {
+            i.raise_exc("RuntimeError",
+                        "engine call " + err_subject + " returned a malformed envelope", {});
         }
+        int64_t inner = 0;
+        if (env["status"].is_number_unsigned()) {
+            const uint64_t unsigned_status = env["status"].get<uint64_t>();
+            if (unsigned_status > static_cast<uint64_t>((std::numeric_limits<int32_t>::max)()))
+                i.raise_exc("RuntimeError",
+                            "engine call " + err_subject + " returned an invalid status", {});
+            inner = static_cast<int64_t>(unsigned_status);
+        } else {
+            inner = env["status"].get<int64_t>();
+        }
+        if (inner < (std::numeric_limits<int32_t>::min)() ||
+            inner > (std::numeric_limits<int32_t>::max)())
+            i.raise_exc("RuntimeError",
+                        "engine call " + err_subject + " returned an invalid status", {});
         if (inner != 0)
             i.raise_exc("RuntimeError",
-                        "engine call " + err_subject +
-                            " failed: " + std::to_string(inner),
-                        {});
-        return result != nullptr ? py_from_json(i, *result) : py_none();
+                        "engine call " + err_subject + " failed: " + std::to_string(inner), {});
+        return py_from_json(i, env["result"]);
     }
 
     // ctx.engine_call(name, args_dict=None, *, callback_channel=...) — raw

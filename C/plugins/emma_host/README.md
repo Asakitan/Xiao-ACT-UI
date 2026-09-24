@@ -55,8 +55,28 @@ envelope 级 ``callback_channel``); ``ctx.engine.list()`` 返回目录数组,
 ``emma_exception``。emma 的 generic invoke surface 保持 UNSUPPORTED —
 这些是新挂的 concrete ctx 成员, 不走 generic invoke。
 
+生命周期 `on_disable` 若显式返回 `false`，宿主映射为
+`SAO_PLUGINS_ERR_BUSY`，保留 loaded-active 状态供资源清理后重试；未定义 hook、
+返回 `nil` 或 `true` 保持原成功语义。`on_unload=false` 仍走独立的卸载 veto
+合同，公开 ABI 无变化。空 provider 下 Wardogs 正常 enable/disable/unload 成功；
+一次性 false→true fixture 的首轮 disable 返回 `-1006`，后续 unload 与 shutdown 为 0。
+
+`ctx.set_overlay` 在调用 loader 前预留同 surface 的唯一资源账目，重复设置复用该
+记录；提交失败撤销新预留而不清掉先前已提交画面。`ctx.clear_overlay` 成功后
+排空该 surface 的所有宿主记录，卸载仍由 loader 释放任何待清理 provider token。
+真实 Flappy 菜单连续开启、变更目标触发第二帧、关闭的图层数为 `0/1/1/0`。
+现有 headless 探针已核验该顺序；独立复审加入该插件缺席即失败的覆盖门，
+该新增门与有界重试断言经三轮 Debug 实际回调复跑通过。
+
 **性能不追求**: Emma 定位是新手门槛, 不是关键路径。跑 render_panel() 的
 速度 emma << lua << angel << C# << python。想要性能选别的引擎。
+
+**当前容器/数学面**: list 提供 `append/extend/insert/pop/clear/copy`，dict 提供
+`get/keys/values/items/update/pop/clear/copy`，string 提供
+`lower/upper/startswith/endswith`；stdlib 提供 `round/sin/cos/tan`。这些成员按
+Emma value/owner 语义实现，服务现有插件，不构成 Python 语法或标准库等价声明。
+string 大小写转换仅覆盖 ASCII，前后缀一次接受一个 string；`round` 只接受有限数值，
+digits 限于 -18..18，数值范围仍受 Emma 的 int64/double value 域约束。
 
 ## 旧插件迁移
 
@@ -77,6 +97,11 @@ module 具名调用与导出的独立 callable 均返回原始错误状态，并
 路径及词法/语法/执行诊断；入口源码词法/语法错误也沿既有加载失败路径返回，
 不表示外部 runtime 缺失。Emma 内置解释器始终可用，不新增外部 runtime
 探测或依赖预检图。`missing`/`unsupported` 记录诊断并返回 `nil`。
+
+`.py` helper 走共享 pymini priority 10 → CPython priority 100 provider；只有 pymini
+预检明确不支持才进入惰性 CPython。返回值限定为有界 JSON-compatible 值/callable，
+Pillow 生成的 base64 RGBA string 使用 8 MiB string budget；其他 Emma 运行值不跨
+Python facade。`script_flappy_emma` 已实际调用 `candy_render.py` 并提交多层 overlay。
 
 module 包装仍按字典语义枚举 `get()`，不提前调用取得的函数；不引入惰性代理。
 runtime 析构在回调及资源退役后清空解释器全局值，打断全局函数闭包回持作用域
@@ -127,6 +152,9 @@ session-81 审阅补修后定向 Debug 与 provider888/0 已通过；三种 runt
 helper 保留函数的运行错误含原状态、路径和栈。真实菜单回调输出
 `SDK_EMMA_MENU_OK`，invoke=0、handled=1、refresh=0、shutdown=0；不声明通用循环
 回收或所有并发/失败清理矩阵已验证。
+
+session-83 的 Flappy 开启动作 `invoke=0 handled=1`，unload/shutdown/compositor
+cleanup 均为 0；这不提升 Emma generic invoke（仍 UNSUPPORTED）或完整 Python 兼容声明。
 
 ## vcpkg 依赖
 

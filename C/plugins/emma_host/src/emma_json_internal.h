@@ -20,8 +20,8 @@ using json = nlohmann::json;
 inline constexpr std::size_t kMaximumEmmaJsonInputBytes = 8U * 1024U * 1024U;
 inline constexpr std::size_t kMaximumEmmaJsonDepth = 64;
 inline constexpr std::size_t kMaximumEmmaJsonNodes = 16384;
-inline constexpr std::size_t kMaximumEmmaJsonStringBytes = 1024U * 1024U;
-inline constexpr std::size_t kMaximumEmmaJsonTotalStringBytes = 4U * 1024U * 1024U;
+inline constexpr std::size_t kMaximumEmmaJsonStringBytes = 8U * 1024U * 1024U;
+inline constexpr std::size_t kMaximumEmmaJsonTotalStringBytes = 8U * 1024U * 1024U;
 inline constexpr std::size_t kMaximumEmmaJsonOutputBytes = 8U * 1024U * 1024U;
 
 struct json_budget final {
@@ -60,8 +60,7 @@ inline bool valid_utf8(std::string_view value) noexcept {
                 return false;
             codepoint = (codepoint << 6U) | (continuation & 0x3fU);
         }
-        if ((count == 3 && codepoint < 0x800U) ||
-            (count == 4 && codepoint < 0x10000U) ||
+        if ((count == 3 && codepoint < 0x800U) || (count == 4 && codepoint < 0x10000U) ||
             (codepoint >= 0xd800U && codepoint <= 0xdfffU) || codepoint > 0x10ffffU) {
             return false;
         }
@@ -138,8 +137,7 @@ class bounded_json_sax final : public nlohmann::json_sax<json> {
     bool end_array() override {
         return end_container();
     }
-    bool parse_error(std::size_t, const std::string&,
-                     const nlohmann::detail::exception&) override {
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
         if (error_.empty())
             error_ = "JSON input is invalid";
         return false;
@@ -336,8 +334,8 @@ inline bool emma_value_to_json(const emma_value& value, json& output, json_budge
                                std::string& error, std::size_t depth) {
     const auto* list = std::get_if<std::shared_ptr<emma_list>>(&value);
     const auto* dictionary = std::get_if<std::shared_ptr<emma_dict>>(&value);
-    const bool container = (list != nullptr && *list != nullptr) ||
-                           (dictionary != nullptr && *dictionary != nullptr);
+    const bool container =
+        (list != nullptr && *list != nullptr) || (dictionary != nullptr && *dictionary != nullptr);
     if (container && depth >= kMaximumEmmaJsonDepth) {
         error = "Emma value nesting exceeds 64 levels";
         return false;
@@ -436,8 +434,7 @@ inline bool serialize_json(const json& value, std::string& output, std::string& 
     }
 }
 
-inline bool serialize_emma_value(const emma_value& value, std::string& output,
-                                 std::string& error) {
+inline bool serialize_emma_value(const emma_value& value, std::string& output, std::string& error) {
     json converted;
     if (!emma_value_to_json(value, converted, error))
         return false;

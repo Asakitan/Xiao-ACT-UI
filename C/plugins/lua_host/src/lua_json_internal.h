@@ -12,6 +12,7 @@ extern "C" {
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -24,8 +25,8 @@ namespace sao::plugins::lua_host::detail {
 using json = nlohmann::json;
 
 inline constexpr std::size_t kMaximumJsonNodes = 16384;
-inline constexpr std::size_t kMaximumJsonStringBytes = 1024U * 1024U;
-inline constexpr std::size_t kMaximumJsonTotalStringBytes = 4U * 1024U * 1024U;
+inline constexpr std::size_t kMaximumJsonStringBytes = 8U * 1024U * 1024U;
+inline constexpr std::size_t kMaximumJsonTotalStringBytes = 8U * 1024U * 1024U;
 inline constexpr std::size_t kMaximumJsonOutputBytes = 8U * 1024U * 1024U;
 inline constexpr int kMaximumJsonNestingDepth = 64;
 inline unsigned char kJsonNullSentinel = 0;
@@ -84,21 +85,6 @@ inline bool consume_json_node(json_budget& budget, std::string& error) {
     return true;
 }
 
-inline bool json_numbers_fit_signed(const json& value) noexcept {
-    if (value.is_number_unsigned() &&
-        value.get<std::uint64_t>() > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()))
-        return false;
-    if (value.is_array()) {
-        for (const auto& child : value) if (!json_numbers_fit_signed(child)) return false;
-    } else if (value.is_object()) {
-        for (const auto& [key, child] : value.items()) {
-            (void)key;
-            if (!json_numbers_fit_signed(child)) return false;
-        }
-    }
-    return true;
-}
-
 inline bool consume_json_string(std::string_view value, json_budget& budget, std::string& error) {
     if (value.find('\0') != std::string_view::npos || !valid_utf8(value)) {
         error = "JSON strings must be valid UTF-8";
@@ -110,6 +96,145 @@ inline bool consume_json_string(std::string_view value, json_budget& budget, std
         return false;
     }
     budget.string_bytes += value.size();
+    return true;
+}
+
+class bounded_json_sax final : public nlohmann::json_sax<json> {
+  public:
+    explicit bounded_json_sax(std::string& error) noexcept : error_(error) {}
+
+    bool null() override {
+        return consume_node();
+    }
+    bool boolean(bool) override {
+        return consume_node();
+    }
+    bool number_integer(number_integer_t) override {
+        return consume_node();
+    }
+    bool number_unsigned(number_unsigned_t value) override {
+        if (value > static_cast<number_unsigned_t>((std::numeric_limits<std::int64_t>::max)())) {
+            error_ = "JSON unsigned integers above INT64_MAX are not supported";
+            return false;
+        }
+        return consume_node();
+    }
+    bool number_float(number_float_t value, const string_t&) override {
+        if (!std::isfinite(value)) {
+            error_ = "JSON numbers must be finite";
+            return false;
+        }
+        return consume_node();
+    }
+    bool string(string_t& value) override {
+        return consume_node() && consume_string(value);
+    }
+    bool binary(binary_t&) override {
+        error_ = "binary JSON values are unsupported";
+        return false;
+    }
+    bool start_object(std::size_t) override {
+        return start_container();
+    }
+    bool key(string_t& value) override {
+        return consume_string(value);
+    }
+    bool end_object() override {
+        return end_container();
+    }
+    bool start_array(std::size_t) override {
+        return start_container();
+    }
+    bool end_array() override {
+        return end_container();
+    }
+    bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override {
+        if (error_.empty())
+            error_ = "JSON input is invalid";
+        return false;
+    }
+
+  private:
+    bool consume_node() {
+        return consume_json_node(budget_, error_);
+    }
+    bool consume_string(std::string_view value) {
+        return consume_json_string(value, budget_, error_);
+    }
+    bool start_container() {
+        if (depth_ >= static_cast<std::size_t>(kMaximumJsonNestingDepth)) {
+            error_ = "JSON value nesting exceeds 64 levels";
+            return false;
+        }
+        if (!consume_node())
+            return false;
+        ++depth_;
+        return true;
+    }
+    bool end_container() {
+        if (depth_ == 0) {
+            error_ = "JSON input is invalid";
+            return false;
+        }
+        --depth_;
+        return true;
+    }
+
+    std::string& error_;
+    json_budget budget_;
+    std::size_t depth_ = 0;
+};
+
+inline bool validate_json_value(const json& root, std::string& error) {
+    json_budget budget;
+    std::vector<std::pair<const json*, int>> pending;
+    pending.emplace_back(&root, 0);
+    while (!pending.empty()) {
+        const auto [value, depth] = pending.back();
+        pending.pop_back();
+        const bool container = value->is_array() || value->is_object();
+        if (container && depth >= kMaximumJsonNestingDepth) {
+            error = "JSON value nesting exceeds 64 levels";
+            return false;
+        }
+        if (!consume_json_node(budget, error))
+            return false;
+        if (value->is_number_unsigned() &&
+            value->get<std::uint64_t>() >
+                static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
+            error = "JSON unsigned integers above INT64_MAX are not supported";
+            return false;
+        }
+        if (value->is_number_float() && !std::isfinite(value->get<double>())) {
+            error = "JSON numbers must be finite";
+            return false;
+        }
+        if (value->is_string() &&
+            !consume_json_string(value->get_ref<const std::string&>(), budget, error)) {
+            return false;
+        }
+        if (value->is_binary()) {
+            error = "binary JSON values are unsupported";
+            return false;
+        }
+        if (!container)
+            continue;
+        const std::size_t remaining_nodes = kMaximumJsonNodes - budget.nodes;
+        if (pending.size() > remaining_nodes || value->size() > remaining_nodes - pending.size()) {
+            error = "JSON value exceeds its node budget";
+            return false;
+        }
+        if (value->is_array()) {
+            for (const auto& child : *value)
+                pending.emplace_back(&child, depth + 1);
+        } else {
+            for (const auto& [key, child] : value->items()) {
+                if (!consume_json_string(key, budget, error))
+                    return false;
+                pending.emplace_back(&child, depth + 1);
+            }
+        }
+    }
     return true;
 }
 
@@ -156,8 +281,7 @@ inline bool push_json(lua_State* state, const json& value, json_budget& budget, 
         }
         lua_createtable(state, static_cast<int>(value.size()), 0);
         for (size_t index = 0; index < value.size(); ++index) {
-            if (!push_json(state, value[index], budget, error, depth + 1,
-                           preserve_json_null)) {
+            if (!push_json(state, value[index], budget, error, depth + 1, preserve_json_null)) {
                 lua_pop(state, 1);
                 return false;
             }
@@ -331,8 +455,7 @@ inline bool stack_to_json(lua_State* state, int index, json& output, std::string
                 error = "Lua table JSON keys must be strings or positive integers";
                 return false;
             }
-            if (!stack_to_json(state, -1, item.value, error, depth + 1, budget,
-                               active_tables)) {
+            if (!stack_to_json(state, -1, item.value, error, depth + 1, budget, active_tables)) {
                 lua_pop(state, 2);
                 return false;
             }
@@ -371,8 +494,7 @@ inline bool stack_to_json(lua_State* state, int index, json& output, std::string
     json_budget budget;
     std::vector<const void*> active_tables;
     try {
-        const bool converted =
-            stack_to_json(state, index, output, error, 0, budget, active_tables);
+        const bool converted = stack_to_json(state, index, output, error, 0, budget, active_tables);
         if (converted)
             stack.dismiss();
         return converted;
@@ -382,33 +504,11 @@ inline bool stack_to_json(lua_State* state, int index, json& output, std::string
     }
 }
 
-inline bool json_strings_are_valid(const json& value) {
-    if (value.is_string())
-        return value.get_ref<const std::string&>().find('\0') == std::string::npos &&
-               valid_utf8(value.get_ref<const std::string&>());
-    if (value.is_array()) {
-        for (const auto& child : value)
-            if (!json_strings_are_valid(child))
-                return false;
-    } else if (value.is_object()) {
-        for (const auto& [key, child] : value.items()) {
-            if (key.find('\0') != std::string::npos || !valid_utf8(key) ||
-                !json_strings_are_valid(child))
-                return false;
-        }
-    }
-    return true;
-}
 inline bool serialize_json(const json& value, std::string& output, std::string& error) {
+    error.clear();
     try {
-        if (!json_numbers_fit_signed(value)) {
+        if (!validate_json_value(value, error)) {
             output.clear();
-            error = "JSON unsigned integers above INT64_MAX are not supported";
-            return false;
-        }
-        if (!json_strings_are_valid(value)) {
-            output.clear();
-            error = "JSON strings must not contain embedded NUL bytes";
             return false;
         }
         output = value.dump(-1, ' ', false, json::error_handler_t::strict);
@@ -426,22 +526,21 @@ inline bool serialize_json(const json& value, std::string& output, std::string& 
 }
 
 inline bool parse_json(const char* data, std::size_t size, json& output, std::string& error) {
+    error.clear();
     if (data == nullptr || size > kMaximumJsonOutputBytes || !valid_utf8({data, size})) {
         error = "JSON input is invalid or exceeds its byte budget";
         return false;
     }
     try {
+        bounded_json_sax sax(error);
+        if (!json::sax_parse(data, data + size, &sax)) {
+            if (error.empty())
+                error = "JSON input is invalid";
+            return false;
+        }
         output = json::parse(data, data + size, nullptr, false);
         if (output.is_discarded()) {
             error = "JSON input is invalid";
-            return false;
-        }
-        if (!json_numbers_fit_signed(output)) {
-            error = "JSON unsigned integers above INT64_MAX are not supported";
-            return false;
-        }
-        if (!json_strings_are_valid(output)) {
-            error = "JSON strings must not contain embedded NUL bytes";
             return false;
         }
         return true;

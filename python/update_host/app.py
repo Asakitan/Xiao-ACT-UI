@@ -16,9 +16,16 @@
 #           → { "items": [...summary], "total": N }
 #   GET  /api/v1/workshop/plugins/{id}
 #           → { ...summary, description, sha256, signature_alg, size_bytes, min_major/minor/patch }
+#   GET  /api/v1/workshop/identity
+#           header: X-SaoAuto-License-Token + X-SaoAuto-HWID
+#           → { marker, user_id, hwid_version: 3 }
 #   GET  /api/v1/workshop/plugins/{id}/download
+#           header: X-SaoAuto-License-Token + X-SaoAuto-HWID + X-SaoAuto-Workshop-Marker
 #           → binary (.sao-plugin zip)
 #   POST /api/v1/workshop/plugins/{id}/publish?version=&name=&tag=&author=&signature_alg=&min_major=&min_minor=&min_patch=
+#           header: X-SaoAuto-License-Token + X-SaoAuto-HWID + X-SaoAuto-Workshop-Marker + 可选 X-SaoAuto-Description
+#           body:   application/octet-stream = .sao-plugin zip
+#   POST /api/v1/workshop/admin/plugins/{id}/publish
 #           header: X-API-Key + 可选 X-SaoAuto-Description
 #           body:   application/octet-stream = .sao-plugin zip
 #   GET  /api/v1/workshop/admin
@@ -39,16 +46,18 @@ import asyncio
 import binascii
 import json
 import os
+from pathlib import Path
 import re
 import secrets
 import shutil
+import sqlite3
 import stat
 import struct
 import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
@@ -166,6 +175,8 @@ _SEG_RE = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
 _PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9._\-]{1,63}$")
 _VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+){1,3}([A-Za-z0-9\-.+]*)?$")
 _COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_WORKSHOP_HEX_RE = re.compile(r"[0-9a-f]{64}\Z")
+_WORKSHOP_TOKEN_RE = re.compile(r"[0-9a-f]{128}\Z")
 
 
 def _safe_seg(v: str) -> str:
@@ -215,6 +226,51 @@ def _require_api_key(x_api_key: Optional[str], request: Request):
     got = (x_api_key or "").strip()
     if not got or not hmac.compare_digest(got, expected):
         raise HTTPException(403, "invalid X-API-Key")
+
+
+def _require_workshop_identity(
+    token_hex: Optional[str], hwid: Optional[str], marker: Optional[str] = None,
+) -> Tuple[str, str]:
+    if (not isinstance(token_hex, str) or _WORKSHOP_TOKEN_RE.fullmatch(token_hex) is None or
+            not isinstance(hwid, str) or _WORKSHOP_HEX_RE.fullmatch(hwid) is None or
+            marker is not None and _WORKSHOP_HEX_RE.fullmatch(marker) is None):
+        raise HTTPException(401, "invalid Workshop identity")
+    root_key = _get_publish_api_key()
+    if not root_key:
+        raise HTTPException(503, "Workshop identity is unavailable")
+    db_path = os.environ.get("SAO_WORKSHOP_LICENSE_DB_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "license_server", "license.db"
+    )
+    try:
+        db_uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(db_uri, uri=True, timeout=5)) as connection:
+            rows = connection.execute(
+                "SELECT license_key, token_sha256 FROM activations "
+                "WHERE hwid = ? AND hwid_version = 3 AND revoked = 0 AND expires_at > ?",
+                (hwid, time.time()),
+            ).fetchall()
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        raise HTTPException(503, "Workshop identity is unavailable") from exc
+    token_digest = hashlib.sha256(bytes.fromhex(token_hex)).digest()
+    license_key = next(
+        (key for key, stored in rows
+         if isinstance(key, str) and isinstance(stored, bytes) and
+         len(stored) == 32 and hmac.compare_digest(stored, token_digest)),
+        None,
+    )
+    if license_key is None:
+        raise HTTPException(401, "invalid Workshop identity")
+    user_id = hashlib.sha256(
+        b"SAO-workshop-user-v1\0" + license_key.encode("utf-8")
+    ).hexdigest()
+    expected_marker = hmac.new(
+        root_key.encode("utf-8"),
+        b"SAO-workshop-device-v1\0" + bytes.fromhex(user_id) + bytes.fromhex(hwid),
+        hashlib.sha256,
+    ).hexdigest()
+    if marker is not None and not hmac.compare_digest(marker, expected_marker):
+        raise HTTPException(401, "invalid Workshop identity")
+    return user_id, expected_marker
 
 
 def _sha256_hex_of_file(path: str) -> str:
@@ -1347,12 +1403,29 @@ def _publish_workshop_sync(
     tmp_path: str,
     dest_path: str,
     metadata: Dict[str, Any],
+    identity: Optional[Tuple[str, str, str]] = None,
 ) -> Dict[str, Any]:
     plugin_dir = _workshop_plugin_dir(plugin_id)
     with _publication_lock(_workshop_lock_path(plugin_id)):
         _recover_workshop_publication_unlocked(plugin_id)
-        previous = _load_meta(plugin_id) or {}
+        previous = _load_meta(plugin_id)
+        if identity is not None:
+            token_hex, hwid, marker = identity
+            owner_user_id, _ = _require_workshop_identity(token_hex, hwid, marker)
+            if (os.path.isfile(_workshop_meta_path(plugin_id)) or
+                    _scan_plugin_versions(plugin_id)) and (
+                previous is None or
+                not isinstance(previous.get("owner_user_id"), str) or
+                _WORKSHOP_HEX_RE.fullmatch(previous["owner_user_id"]) is None or
+                not hmac.compare_digest(previous["owner_user_id"], owner_user_id)
+            ):
+                raise HTTPException(403, "plugin belongs to another publisher")
+        else:
+            owner_user_id = previous.get("owner_user_id") if previous else None
+        previous = previous or {}
         metadata = dict(metadata)
+        if owner_user_id is not None:
+            metadata["owner_user_id"] = owner_user_id
         metadata["signature_alg"] = _WORKSHOP_SIGNATURE_ALG
         metadata["name"] = metadata.get("name") or previous.get("name", plugin_id)
         metadata["tag"] = metadata.get("tag") or previous.get("tag", "")
@@ -1519,6 +1592,15 @@ def _load_admin_meta(plugin_id: str) -> Dict[str, Any]:
         raise HTTPException(409, "plugin metadata identity mismatch")
     return meta
 
+
+@app.get("/api/v1/workshop/identity")
+async def get_workshop_identity(
+    x_license_token: Optional[str] = Header(None, alias="X-SaoAuto-License-Token"),
+    x_hwid: Optional[str] = Header(None, alias="X-SaoAuto-HWID"),
+):
+    user_id, marker = await asyncio.to_thread(_require_workshop_identity, x_license_token, x_hwid)
+    return {"marker": marker, "user_id": user_id, "hwid_version": 3}
+
 @app.get("/api/v1/workshop/plugins")
 async def list_workshop_plugins(
     page: int = Query(1, ge=1),
@@ -1611,7 +1693,16 @@ async def get_workshop_plugin_detail(plugin_id: str):
 
 
 @app.get("/api/v1/workshop/plugins/{plugin_id}/download")
-async def download_workshop_plugin(plugin_id: str, version: str = Query("")):
+async def download_workshop_plugin(
+    plugin_id: str,
+    version: str = Query(""),
+    x_license_token: Optional[str] = Header(None, alias="X-SaoAuto-License-Token"),
+    x_hwid: Optional[str] = Header(None, alias="X-SaoAuto-HWID"),
+    x_workshop_marker: Optional[str] = Header(None, alias="X-SaoAuto-Workshop-Marker"),
+):
+    if x_workshop_marker is None:
+        raise HTTPException(401, "invalid Workshop identity")
+    await asyncio.to_thread(_require_workshop_identity, x_license_token, x_hwid, x_workshop_marker)
     plugin_id = _safe_plugin_id(plugin_id)
     meta = _load_meta(plugin_id)
     if meta is None:
@@ -1632,6 +1723,7 @@ async def download_workshop_plugin(plugin_id: str, version: str = Query("")):
     return FileResponse(p, media_type="application/octet-stream", filename=filename)
 
 
+@app.post("/api/v1/workshop/admin/plugins/{plugin_id}/publish")
 @app.post("/api/v1/workshop/plugins/{plugin_id}/publish")
 async def publish_workshop_plugin(
     plugin_id: str,
@@ -1646,9 +1738,19 @@ async def publish_workshop_plugin(
     min_minor: int = Query(0),
     min_patch: int = Query(0),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_license_token: Optional[str] = Header(None, alias="X-SaoAuto-License-Token"),
+    x_hwid: Optional[str] = Header(None, alias="X-SaoAuto-HWID"),
+    x_workshop_marker: Optional[str] = Header(None, alias="X-SaoAuto-Workshop-Marker"),
     x_description: Optional[str] = Header(None, alias="X-SaoAuto-Description"),
 ):
-    _require_api_key(x_api_key, request)
+    identity = None
+    if request.scope["path"].startswith("/api/v1/workshop/admin/"):
+        _require_api_key(x_api_key, request)
+    else:
+        if x_workshop_marker is None:
+            raise HTTPException(401, "invalid Workshop identity")
+        await asyncio.to_thread(_require_workshop_identity, x_license_token, x_hwid, x_workshop_marker)
+        identity = (x_license_token, x_hwid, x_workshop_marker)
     _safe_plugin_id(plugin_id)
     _safe_version(version)
     parsed_game_ids = _parse_game_ids(game_ids)
@@ -1665,18 +1767,15 @@ async def publish_workshop_plugin(
 
     tmp_path, total, digest = await _receive_upload(request, versions_dir, filename, WORKSHOP_UPLOAD_MAX_BYTES)
     try:
-        prev = _load_meta(plugin_id) or {}
         meta = {
             "id": plugin_id,
-            "name": name or prev.get("name", plugin_id),
+            "name": name,
             "version": version,
-            "tag": tag or prev.get("tag", ""),
-            "author": author or prev.get("author", ""),
-            "game_ids": parsed_game_ids or _normalize_game_ids(prev.get("game_ids", [])),
+            "tag": tag,
+            "author": author,
+            "game_ids": parsed_game_ids,
             "updated_ms": _now_ms(),
-            "rating": _clamp_u32(prev.get("rating", 0)),
-            "downloads": _clamp_u32(prev.get("downloads", 0)),
-            "description": x_description or prev.get("description", ""),
+            "description": x_description,
             "sha256": digest,
             "signature_alg": _WORKSHOP_SIGNATURE_ALG,
             "size_bytes": total,
@@ -1686,12 +1785,12 @@ async def publish_workshop_plugin(
             "published_at": _now_utc_iso(),
         }
         meta = await asyncio.to_thread(
-            _publish_workshop_sync, plugin_id, tmp_path, dest_path, meta
+            _publish_workshop_sync, plugin_id, tmp_path, dest_path, meta, identity
         )
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(500, f"publish commit failed: {exc}") from exc
+        raise HTTPException(500, "publish commit failed") from exc
     finally:
         try:
             os.remove(tmp_path)

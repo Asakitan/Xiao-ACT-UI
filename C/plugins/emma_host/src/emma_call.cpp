@@ -27,9 +27,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -699,8 +699,7 @@ bool parse_bounded_json(std::string_view input, std::size_t byte_limit, json& ou
     }
 }
 
-bool parse_bounded_json_c_string(const char* input, std::size_t byte_limit,
-                                 json& output) noexcept {
+bool parse_bounded_json_c_string(const char* input, std::size_t byte_limit, json& output) noexcept {
     if (input == nullptr)
         return false;
     std::size_t length = 0;
@@ -987,7 +986,9 @@ bool build_menu_snapshot(
     struct materialized_tree {
         std::vector<nav::Node> roots;
         std::vector<nav::Node*> nodes;
-        materialized_tree() { nodes.reserve(kMaximumMenuRows); }
+        materialized_tree() {
+            nodes.reserve(kMaximumMenuRows);
+        }
         ~materialized_tree() {
             for (auto node = nodes.rbegin(); node != nodes.rend(); ++node)
                 (*node)->children.clear();
@@ -1118,8 +1119,8 @@ bool build_menu_snapshot(
             identity.append(std::to_string(occurrence));
         }
         const std::string full_identity = level.path_identity.empty()
-            ? bridge.contribution_id + "\n" + identity
-            : level.path_identity + "\n" + identity;
+                                              ? bridge.contribution_id + "\n" + identity
+                                              : level.path_identity + "\n" + identity;
         const std::string node_key = "menu-node-" + hash_suffix(identity);
         row.action_id = "menu-action-" + hash_suffix(full_identity);
         if (!action_ids.emplace(row.action_id).second) {
@@ -1139,8 +1140,8 @@ bool build_menu_snapshot(
         }
         nav::Node node;
         node.key = node_key;
-        node.row = {std::move(row.label), std::move(row.icon), std::move(row.action_id),
-                    std::move(row.payload_json), row.can_activate, row.keep_menu_open,
+        node.row = {std::move(row.label),        std::move(row.icon), std::move(row.action_id),
+                    std::move(row.payload_json), row.can_activate,    row.keep_menu_open,
                     row.close_menu_before};
         node.submenu = submenu;
         level.output->push_back(std::move(node));
@@ -1150,7 +1151,8 @@ bool build_menu_snapshot(
         if (submenu_builder) {
             call_message.clear();
             call_error = {};
-            children = runtime.interp->call_function(submenu_builder, {}, call_message, &call_error);
+            children =
+                runtime.interp->call_function(submenu_builder, {}, call_message, &call_error);
             if (call_error.kind != error_kind::none || !call_message.empty()) {
                 if (call_error.kind == error_kind::none) {
                     call_error.kind = error_kind::runtime_error;
@@ -1182,8 +1184,8 @@ bool build_menu_snapshot(
         output->reserve((*child_list)->items.size());
         ancestor_lists.insert(child_list->get());
         ancestor_dicts.insert(dictionary->get());
-        stack.push_back({*child_list, *dictionary, (*child_list)->items, output,
-                         hash_suffix(full_identity)});
+        stack.push_back(
+            {*child_list, *dictionary, (*child_list)->items, output, hash_suffix(full_identity)});
     }
 
     auto next_navigation = navigation == nullptr ? bridge.navState : *navigation;
@@ -1197,14 +1199,15 @@ bool build_menu_snapshot(
     std::size_t visible_bytes = 0;
     for (const auto& row : next_navigation.rows()) {
         if (!add_snapshot_bytes(visible_bytes, row.label.size() + row.icon.size() +
-                row.action_id.size() + row.payload_json.size() + bridge.contribution_id.size() +
-                bridge.name.size() + bridge.icon.size())) {
+                                                   row.action_id.size() + row.payload_json.size() +
+                                                   bridge.contribution_id.size() +
+                                                   bridge.name.size() + bridge.icon.size())) {
             remember_menu_error(runtime, SAO_ERR_INVALID_ARGUMENT,
                                 "menu page exceeds its byte budget");
             return false;
         }
-        rows.push_back({row.label, row.icon, row.action_id, row.payload_json,
-                        row.can_activate, row.keep_open, row.close_before});
+        rows.push_back({row.label, row.icon, row.action_id, row.payload_json, row.can_activate,
+                        row.keep_open, row.close_before});
     }
 
     const bool rows_changed = bridge.revision == 0 || bridge.rows != rows;
@@ -1221,11 +1224,11 @@ bool build_menu_snapshot(
     return true;
 }
 
-int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
-    void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes,
-    std::uint32_t* out_count, std::uint64_t* out_revision,
-    sao::plugins::loader::entity_snapshot_content_token_t* out_content_token,
-    std::uint32_t* out_row_stride_bytes, void* user_data) {
+int32_t SAO_PLUGINS_CALL
+native_menu_snapshot_v2(void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes,
+                        std::uint32_t* out_count, std::uint64_t* out_revision,
+                        sao::plugins::loader::entity_snapshot_content_token_t* out_content_token,
+                        std::uint32_t* out_row_stride_bytes, void* user_data) {
     if (out_count == nullptr || out_revision == nullptr || out_content_token == nullptr ||
         out_row_stride_bytes == nullptr || user_data == nullptr ||
         (capacity > 0 && rows == nullptr) || (rows == nullptr && row_stride_bytes != 0)) {
@@ -1253,8 +1256,7 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
         *out_row_stride_bytes =
             bridge.rows.empty()
                 ? 0
-                : static_cast<std::uint32_t>(
-                      sizeof(sao::plugins::loader::entity_menu_row_v2));
+                : static_cast<std::uint32_t>(sizeof(sao::plugins::loader::entity_menu_row_v2));
         if (capacity < bridge.rows.size())
             return SAO_ERR_BUFFER_TOO_SMALL;
         if (!bridge.rows.empty() &&
@@ -1313,13 +1315,13 @@ int32_t submit_action_result(sao::plugins::loader::entity_action_result_sink_v2_
     return sink(&result, sink_user_data);
 }
 
-int32_t submit_emma_action_value(
-    emma_plugin_runtime& runtime, const emma_value& value, bool null_is_decline,
-    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
-    void* result_sink_user_data) {
+int32_t submit_emma_action_value(emma_plugin_runtime& runtime, const emma_value& value,
+                                 bool null_is_decline,
+                                 sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+                                 void* result_sink_user_data) {
     if (std::holds_alternative<std::nullptr_t>(value)) {
-        const int32_t status = submit_action_result(result_sink, result_sink_user_data,
-                                                    !null_is_decline, nullptr);
+        const int32_t status =
+            submit_action_result(result_sink, result_sink_user_data, !null_is_decline, nullptr);
         if (status == SAO_OK) {
             runtime.last_error = {};
         } else {
@@ -1347,10 +1349,10 @@ int32_t submit_emma_action_value(
     return status;
 }
 
-int32_t SAO_PLUGINS_CALL native_menu_action_v2(
-    const char* action_id_utf8, const char* payload_json_utf8,
-    sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
-    void* result_sink_user_data, void* user_data) {
+int32_t SAO_PLUGINS_CALL
+native_menu_action_v2(const char* action_id_utf8, const char* payload_json_utf8,
+                      sao::plugins::loader::entity_action_result_sink_v2_fn result_sink,
+                      void* result_sink_user_data, void* user_data) {
     if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
         user_data == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
@@ -1380,8 +1382,8 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
             candidate.rows = bridge.rows;
             if (!build_menu_snapshot(candidate, &next_navigation))
                 return sao_plugins_emma_error_status(&runtime->last_error);
-            const int32_t status = submit_action_result(
-                result_sink, result_sink_user_data, true, "{\"refresh\":true}");
+            const int32_t status = submit_action_result(result_sink, result_sink_user_data, true,
+                                                        "{\"refresh\":true}");
             if (status != SAO_OK) {
                 remember_action_error(*runtime, status, "navigation result sink rejected result");
                 return status;
@@ -1392,8 +1394,8 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
             bridge.revision = candidate.revision;
             return status;
         }
-        const auto visible = std::find_if(bridge.rows.begin(), bridge.rows.end(),
-            [action_id_utf8](const emma_menu_row& row) {
+        const auto visible = std::find_if(
+            bridge.rows.begin(), bridge.rows.end(), [action_id_utf8](const emma_menu_row& row) {
                 return row.action_id == action_id_utf8 && row.can_activate;
             });
         const auto found = bridge.actions.find(action_id_utf8);
@@ -1415,10 +1417,12 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
             }
             const int32_t status = sao_plugins_emma_error_status(&error);
             runtime->last_error = std::move(error);
+            if (runtime->context != nullptr && !runtime->last_error.message.empty())
+                sao::plugins::loader::sao_plugins_ctx_log(runtime->context,
+                                                          runtime->last_error.message.c_str());
             return status;
         }
-        return submit_emma_action_value(*runtime, value, false, result_sink,
-                                        result_sink_user_data);
+        return submit_emma_action_value(*runtime, value, false, result_sink, result_sink_user_data);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -1446,8 +1450,8 @@ native_action_handler(const char* action_id_utf8, const char* payload_json_utf8,
         if (bridge.handler == nullptr)
             return SAO_ERR_HANDLE_INVALID;
 
-        if (std::string_view(action_id_utf8).starts_with(
-                sao::plugins::script_ctx::menu_navigation::navigation_prefix)) {
+        if (std::string_view(action_id_utf8)
+                .starts_with(sao::plugins::script_ctx::menu_navigation::navigation_prefix)) {
             const emma_value declined = nullptr;
             return submit_emma_action_value(*runtime, declined, true, result_sink,
                                             result_sink_user_data);
@@ -1479,8 +1483,7 @@ native_action_handler(const char* action_id_utf8, const char* payload_json_utf8,
             return status;
         }
 
-        return submit_emma_action_value(*runtime, value, true, result_sink,
-                                        result_sink_user_data);
+        return submit_emma_action_value(*runtime, value, true, result_sink, result_sink_user_data);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -1525,8 +1528,8 @@ int32_t register_menu_provider(emma_plugin_runtime& runtime, emma_menu_bridge& m
         provider.root_contribution = &root;
         provider.action_handler_v2 = native_menu_action_v2;
         provider.action_user_data = &menu;
-        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3(
-            runtime.context, &provider);
+        return sao::plugins::loader::sao_plugins_ctx_register_entity_provider_v3(runtime.context,
+                                                                                 &provider);
     } catch (...) {
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -1885,10 +1888,9 @@ emma_value parse_owned_json(int32_t status, char* owned_json, const char* method
     if (status != SAO_OK)
         throw_context_status(method, status);
     json parsed;
-    const bool parsed_ok = value == nullptr
-                               ? parse_bounded_json("null", kMaximumJsonInputBytes, parsed)
-                               : parse_bounded_json_c_string(value.get(), kMaximumJsonInputBytes,
-                                                             parsed);
+    const bool parsed_ok =
+        value == nullptr ? parse_bounded_json("null", kMaximumJsonInputBytes, parsed)
+                         : parse_bounded_json_c_string(value.get(), kMaximumJsonInputBytes, parsed);
     emma_value converted = nullptr;
     if (!parsed_ok || !json_to_value(parsed, converted)) {
         throw_context_status(method, SAO_ERR_OS_CALL_FAILED);
@@ -2077,8 +2079,8 @@ std::wstring utf8_to_wide(std::string_view value) {
         return {};
     // u8path() is deprecated in C++20; u8string_view construction is the
     // equivalent UTF-8 → native-format path conversion.
-    return std::filesystem::path(std::u8string_view(
-                reinterpret_cast<const char8_t*>(value.data()), value.size()))
+    return std::filesystem::path(
+               std::u8string_view(reinterpret_cast<const char8_t*>(value.data()), value.size()))
         .wstring();
 }
 
@@ -2088,8 +2090,7 @@ std::string wide_to_utf8(std::wstring_view value) {
     return path_utf8(std::filesystem::path(value));
 }
 
-[[noreturn]] void throw_context_message(const char* method, int32_t status,
-                                        std::string message) {
+[[noreturn]] void throw_context_message(const char* method, int32_t status, std::string message) {
     emma_error error;
     error.kind = error_kind::runtime_error;
     error.status = status;
@@ -2098,8 +2099,7 @@ std::string wide_to_utf8(std::wstring_view value) {
 }
 
 bool is_null_argument(const std::vector<emma_value>& arguments, size_t index) {
-    return index >= arguments.size() ||
-           std::holds_alternative<std::nullptr_t>(arguments[index]);
+    return index >= arguments.size() || std::holds_alternative<std::nullptr_t>(arguments[index]);
 }
 
 bool optional_bool_value(const std::vector<emma_value>& arguments, size_t index, bool fallback,
@@ -2127,8 +2127,8 @@ std::string optional_string_value(const std::vector<emma_value>& arguments, size
     return require_string(arguments, index, method);
 }
 
-std::shared_ptr<callable> nullable_callable(const std::vector<emma_value>& arguments,
-                                            size_t index, const char* method) {
+std::shared_ptr<callable> nullable_callable(const std::vector<emma_value>& arguments, size_t index,
+                                            const char* method) {
     if (is_null_argument(arguments, index))
         return nullptr;
     return require_callable(arguments, index, method);
@@ -2222,8 +2222,8 @@ int32_t invoke_callable_result(emma_plugin_runtime::callback_record* raw_callbac
     }
 }
 
-int32_t panel_callback_result(emma_plugin_runtime::callback_record* callback,
-                              const char* action, const char* payload, char** output) noexcept {
+int32_t panel_callback_result(emma_plugin_runtime::callback_record* callback, const char* action,
+                              const char* payload, char** output) noexcept {
     if (output == nullptr)
         return SAO_ERR_INVALID_ARGUMENT;
     *output = nullptr;
@@ -2239,7 +2239,8 @@ int32_t panel_callback_result(emma_plugin_runtime::callback_record* callback,
             arguments.emplace_back(std::string(action));
         arguments.push_back(std::move(argument));
         emma_value result = nullptr;
-        const int32_t status = invoke_callable_result(callback, std::move(arguments), &result, nullptr);
+        const int32_t status =
+            invoke_callable_result(callback, std::move(arguments), &result, nullptr);
         if (status != SAO_OK)
             return status;
         const std::string text = serialize_value_or_throw(result);
@@ -2254,15 +2255,18 @@ int32_t panel_callback_result(emma_plugin_runtime::callback_record* callback,
 
 int32_t panel_render_bridge(const char* payload, char** output, void* user_data) noexcept {
     auto* bundle = static_cast<emma_panel_bundle*>(user_data);
-    return bundle == nullptr ? SAO_ERR_HANDLE_INVALID :
-        panel_callback_result(bundle->render.get(), nullptr, payload, output);
+    return bundle == nullptr
+               ? SAO_ERR_HANDLE_INVALID
+               : panel_callback_result(bundle->render.get(), nullptr, payload, output);
 }
 
 int32_t panel_action_bridge(const char* action, const char* payload, char** output,
                             void* user_data) noexcept {
     auto* bundle = static_cast<emma_panel_bundle*>(user_data);
-    return bundle == nullptr ? SAO_ERR_HANDLE_INVALID :
-        panel_callback_result(bundle->action.get(), action == nullptr ? "" : action, payload, output);
+    return bundle == nullptr
+               ? SAO_ERR_HANDLE_INVALID
+               : panel_callback_result(bundle->action.get(), action == nullptr ? "" : action,
+                                       payload, output);
 }
 
 // ── provider 回调桥 (render hook / data source / compositor input) ─────────
@@ -2285,8 +2289,8 @@ int32_t render_hook_bridge(const char* surface_utf8, const char* payload_json_ut
         std::string error;
         const int32_t status = invoke_callable_result(
             static_cast<emma_plugin_runtime::callback_record*>(user_data),
-            {std::string(surface_utf8 == nullptr ? "" : surface_utf8), std::move(payload)},
-            &result, &error);
+            {std::string(surface_utf8 == nullptr ? "" : surface_utf8), std::move(payload)}, &result,
+            &error);
         if (status != SAO_OK)
             return status;
         std::string serialized;
@@ -2339,16 +2343,14 @@ void compositor_cursor_pos_bridge(float x, float y, void* user_data) noexcept {
     auto* bundle = static_cast<emma_compositor_input_bundle*>(user_data);
     if (bundle == nullptr || bundle->cursor_pos == nullptr)
         return;
-    invoke_callback(bundle->cursor_pos.get(),
-                    {static_cast<double>(x), static_cast<double>(y)});
+    invoke_callback(bundle->cursor_pos.get(), {static_cast<double>(x), static_cast<double>(y)});
 }
 
 void compositor_mouse_button_bridge(uint32_t button, bool pressed, void* user_data) noexcept {
     auto* bundle = static_cast<emma_compositor_input_bundle*>(user_data);
     if (bundle == nullptr || bundle->mouse_button == nullptr)
         return;
-    invoke_callback(bundle->mouse_button.get(),
-                    {static_cast<int64_t>(button), pressed});
+    invoke_callback(bundle->mouse_button.get(), {static_cast<int64_t>(button), pressed});
 }
 
 void compositor_cursor_leave_bridge(void* user_data) noexcept {
@@ -2362,8 +2364,7 @@ void compositor_scroll_bridge(float dx, float dy, void* user_data) noexcept {
     auto* bundle = static_cast<emma_compositor_input_bundle*>(user_data);
     if (bundle == nullptr || bundle->scroll == nullptr)
         return;
-    invoke_callback(bundle->scroll.get(),
-                    {static_cast<double>(dx), static_cast<double>(dy)});
+    invoke_callback(bundle->scroll.get(), {static_cast<double>(dx), static_cast<double>(dy)});
 }
 
 // data source bundle 在插件卸载后必须继续存活到所属 ctx teardown —
@@ -2391,9 +2392,9 @@ using script_value_ptr = sao::plugins::script_ctx::script_value_ptr;
 
 script_value_ptr emma_value_to_script(const emma_value& value, emma_plugin_runtime* runtime);
 emma_value script_value_to_emma(const script_value_ptr& value, emma_plugin_runtime* runtime);
-script_value_ptr emma_to_script_module(
-    const emma_value& value, emma_plugin_handle_t plugin,
-    std::shared_ptr<sao::plugins::script_ctx::script_module> owner = {});
+script_value_ptr
+emma_to_script_module(const emma_value& value, emma_plugin_handle_t plugin,
+                      std::shared_ptr<sao::plugins::script_ctx::script_module> owner = {});
 emma_value script_to_emma_module(const script_value_ptr& value, emma_plugin_handle_t plugin);
 
 std::string format_module_error(const emma_error& error, const std::filesystem::path& source) {
@@ -2473,16 +2474,19 @@ int32_t with_module_runtime(emma_plugin_handle_t plugin, std::string* out_error,
         }
     } catch (...) {
         if (out_error != nullptr) {
-            try { *out_error = "emma module invocation failed"; }
-            catch (...) { out_error->clear(); }
+            try {
+                *out_error = "emma module invocation failed";
+            } catch (...) {
+                out_error->clear();
+            }
         }
         return SAO_ERR_OS_CALL_FAILED;
     }
 }
 
-script_value_ptr emma_to_script_module(
-    const emma_value& value, emma_plugin_handle_t plugin,
-    std::shared_ptr<sao::plugins::script_ctx::script_module> owner) {
+script_value_ptr
+emma_to_script_module(const emma_value& value, emma_plugin_handle_t plugin,
+                      std::shared_ptr<sao::plugins::script_ctx::script_module> owner) {
     namespace sc = sao::plugins::script_ctx;
     if (const auto* flag = std::get_if<bool>(&value))
         return sc::script_value::make_boolean(*flag);
@@ -2512,46 +2516,47 @@ script_value_ptr emma_to_script_module(
     }
     if (const auto* function = std::get_if<std::shared_ptr<callable>>(&value)) {
         auto target = function != nullptr ? *function : nullptr;
-        return sc::script_value::make_function(
-            [plugin, target, owner](const std::vector<script_value_ptr>& args,
-                             script_value_ptr* out_value, std::string* out_error) -> int32_t {
+        return sc::script_value::make_function([plugin, target,
+                                                owner](const std::vector<script_value_ptr>& args,
+                                                       script_value_ptr* out_value,
+                                                       std::string* out_error) -> int32_t {
+            if (out_error != nullptr)
+                out_error->clear();
+            if (out_value != nullptr)
+                *out_value = nullptr;
+            if (plugin == nullptr || target == nullptr) {
                 if (out_error != nullptr)
-                    out_error->clear();
-                if (out_value != nullptr)
-                    *out_value = nullptr;
-                if (plugin == nullptr || target == nullptr) {
-                    if (out_error != nullptr)
-                        *out_error = "emma module callable is not bound";
-                    return SAO_ERR_HANDLE_INVALID;
-                }
-                return with_module_runtime(
-                    plugin, out_error, [&](emma_plugin_runtime& runtime) -> int32_t {
-                        if (runtime.interp == nullptr)
-                            return SAO_ERR_HANDLE_INVALID;
-                        std::vector<emma_value> emma_args;
-                        emma_args.reserve(args.size());
-                        for (const auto& arg : args)
-                            emma_args.push_back(script_to_emma_module(arg, plugin));
-                        std::string message;
-                        emma_error error;
-                        emma_value result = runtime.interp->call_function(
-                            target, std::move(emma_args), message, &error);
-                        if (error.kind != error_kind::none || !message.empty()) {
-                            if (error.kind == error_kind::none) {
-                                error.kind = error_kind::runtime_error;
-                                error.status = SAO_ERR_OS_CALL_FAILED;
-                                error.message = std::move(message);
-                            }
-                            if (out_error != nullptr)
-                                *out_error = format_module_error(error, runtime.entry_path);
-                            const int32_t status = sao_plugins_emma_error_status(&error);
-                            return status == SAO_OK ? SAO_ERR_OS_CALL_FAILED : status;
+                    *out_error = "emma module callable is not bound";
+                return SAO_ERR_HANDLE_INVALID;
+            }
+            return with_module_runtime(
+                plugin, out_error, [&](emma_plugin_runtime& runtime) -> int32_t {
+                    if (runtime.interp == nullptr)
+                        return SAO_ERR_HANDLE_INVALID;
+                    std::vector<emma_value> emma_args;
+                    emma_args.reserve(args.size());
+                    for (const auto& arg : args)
+                        emma_args.push_back(script_to_emma_module(arg, plugin));
+                    std::string message;
+                    emma_error error;
+                    emma_value result = runtime.interp->call_function(target, std::move(emma_args),
+                                                                      message, &error);
+                    if (error.kind != error_kind::none || !message.empty()) {
+                        if (error.kind == error_kind::none) {
+                            error.kind = error_kind::runtime_error;
+                            error.status = SAO_ERR_OS_CALL_FAILED;
+                            error.message = std::move(message);
                         }
-                        if (out_value != nullptr)
-                            *out_value = emma_to_script_module(result, plugin, owner);
-                        return SAO_OK;
-                    });
-            });
+                        if (out_error != nullptr)
+                            *out_error = format_module_error(error, runtime.entry_path);
+                        const int32_t status = sao_plugins_emma_error_status(&error);
+                        return status == SAO_OK ? SAO_ERR_OS_CALL_FAILED : status;
+                    }
+                    if (out_value != nullptr)
+                        *out_value = emma_to_script_module(result, plugin, owner);
+                    return SAO_OK;
+                });
+        });
     }
     return sc::script_value::null_value();
 }
@@ -2636,22 +2641,22 @@ script_value_ptr emma_value_to_script(const emma_value& value, emma_plugin_runti
     }
     if (const auto* function = std::get_if<std::shared_ptr<callable>>(&value)) {
         auto record = make_callback(runtime, function != nullptr ? *function : nullptr);
-        return sc::script_value::make_function(
-            [record](const std::vector<script_value_ptr>& args, script_value_ptr* out_value,
-                     std::string* out_error) -> int32_t {
-                std::vector<emma_value> emma_args;
-                emma_args.reserve(args.size());
-                for (const auto& arg : args)
-                    emma_args.push_back(script_to_emma_module(arg, nullptr));
-                emma_value result = nullptr;
-                const int32_t status =
-                    invoke_callable_result(record.get(), std::move(emma_args), &result, out_error);
-                if (status != SAO_OK)
-                    return status;
-                if (out_value != nullptr)
-                    *out_value = emma_to_script_module(result, nullptr);
-                return SAO_OK;
-            });
+        return sc::script_value::make_function([record](const std::vector<script_value_ptr>& args,
+                                                        script_value_ptr* out_value,
+                                                        std::string* out_error) -> int32_t {
+            std::vector<emma_value> emma_args;
+            emma_args.reserve(args.size());
+            for (const auto& arg : args)
+                emma_args.push_back(script_to_emma_module(arg, nullptr));
+            emma_value result = nullptr;
+            const int32_t status =
+                invoke_callable_result(record.get(), std::move(emma_args), &result, out_error);
+            if (status != SAO_OK)
+                return status;
+            if (out_value != nullptr)
+                *out_value = emma_to_script_module(result, nullptr);
+            return SAO_OK;
+        });
     }
     return sc::script_value::null_value();
 }
@@ -2737,15 +2742,15 @@ class emma_host_script_module final : public sao::plugins::script_ctx::script_mo
             out_error->clear();
         if (out_value != nullptr)
             *out_value = nullptr;
-        return with_module_runtime(plugin_, out_error,
-                                   [&](emma_plugin_runtime& runtime) -> int32_t {
-                                       if (runtime.interp == nullptr)
-                                           return SAO_ERR_HANDLE_INVALID;
-                                       const emma_value member = runtime.interp->get_global(name);
-                                       if (out_value != nullptr)
-                                           *out_value = emma_to_script_module(member, plugin_, shared_from_this());
-                                       return SAO_OK;
-                                   });
+        return with_module_runtime(
+            plugin_, out_error, [&](emma_plugin_runtime& runtime) -> int32_t {
+                if (runtime.interp == nullptr)
+                    return SAO_ERR_HANDLE_INVALID;
+                const emma_value member = runtime.interp->get_global(name);
+                if (out_value != nullptr)
+                    *out_value = emma_to_script_module(member, plugin_, shared_from_this());
+                return SAO_OK;
+            });
     }
 
     int32_t call(const std::string& name, const std::vector<script_value_ptr>& args,
@@ -2797,14 +2802,15 @@ class emma_host_script_module final : public sao::plugins::script_ctx::script_mo
 };
 
 int32_t emma_bridge_probe(sao::plugins::loader::plugin_context_t*, const wchar_t*, std::string&,
-                       void*) noexcept {
+                          void*) noexcept {
     return SAO_OK;
 }
 
-int32_t emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx,
-                                const wchar_t* abs_path, const std::string& logical_name,
-                                std::shared_ptr<sao::plugins::script_ctx::script_module>* out_module,
-                                std::string* out_error, void*) noexcept {
+int32_t
+emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx, const wchar_t* abs_path,
+                        const std::string& logical_name,
+                        std::shared_ptr<sao::plugins::script_ctx::script_module>* out_module,
+                        std::string* out_error, void*) noexcept {
     try {
         if (out_error != nullptr)
             out_error->clear();
@@ -2834,14 +2840,16 @@ int32_t emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx,
         const char* plugin_id = sao::plugins::loader::sao_plugins_ctx_plugin_id(ctx);
         emma_plugin_handle_t plugin = nullptr;
         emma_error load_error;
-        const int32_t status =
-            sao_plugins_emma_load_script_ex(root_w, relative_utf8.c_str(),
-                                            plugin_id == nullptr ? "" : plugin_id, ctx, &plugin,
-                                            &load_error);
+        const int32_t status = sao_plugins_emma_load_script_ex(
+            root_w, relative_utf8.c_str(), plugin_id == nullptr ? "" : plugin_id, ctx, &plugin,
+            &load_error);
         const auto release_module = [](void* value) noexcept {
             const auto handle = static_cast<emma_plugin_handle_t>(value);
             if (sao_plugins_emma_unload_script(handle) != SAO_OK) {
-                try { zombie_module_handle(handle); } catch (...) {}
+                try {
+                    zombie_module_handle(handle);
+                } catch (...) {
+                }
             }
         };
         std::unique_ptr<void, decltype(release_module)> pending_module(plugin, release_module);
@@ -2866,7 +2874,7 @@ int32_t emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx,
                 const char** builtins = nullptr;
                 size_t builtin_count = 0;
                 if (sao_plugins_emma_list_builtins(runtime.interp.get(), &builtins,
-                                                 &builtin_count) == SAO_OK) {
+                                                   &builtin_count) == SAO_OK) {
                     for (size_t index = 0; index < builtin_count; ++index) {
                         if (builtins[index] != nullptr)
                             excluded.emplace(builtins[index]);
@@ -2881,19 +2889,22 @@ int32_t emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx,
             });
         if (capture_status != SAO_OK) {
             if (out_error != nullptr)
-                *out_error = capture_error.empty() ? "module member enumeration failed"
-                                                 : capture_error;
+                *out_error =
+                    capture_error.empty() ? "module member enumeration failed" : capture_error;
             return capture_status;
         }
 
-        *out_module = std::make_shared<emma_host_script_module>(plugin, logical_name,
-                                                                std::move(names));
+        *out_module =
+            std::make_shared<emma_host_script_module>(plugin, logical_name, std::move(names));
         (void)pending_module.release();
         return SAO_OK;
     } catch (...) {
         if (out_error != nullptr) {
-            try { *out_error = "emma module load failed"; }
-            catch (...) { out_error->clear(); }
+            try {
+                *out_error = "emma module load failed";
+            } catch (...) {
+                out_error->clear();
+            }
         }
         return SAO_ERR_OS_CALL_FAILED;
     }
@@ -2902,19 +2913,20 @@ int32_t emma_bridge_load_module(sao::plugins::loader::plugin_context_t* ctx,
 const char* const kEmmaBridgeExtensions[] = {"emma", nullptr};
 
 sao::plugins::script_ctx::script_engine_ops g_emma_bridge_ops{
-    "emma",                    // engine_name_utf8
-    30,                        // priority — pymini=10 之后, python_host=90 之前
-    kEmmaBridgeExtensions,     // extensions_utf8
-    &emma_bridge_probe,        // .emma 始终由内置解释器处理。
-    &emma_bridge_load_module,  // load_module
-    nullptr,                   // user_data
+    "emma",                   // engine_name_utf8
+    30,                       // priority — pymini=10 之后, python_host=90 之前
+    kEmmaBridgeExtensions,    // extensions_utf8
+    &emma_bridge_probe,       // .emma 始终由内置解释器处理。
+    &emma_bridge_load_module, // load_module
+    nullptr,                  // user_data
 };
 
 std::once_flag g_emma_bridge_once;
 
 void ensure_emma_runtime_bridge() noexcept {
-    std::call_once(g_emma_bridge_once,
-                   [] { (void)sao::plugins::script_ctx::runtime_bridge_register(&g_emma_bridge_ops); });
+    std::call_once(g_emma_bridge_once, [] {
+        (void)sao::plugins::script_ctx::runtime_bridge_register(&g_emma_bridge_ops);
+    });
 }
 
 // ── 反射引擎面 (binding_engine.h 契约) ─────────────────────────────────
@@ -2943,11 +2955,10 @@ void init_engine_sdk_context(emma_plugin_runtime& runtime) noexcept {
     try {
         const std::string base_dir = path_utf8(runtime.plugin_root);
         SaoSdkContext* created = nullptr;
-        int32_t status = sao_sdk_context_create(base_dir.c_str(),
-                                                runtime.plugin_id.c_str(), &created);
+        int32_t status =
+            sao_sdk_context_create(base_dir.c_str(), runtime.plugin_id.c_str(), &created);
         if (status != SAO_SDK_OK || created == nullptr) {
-            runtime.sdk_init_status =
-                status != SAO_SDK_OK ? status : SAO_ERR_OS_CALL_FAILED;
+            runtime.sdk_init_status = status != SAO_SDK_OK ? status : SAO_ERR_OS_CALL_FAILED;
             return;
         }
         status = sao_sdk_context_bind_platform_services(created);
@@ -2970,8 +2981,8 @@ void init_engine_sdk_context(emma_plugin_runtime& runtime) noexcept {
 // channel_utf8 命中 engine_callbacks 表后 decode payload →
 // invoke_callback(channel, payload)。
 void SAO_PLUGINS_CALL engine_channel_bridge(const char* channel_utf8,
-                                            const uint8_t* payload_json_utf8,
-                                            size_t payload_size, void* user_data) {
+                                            const uint8_t* payload_json_utf8, size_t payload_size,
+                                            void* user_data) {
     try {
         auto* runtime = static_cast<emma_plugin_runtime*>(user_data);
         if (runtime == nullptr)
@@ -3027,9 +3038,8 @@ json engine_dispatch_envelope(emma_plugin_runtime* runtime,
         throw_context_status(label, SAO_ERR_INVALID_ARGUMENT);
     SaoSdkContext* sdk = runtime->sdk_context;
     if (sdk == nullptr) {
-        throw_context_status(label, runtime->sdk_init_status != SAO_OK
-                                        ? runtime->sdk_init_status
-                                        : SAO_ERR_NOT_INITIALIZED);
+        throw_context_status(label, runtime->sdk_init_status != SAO_OK ? runtime->sdk_init_status
+                                                                       : SAO_ERR_NOT_INITIALIZED);
     }
     std::string serialized;
     std::string message;
@@ -3054,8 +3064,8 @@ json engine_dispatch_envelope(emma_plugin_runtime* runtime,
     if (status != SAO_OK)
         throw_context_status(label, status);
     json parsed;
-    if (!parse_bounded_json_c_string(runtime->engine_result_buffer.data(),
-                                     kMaximumJsonInputBytes, parsed)) {
+    if (!parse_bounded_json_c_string(runtime->engine_result_buffer.data(), kMaximumJsonInputBytes,
+                                     parsed)) {
         throw_context_status(label, SAO_ERR_OS_CALL_FAILED);
     }
     return parsed;
@@ -3085,17 +3095,14 @@ emma_value engine_call_result(const json& envelope, const char* label) {
 
 // 组装 {"name","args",["callback_channel"]} → method_engine_call。
 emma_value engine_named_invoke(emma_plugin_runtime* runtime, const char* catalog_name,
-                               json engine_args, std::string callback_channel,
-                               const char* label) {
+                               json engine_args, std::string callback_channel, const char* label) {
     json request_args = json::object();
     request_args["name"] = catalog_name;
     request_args["args"] = std::move(engine_args);
     if (!callback_channel.empty())
         request_args["callback_channel"] = std::move(callback_channel);
-    const json envelope =
-        engine_dispatch_envelope(runtime,
-                                 sao::plugins::sdk_binding::sdk_method_id::method_engine_call,
-                                 request_args, label);
+    const json envelope = engine_dispatch_envelope(
+        runtime, sao::plugins::sdk_binding::sdk_method_id::method_engine_call, request_args, label);
     return engine_call_result(envelope, label);
 }
 
@@ -3117,16 +3124,13 @@ emma_value engine_named_call(emma_plugin_runtime* runtime,
         }
         return false;
     };
-    if (arguments.size() == 1 &&
-        std::holds_alternative<std::shared_ptr<emma_dict>>(arguments[0])) {
+    if (arguments.size() == 1 && std::holds_alternative<std::shared_ptr<emma_dict>>(arguments[0])) {
         const auto& dictionary = std::get<std::shared_ptr<emma_dict>>(arguments[0]);
         const bool kwargs =
             dictionary == nullptr ||
-            std::all_of(dictionary->items.begin(), dictionary->items.end(),
-                        [&](const auto& entry) {
-                            return entry.first == "callback_channel" ||
-                                   is_formal_name(entry.first);
-                        });
+            std::all_of(dictionary->items.begin(), dictionary->items.end(), [&](const auto& entry) {
+                return entry.first == "callback_channel" || is_formal_name(entry.first);
+            });
         if (kwargs) {
             if (dictionary != nullptr) {
                 for (const auto& entry : dictionary->items) {
@@ -3172,10 +3176,9 @@ emma_value engine_list_impl(emma_plugin_runtime* runtime, std::vector<emma_value
     const char* method = "ctx.engine.list";
     if (!arguments.empty())
         throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
-    const json envelope =
-        engine_dispatch_envelope(runtime,
-                                 sao::plugins::sdk_binding::sdk_method_id::method_engine_list,
-                                 json::object(), method);
+    const json envelope = engine_dispatch_envelope(
+        runtime, sao::plugins::sdk_binding::sdk_method_id::method_engine_list, json::object(),
+        method);
     return engine_call_result(envelope, method);
 }
 
@@ -3251,10 +3254,9 @@ emma_value engine_call_impl(emma_plugin_runtime* runtime, std::vector<emma_value
     request_args["args"] = std::move(engine_args);
     if (!callback_channel.empty())
         request_args["callback_channel"] = callback_channel;
-    const json envelope =
-        engine_dispatch_envelope(runtime,
-                                 sao::plugins::sdk_binding::sdk_method_id::method_engine_call,
-                                 request_args, method);
+    const json envelope = engine_dispatch_envelope(
+        runtime, sao::plugins::sdk_binding::sdk_method_id::method_engine_call, request_args,
+        method);
     emma_value converted = nullptr;
     if (!json_to_value(envelope, converted))
         throw_context_status(method, SAO_ERR_OS_CALL_FAILED);
@@ -3283,8 +3285,8 @@ int32_t teardown_engine_surface(emma_plugin_runtime& runtime) noexcept {
             }
             retire_callback(record);
             std::lock_guard lock(runtime.engine_callbacks_mutex);
-            for (auto it = runtime.engine_callbacks.begin();
-                 it != runtime.engine_callbacks.end(); ++it) {
+            for (auto it = runtime.engine_callbacks.begin(); it != runtime.engine_callbacks.end();
+                 ++it) {
                 if (it->second == record) {
                     runtime.engine_callbacks.erase(it);
                     break;
@@ -3401,8 +3403,7 @@ void note_emma_ctx_surface() noexcept {
     sao::plugins::script_ctx::ctx_surface_note_all(loader::engine_kind::emma, kNames);
     // ui.* 构建器名单由 script_ui_methods 提供。
     size_t ui_count = 0;
-    const char* const* ui_methods =
-        sao::plugins::script_ctx::script_ui_methods(&ui_count);
+    const char* const* ui_methods = sao::plugins::script_ctx::script_ui_methods(&ui_count);
     for (size_t index = 0; index < ui_count; ++index) {
         const std::string name = std::string("ui.") + ui_methods[index];
         sao::plugins::script_ctx::ctx_surface_note(loader::engine_kind::emma, name.c_str());
@@ -3418,8 +3419,7 @@ void note_emma_ctx_surface() noexcept {
         if (member.empty())
             continue;
         const std::string qualified = "engine." + member;
-        sao::plugins::script_ctx::ctx_surface_note(loader::engine_kind::emma,
-                                                 qualified.c_str());
+        sao::plugins::script_ctx::ctx_surface_note(loader::engine_kind::emma, qualified.c_str());
     }
 }
 
@@ -3430,8 +3430,7 @@ emma_value register_render_hook_impl(emma_plugin_runtime* runtime,
     const char* method = "ctx.register_render_hook";
     const std::string surface = require_string(arguments, 0, method);
     auto function = require_callable(arguments, 1, method);
-    const double priority =
-        arguments.size() > 2 ? require_number(arguments, 2, method) : 0.0;
+    const double priority = arguments.size() > 2 ? require_number(arguments, 2, method) : 0.0;
     auto callback = make_callback(runtime, std::move(function));
     const uint64_t resource_id = add_owned_resource(
         *runtime, emma_plugin_runtime::resource_kind::render_hook, 0, surface, callback);
@@ -3465,16 +3464,15 @@ emma_value unregister_render_hook_impl(emma_plugin_runtime* runtime,
             resource)) {
         // 台账无此 hook：目标状态已达成 (幂等清除，teardown 时脚本常重复调用)
         const int32_t status =
-            sao::plugins::loader::sao_plugins_ctx_unregister_render_hook(runtime->context,
-                                                                       token);
+            sao::plugins::loader::sao_plugins_ctx_unregister_render_hook(runtime->context, token);
         if (!teardown_status_is_complete(status))
             throw_context_status(method, status);
         return emma_value(false);
     }
     int32_t status = quiesce_callback(resource.callback);
     if (status == SAO_OK) {
-        status = sao::plugins::loader::sao_plugins_ctx_unregister_render_hook(runtime->context,
-                                                                            token);
+        status =
+            sao::plugins::loader::sao_plugins_ctx_unregister_render_hook(runtime->context, token);
     }
     if (!teardown_status_is_complete(status)) {
         resume_callback(resource.callback);
@@ -3499,9 +3497,9 @@ emma_value register_data_source_impl(emma_plugin_runtime* runtime,
     bundle->source_id = source_id;
     bundle->start = make_callback(runtime, std::move(start_fn));
     bundle->stop = make_callback(runtime, std::move(stop_fn));
-    const uint64_t resource_id = add_owned_resource(
-        *runtime, emma_plugin_runtime::resource_kind::data_source, 0, source_id, bundle->stop,
-        std::static_pointer_cast<void>(bundle));
+    const uint64_t resource_id =
+        add_owned_resource(*runtime, emma_plugin_runtime::resource_kind::data_source, 0, source_id,
+                           bundle->stop, std::static_pointer_cast<void>(bundle));
     const int32_t status = sao::plugins::loader::sao_plugins_ctx_register_data_source(
         runtime->context, source_id.c_str(), metadata.c_str(), data_source_start_bridge,
         data_source_stop_bridge, bundle.get());
@@ -3533,8 +3531,7 @@ emma_value register_extension_impl(emma_plugin_runtime* runtime, const char* kin
         throw_context_status(method.c_str(), status);
     if (handler != nullptr) {
         std::lock_guard lock(runtime->resources_mutex);
-        runtime->extension_handlers[std::string(kind) + ":" + extension_id] =
-            std::move(handler);
+        runtime->extension_handlers[std::string(kind) + ":" + extension_id] = std::move(handler);
     }
     return emma_value(true);
 }
@@ -3550,16 +3547,16 @@ emma_value set_compositor_layer_input_impl(emma_plugin_runtime* runtime,
     auto bundle = std::make_shared<emma_compositor_input_bundle>();
     bundle->runtime = runtime;
     bundle->layer_name = name;
-    bundle->cursor_pos = cursor_pos == nullptr ? nullptr
-                                             : make_callback(runtime, std::move(cursor_pos));
-    bundle->mouse_button = mouse_button == nullptr ? nullptr
-                                                   : make_callback(runtime, std::move(mouse_button));
-    bundle->cursor_leave = cursor_leave == nullptr ? nullptr
-                                                   : make_callback(runtime, std::move(cursor_leave));
+    bundle->cursor_pos =
+        cursor_pos == nullptr ? nullptr : make_callback(runtime, std::move(cursor_pos));
+    bundle->mouse_button =
+        mouse_button == nullptr ? nullptr : make_callback(runtime, std::move(mouse_button));
+    bundle->cursor_leave =
+        cursor_leave == nullptr ? nullptr : make_callback(runtime, std::move(cursor_leave));
     bundle->scroll = scroll == nullptr ? nullptr : make_callback(runtime, std::move(scroll));
-    const uint64_t resource_id = add_owned_resource(
-        *runtime, emma_plugin_runtime::resource_kind::compositor_input, 0, name, bundle->cursor_pos,
-        std::static_pointer_cast<void>(bundle));
+    const uint64_t resource_id =
+        add_owned_resource(*runtime, emma_plugin_runtime::resource_kind::compositor_input, 0, name,
+                           bundle->cursor_pos, std::static_pointer_cast<void>(bundle));
     const int32_t status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
         runtime->context, name.c_str(),
         bundle->cursor_pos == nullptr ? nullptr : &compositor_cursor_pos_bridge,
@@ -3591,17 +3588,17 @@ emma_value create_compositor_layer_impl(emma_plugin_runtime* runtime,
     const bool high_fps = optional_bool_value(arguments, 7, false, method);
     const int64_t target_fps = optional_integer_value(arguments, 8, 0, method);
     if (width <= 0 || height <= 0 || width > std::numeric_limits<uint32_t>::max() ||
-        height > std::numeric_limits<uint32_t>::max() ||
-        target_fps < 0 || target_fps > std::numeric_limits<uint32_t>::max() ||
+        height > std::numeric_limits<uint32_t>::max() || target_fps < 0 ||
+        target_fps > std::numeric_limits<uint32_t>::max() ||
         x < std::numeric_limits<int32_t>::min() || x > std::numeric_limits<int32_t>::max() ||
         y < std::numeric_limits<int32_t>::min() || y > std::numeric_limits<int32_t>::max() ||
         z < std::numeric_limits<int32_t>::min() || z > std::numeric_limits<int32_t>::max()) {
         throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
     }
     const int32_t status = sao::plugins::loader::sao_plugins_ctx_create_compositor_layer(
-        runtime->context, name.c_str(), static_cast<uint32_t>(width),
-        static_cast<uint32_t>(height), static_cast<int32_t>(x), static_cast<int32_t>(y),
-        static_cast<int32_t>(z), click_through, high_fps, static_cast<uint32_t>(target_fps));
+        runtime->context, name.c_str(), static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+        static_cast<int32_t>(x), static_cast<int32_t>(y), static_cast<int32_t>(z), click_through,
+        high_fps, static_cast<uint32_t>(target_fps));
     if (status != SAO_OK)
         throw_context_status(method, status);
     // Python 约定: {ok=true, name=name}; emma 语义里 true + name dict。
@@ -3626,8 +3623,7 @@ emma_value upload_compositor_frame_impl(emma_plugin_runtime* runtime,
     std::string bytes;
     if (const auto* text = std::get_if<std::string>(&arguments[3])) {
         bytes = *text;
-    } else if (const auto* list =
-                   std::get_if<std::shared_ptr<emma_list>>(&arguments[3])) {
+    } else if (const auto* list = std::get_if<std::shared_ptr<emma_list>>(&arguments[3])) {
         if (*list != nullptr) {
             bytes.reserve((*list)->items.size());
             for (const auto& item : (*list)->items) {
@@ -3650,15 +3646,13 @@ emma_value upload_compositor_frame_impl(emma_plugin_runtime* runtime,
         }
         const int32_t position_status =
             sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_position(
-                runtime->context, name.c_str(), static_cast<int32_t>(x),
-                static_cast<int32_t>(y));
+                runtime->context, name.c_str(), static_cast<int32_t>(x), static_cast<int32_t>(y));
         if (position_status != SAO_OK)
             throw_context_status(method, position_status);
     }
     const int32_t status = sao::plugins::loader::sao_plugins_ctx_upload_compositor_frame(
-        runtime->context, name.c_str(),
-        reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(),
-        static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        runtime->context, name.c_str(), reinterpret_cast<const uint8_t*>(bytes.data()),
+        bytes.size(), static_cast<uint32_t>(width), static_cast<uint32_t>(height));
     if (status != SAO_OK)
         throw_context_status(method, status);
     return emma_value(true);
@@ -3757,14 +3751,12 @@ emma_value open_window_impl(emma_plugin_runtime* runtime, std::vector<emma_value
 }
 
 // engine 句柄: emma 没有原始指针, 与 Python 一致用 int64 整数句柄。
-emma_value register_engine_impl(emma_plugin_runtime* runtime,
-                                std::vector<emma_value> arguments) {
+emma_value register_engine_impl(emma_plugin_runtime* runtime, std::vector<emma_value> arguments) {
     const char* method = "ctx.register_engine";
     const std::string name = require_string(arguments, 0, method);
     const int64_t engine_ptr = require_integer(arguments, 1, method);
     const int32_t status = sao::plugins::loader::sao_plugins_ctx_register_engine(
-        runtime->context, name.c_str(),
-        reinterpret_cast<void*>(static_cast<intptr_t>(engine_ptr)));
+        runtime->context, name.c_str(), reinterpret_cast<void*>(static_cast<intptr_t>(engine_ptr)));
     if (status != SAO_OK)
         throw_context_status(method, status);
     return emma_value(true);
@@ -3773,8 +3765,7 @@ emma_value register_engine_impl(emma_plugin_runtime* runtime,
 emma_value get_engine_impl(emma_plugin_runtime* runtime, std::vector<emma_value> arguments) {
     const char* method = "ctx.get_engine";
     const std::string name = require_string(arguments, 0, method);
-    void* engine =
-        sao::plugins::loader::sao_plugins_ctx_get_engine(runtime->context, name.c_str());
+    void* engine = sao::plugins::loader::sao_plugins_ctx_get_engine(runtime->context, name.c_str());
     if (engine == nullptr) {
         if (arguments.size() > 1)
             return arguments[1];
@@ -3783,12 +3774,10 @@ emma_value get_engine_impl(emma_plugin_runtime* runtime, std::vector<emma_value>
     return emma_value(static_cast<int64_t>(reinterpret_cast<intptr_t>(engine)));
 }
 
-emma_value require_engine_impl(emma_plugin_runtime* runtime,
-                               std::vector<emma_value> arguments) {
+emma_value require_engine_impl(emma_plugin_runtime* runtime, std::vector<emma_value> arguments) {
     const char* method = "ctx.require_engine";
     const std::string name = require_string(arguments, 0, method);
-    void* engine =
-        sao::plugins::loader::sao_plugins_ctx_get_engine(runtime->context, name.c_str());
+    void* engine = sao::plugins::loader::sao_plugins_ctx_get_engine(runtime->context, name.c_str());
     if (engine == nullptr)
         throw_context_message(method, SAO_ERR_HANDLE_INVALID,
                               "engine '" + name + "' is not registered");
@@ -3819,39 +3808,38 @@ emma_value ensure_requirements_impl(emma_plugin_runtime* runtime,
 }
 
 // load_local → runtime_bridge_load_local (provider 分派)。
-emma_value wrap_script_module(
-    const std::shared_ptr<sao::plugins::script_ctx::script_module>& module,
-    emma_plugin_runtime* runtime) {
+emma_value
+wrap_script_module(const std::shared_ptr<sao::plugins::script_ctx::script_module>& module,
+                   emma_plugin_runtime* runtime) {
     auto dict = std::make_shared<emma_dict>();
     if (module == nullptr)
         return emma_value(std::move(dict));
     dict->items.emplace("__name", module->module_id());
     dict->items.emplace(
-        "__call", make_host_callable(
-                      "module.__call",
-                      [runtime, module](std::vector<emma_value> arguments) -> emma_value {
-                          const std::string name = require_string(arguments, 0, "module.__call");
-                          std::vector<sao::plugins::script_ctx::script_value_ptr> script_args;
-                          script_args.reserve(arguments.size() > 0 ? arguments.size() - 1 : 0);
-                          for (size_t index = 1; index < arguments.size(); ++index)
-                              script_args.push_back(emma_value_to_script(arguments[index], runtime));
-                          script_value_ptr result;
-                          std::string error;
-                          const int32_t status =
-                              module->call(name, script_args, &result, &error);
-                          if (status != SAO_OK)
-                              throw_context_message(
-                                  "module.__call", status,
-                                  error.empty() ? "module call failed" : error);
-                          return script_value_to_emma(result, runtime);
-                      }));
+        "__call",
+        make_host_callable(
+            "module.__call", [runtime, module](std::vector<emma_value> arguments) -> emma_value {
+                const std::string name = require_string(arguments, 0, "module.__call");
+                std::vector<sao::plugins::script_ctx::script_value_ptr> script_args;
+                script_args.reserve(arguments.size() > 0 ? arguments.size() - 1 : 0);
+                for (size_t index = 1; index < arguments.size(); ++index)
+                    script_args.push_back(emma_value_to_script(arguments[index], runtime));
+                script_value_ptr result;
+                std::string error;
+                const int32_t status = module->call(name, script_args, &result, &error);
+                if (status != SAO_OK)
+                    throw_context_message("module.__call", status,
+                                          error.empty() ? "module call failed" : error);
+                return script_value_to_emma(result, runtime);
+            }));
     for (const auto& member_name : module->member_names()) {
         script_value_ptr value;
         std::string get_error;
         const int32_t get_status = module->get(member_name, &value, &get_error);
         if (get_status != SAO_OK)
             throw_context_message("ctx.load_local member", get_status, get_error);
-        if (value == nullptr || value->k != sao::plugins::script_ctx::script_value::kind::function) {
+        if (value == nullptr ||
+            value->k != sao::plugins::script_ctx::script_value::kind::function) {
             dict->items.emplace(member_name, script_value_to_emma(value, runtime));
             continue;
         }
@@ -3889,9 +3877,9 @@ emma_value load_local_impl(emma_plugin_runtime* runtime, std::vector<emma_value>
     std::wstring absolute;
     std::string diagnostic;
     const std::wstring root_w = runtime->plugin_root.wstring();
-    const int32_t status = sc::runtime_bridge_load_local(
-        runtime->context, runtime->plugin_id.c_str(), root_w.c_str(), relative.c_str(), &kind,
-        &module, &absolute, &diagnostic);
+    const int32_t status =
+        sc::runtime_bridge_load_local(runtime->context, runtime->plugin_id.c_str(), root_w.c_str(),
+                                      relative.c_str(), &kind, &module, &absolute, &diagnostic);
     if (status != SAO_OK)
         throw_context_message(method, status, diagnostic);
     switch (kind) {
@@ -3902,11 +3890,10 @@ emma_value load_local_impl(emma_plugin_runtime* runtime, std::vector<emma_value>
     case sc::load_local_result::missing:
     case sc::load_local_result::unsupported:
     default: {
-        const std::string reason = diagnostic.empty()
-                                       ? (kind == sc::load_local_result::missing
-                                              ? "path resolution failed"
-                                              : "no script provider for extension")
-                                       : diagnostic;
+        const std::string reason = diagnostic.empty() ? (kind == sc::load_local_result::missing
+                                                             ? "path resolution failed"
+                                                             : "no script provider for extension")
+                                                      : diagnostic;
         sao::plugins::loader::sao_plugins_ctx_log(
             runtime->context, (std::string("ctx.load_local: ") + reason).c_str());
         return emma_value(nullptr);
@@ -3926,8 +3913,8 @@ int32_t teardown_resource(emma_plugin_runtime& runtime,
     switch (resource.kind) {
     case emma_plugin_runtime::resource_kind::ui_panel: {
         auto bundle = std::static_pointer_cast<emma_panel_bundle>(resource.attachment);
-        status = sao::plugins::loader::sao_plugins_ctx_unregister_ui_panel(
-            runtime.context, resource.key.c_str());
+        status = sao::plugins::loader::sao_plugins_ctx_unregister_ui_panel(runtime.context,
+                                                                           resource.key.c_str());
         if (!teardown_status_is_complete(status))
             return status;
         retire_callback(bundle->render);
@@ -3977,8 +3964,7 @@ int32_t teardown_resource(emma_plugin_runtime& runtime,
         break;
     }
     case emma_plugin_runtime::resource_kind::compositor_input: {
-        auto bundle =
-            std::static_pointer_cast<emma_compositor_input_bundle>(resource.attachment);
+        auto bundle = std::static_pointer_cast<emma_compositor_input_bundle>(resource.attachment);
         if (bundle != nullptr) {
             status = quiesce_callback(bundle->mouse_button);
             if (status == SAO_OK)
@@ -3994,8 +3980,8 @@ int32_t teardown_resource(emma_plugin_runtime& runtime,
             }
             // 显式 detach, provider 不再回调旧 bundle (bundle 随资源释放)。
             status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_input(
-                runtime.context, bundle->layer_name.c_str(), nullptr, nullptr, nullptr,
-                nullptr, nullptr);
+                runtime.context, bundle->layer_name.c_str(), nullptr, nullptr, nullptr, nullptr,
+                nullptr);
             if (!teardown_status_is_complete(status)) {
                 resume_callback(resource.callback);
                 resume_callback(bundle->mouse_button);
@@ -4065,9 +4051,9 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     wrapper->items.emplace("web_path", path_utf8(runtime->plugin_root / "web"));
     wrapper->items.emplace("assets_path", path_utf8(runtime->plugin_root / "assets"));
     wrapper->items.emplace("time", make_host_callable("ctx.time", [](std::vector<emma_value>) {
-        const auto now = std::chrono::system_clock::now().time_since_epoch();
-        return emma_value(std::chrono::duration<double>(now).count());
-    }));
+                               const auto now = std::chrono::system_clock::now().time_since_epoch();
+                               return emma_value(std::chrono::duration<double>(now).count());
+                           }));
     wrapper->items.emplace(
         "log", make_host_callable("ctx.log", [context](std::vector<emma_value> arguments) {
             if (arguments.empty()) {
@@ -4084,30 +4070,40 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
         }));
     wrapper->items.emplace(
         "register_ui_panel",
-        make_host_callable("ctx.register_ui_panel", [runtime, context](std::vector<emma_value> arguments) {
+        make_host_callable("ctx.register_ui_panel", [runtime,
+                                                     context](std::vector<emma_value> arguments) {
             const std::string panel_id = require_panel_arguments(arguments);
             const std::string metadata = serialize_value_or_throw(arguments[1]);
             emma_plugin_runtime::owned_resource existing;
-            if (find_owned_resource(*runtime, [&panel_id](const auto& resource) {
-                    return resource.kind == emma_plugin_runtime::resource_kind::ui_panel &&
-                           resource.key == panel_id;
-                }, existing))
-                throw_context_status("ctx.register_ui_panel", sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS);
+            if (find_owned_resource(
+                    *runtime,
+                    [&panel_id](const auto& resource) {
+                        return resource.kind == emma_plugin_runtime::resource_kind::ui_panel &&
+                               resource.key == panel_id;
+                    },
+                    existing))
+                throw_context_status("ctx.register_ui_panel",
+                                     sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS);
             auto bundle = std::make_shared<emma_panel_bundle>();
             bundle->enable_scoped = runtime->enabling;
             if (arguments.size() > 2 && !std::holds_alternative<std::nullptr_t>(arguments[2]))
-                bundle->render = make_callback(runtime, require_callable(arguments, 2, "ctx.register_ui_panel"));
+                bundle->render =
+                    make_callback(runtime, require_callable(arguments, 2, "ctx.register_ui_panel"));
             if (arguments.size() > 3 && !std::holds_alternative<std::nullptr_t>(arguments[3]))
-                bundle->action = make_callback(runtime, require_callable(arguments, 3, "ctx.register_ui_panel"));
-            const uint64_t resource = add_owned_resource(*runtime,
-                emma_plugin_runtime::resource_kind::ui_panel, 0, panel_id, {}, bundle);
+                bundle->action =
+                    make_callback(runtime, require_callable(arguments, 3, "ctx.register_ui_panel"));
+            const uint64_t resource = add_owned_resource(
+                *runtime, emma_plugin_runtime::resource_kind::ui_panel, 0, panel_id, {}, bundle);
             const int32_t status = sao::plugins::loader::sao_plugins_ctx_register_ui_panel(
                 context, panel_id.c_str(), metadata.c_str(),
                 bundle->render ? panel_render_bridge : nullptr,
                 bundle->action ? panel_action_bridge : nullptr, bundle.get());
             if (status != SAO_OK) {
-                const int32_t cleanup = status == sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS ?
-                    SAO_OK : sao::plugins::loader::sao_plugins_ctx_unregister_ui_panel(context, panel_id.c_str());
+                const int32_t cleanup =
+                    status == sao::plugins::loader::SAO_PLUGINS_ERR_ALREADY_EXISTS
+                        ? SAO_OK
+                        : sao::plugins::loader::sao_plugins_ctx_unregister_ui_panel(
+                              context, panel_id.c_str());
                 if (cleanup == SAO_OK || cleanup == SAO_ERR_HANDLE_INVALID)
                     (void)remove_owned_resource(*runtime, resource);
                 throw_context_status("ctx.register_ui_panel", status);
@@ -4216,10 +4212,9 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
         }));
     wrapper->items.emplace(
         "subscribe_once",
-        make_host_callable("ctx.subscribe_once",
-                           [subscribe](std::vector<emma_value> arguments) {
-                               return subscribe(std::move(arguments), true);
-                           }));
+        make_host_callable("ctx.subscribe_once", [subscribe](std::vector<emma_value> arguments) {
+            return subscribe(std::move(arguments), true);
+        }));
     wrapper->items.emplace(
         "unsubscribe",
         make_host_callable("ctx.unsubscribe", [runtime](std::vector<emma_value> arguments) {
@@ -4238,8 +4233,8 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                     },
                     resource)) {
                 // 台账无此订阅：幂等清除
-                const int32_t status = sao::plugins::loader::sao_plugins_ctx_unsubscribe(
-                    runtime->context, token);
+                const int32_t status =
+                    sao::plugins::loader::sao_plugins_ctx_unsubscribe(runtime->context, token);
                 if (!teardown_status_is_complete(status))
                     throw_context_status("ctx.unsubscribe", status);
                 return emma_value(false);
@@ -4306,9 +4301,8 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                     },
                     resource)) {
                 // 台账无此 hotkey：幂等清除
-                const int32_t status =
-                    sao::plugins::loader::sao_plugins_ctx_unregister_hotkey(runtime->context,
-                                                                            id.c_str());
+                const int32_t status = sao::plugins::loader::sao_plugins_ctx_unregister_hotkey(
+                    runtime->context, id.c_str());
                 if (!teardown_status_is_complete(status))
                     throw_context_status("ctx.unregister_hotkey", status);
                 return emma_value(false);
@@ -4369,16 +4363,14 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     };
     wrapper->items.emplace(
         "set_interval",
-        make_host_callable("ctx.set_interval",
-                           [register_timer](std::vector<emma_value> arguments) {
-                               return register_timer(std::move(arguments), false);
-                           }));
+        make_host_callable("ctx.set_interval", [register_timer](std::vector<emma_value> arguments) {
+            return register_timer(std::move(arguments), false);
+        }));
     wrapper->items.emplace(
         "set_timeout",
-        make_host_callable("ctx.set_timeout",
-                           [register_timer](std::vector<emma_value> arguments) {
-                               return register_timer(std::move(arguments), true);
-                           }));
+        make_host_callable("ctx.set_timeout", [register_timer](std::vector<emma_value> arguments) {
+            return register_timer(std::move(arguments), true);
+        }));
     wrapper->items.emplace(
         "clear_timer",
         make_host_callable("ctx.clear_timer", [runtime](std::vector<emma_value> arguments) {
@@ -4392,9 +4384,8 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                     },
                     resource)) {
                 // 台账无此 timer：幂等清除
-                const int32_t status =
-                    sao::plugins::loader::sao_plugins_ctx_clear_timer(runtime->context,
-                                                                      token.c_str());
+                const int32_t status = sao::plugins::loader::sao_plugins_ctx_clear_timer(
+                    runtime->context, token.c_str());
                 if (!teardown_status_is_complete(status))
                     throw_context_status("ctx.clear_timer", status);
                 return emma_value(false);
@@ -4479,18 +4470,23 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                 throw_context_status("ctx.set_overlay", SAO_ERR_INVALID_ARGUMENT);
             }
             const std::string spec = serialize_value_or_throw(arguments[1]);
+            emma_plugin_runtime::owned_resource existing;
+            const bool owned = find_owned_resource(
+                *runtime,
+                [&surface](const auto& resource) {
+                    return resource.kind == emma_plugin_runtime::resource_kind::overlay &&
+                           resource.key == surface;
+                },
+                existing);
+            const uint64_t reservation =
+                owned ? 0 : add_owned_resource(*runtime, emma_plugin_runtime::resource_kind::overlay,
+                                               0, surface);
             const int32_t status = sao::plugins::loader::sao_plugins_ctx_set_overlay(
                 runtime->context, surface.c_str(), spec.c_str());
             if (status != SAO_OK) {
+                if (reservation != 0)
+                    (void)remove_owned_resource(*runtime, reservation);
                 throw_context_status("ctx.set_overlay", status);
-            }
-            try {
-                (void)add_owned_resource(*runtime, emma_plugin_runtime::resource_kind::overlay, 0,
-                                         surface);
-            } catch (...) {
-                (void)sao::plugins::loader::sao_plugins_ctx_clear_overlay(runtime->context,
-                                                                          surface.c_str());
-                throw;
             }
             return emma_value(true);
         }));
@@ -4518,7 +4514,13 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
             if (!teardown_status_is_complete(status)) {
                 throw_context_status("ctx.clear_overlay", status);
             }
-            (void)remove_owned_resource(*runtime, resource.id);
+            {
+                std::lock_guard lock(runtime->resources_mutex);
+                std::erase_if(runtime->resources, [&surface](const auto& entry) {
+                    return entry.kind == emma_plugin_runtime::resource_kind::overlay &&
+                           entry.key == surface;
+                });
+            }
             return emma_value(true);
         }));
     wrapper->items.emplace(
@@ -4539,13 +4541,11 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     // ── 扩展 ctx 表面 (ctx_completion slice) ─────────────────────────────
 
     wrapper->items.emplace(
-        "should_stop",
-        make_host_callable("ctx.should_stop", [context](std::vector<emma_value>) {
+        "should_stop", make_host_callable("ctx.should_stop", [context](std::vector<emma_value>) {
             return emma_value(sao::plugins::loader::sao_plugins_ctx_should_stop(context));
         }));
     wrapper->items.emplace(
-        "get_snapshot",
-        make_host_callable("ctx.get_snapshot", [context](std::vector<emma_value>) {
+        "get_snapshot", make_host_callable("ctx.get_snapshot", [context](std::vector<emma_value>) {
             char* snapshot = nullptr;
             const int32_t status =
                 sao::plugins::loader::sao_plugins_ctx_get_snapshot(context, &snapshot);
@@ -4556,8 +4556,8 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
         make_host_callable("ctx.snapshot_value", [context](std::vector<emma_value> arguments) {
             const std::string path = require_string(arguments, 0, "ctx.snapshot_value");
             char* value = nullptr;
-            const int32_t status = sao::plugins::loader::sao_plugins_ctx_snapshot_value(
-                context, path.c_str(), &value);
+            const int32_t status =
+                sao::plugins::loader::sao_plugins_ctx_snapshot_value(context, path.c_str(), &value);
             if (status == SAO_ERR_HANDLE_INVALID && arguments.size() > 1) {
                 return arguments[1];
             }
@@ -4566,16 +4566,14 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     wrapper->items.emplace(
         "recent_events",
         make_host_callable("ctx.recent_events", [context](std::vector<emma_value> arguments) {
-            const int64_t raw_limit =
-                optional_integer_value(arguments, 0, 20, "ctx.recent_events");
-            const std::string topic =
-                optional_string_value(arguments, 1, {}, "ctx.recent_events");
+            const int64_t raw_limit = optional_integer_value(arguments, 0, 20, "ctx.recent_events");
+            const std::string topic = optional_string_value(arguments, 1, {}, "ctx.recent_events");
             if (raw_limit < 0 || raw_limit > std::numeric_limits<uint32_t>::max())
                 throw_context_status("ctx.recent_events", SAO_ERR_INVALID_ARGUMENT);
             char* events = nullptr;
             const int32_t status = sao::plugins::loader::sao_plugins_ctx_recent_events(
-                context, static_cast<uint32_t>(raw_limit),
-                topic.empty() ? nullptr : topic.c_str(), &events);
+                context, static_cast<uint32_t>(raw_limit), topic.empty() ? nullptr : topic.c_str(),
+                &events);
             return parse_owned_json(status, events, "ctx.recent_events");
         }));
 
@@ -4596,12 +4594,11 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
         return emma_value(std::move(function));
     };
     wrapper->items.emplace(
-        "on", make_host_callable(
-                  "ctx.on", [on_impl](std::vector<emma_value> arguments) {
-                      return on_impl(std::move(arguments));
-                  }));
+        "on", make_host_callable("ctx.on", [on_impl](std::vector<emma_value> arguments) {
+            return on_impl(std::move(arguments));
+        }));
     const auto on_topic = [subscribe](const char* topic,
-                                    std::vector<emma_value> arguments) -> emma_value {
+                                      std::vector<emma_value> arguments) -> emma_value {
         auto function = require_callable(arguments, 0, "ctx.on_topic");
         (void)subscribe({std::string(topic), emma_value(function)}, false);
         return emma_value(std::move(function));
@@ -4616,31 +4613,29 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     wrapper->items.emplace("on_skill", bind_on_topic("skill", "ctx.on_skill"));
     wrapper->items.emplace("on_boss", bind_on_topic("boss", "ctx.on_boss"));
     wrapper->items.emplace("on_snapshot", bind_on_topic("act_snapshot", "ctx.on_snapshot"));
-    wrapper->items.emplace(
-        "on_encounter_finalized",
-        bind_on_topic("encounter_finalized", "ctx.on_encounter_finalized"));
+    wrapper->items.emplace("on_encounter_finalized",
+                           bind_on_topic("encounter_finalized", "ctx.on_encounter_finalized"));
 
     // render hook
-    wrapper->items.emplace(
-        "register_render_hook",
-        make_host_callable("ctx.register_render_hook",
-                           [runtime](std::vector<emma_value> arguments) {
-                               return register_render_hook_impl(runtime, std::move(arguments));
-                           }));
-    wrapper->items.emplace(
-        "unregister_render_hook",
-        make_host_callable("ctx.unregister_render_hook",
-                           [runtime](std::vector<emma_value> arguments) {
-                               return unregister_render_hook_impl(runtime, std::move(arguments));
-                           }));
+    wrapper->items.emplace("register_render_hook",
+                           make_host_callable("ctx.register_render_hook",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return register_render_hook_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
+    wrapper->items.emplace("unregister_render_hook",
+                           make_host_callable("ctx.unregister_render_hook",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return unregister_render_hook_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
 
     // extension 注册族 (handler 仅留存 runtime.extension_handlers)
     const auto bind_extension = [runtime](const char* kind) {
         return make_host_callable(
             (std::string("ctx.register_") + kind).c_str(),
             [runtime, kind_string = std::string(kind)](std::vector<emma_value> arguments) {
-                return register_extension_impl(runtime, kind_string.c_str(),
-                                               std::move(arguments));
+                return register_extension_impl(runtime, kind_string.c_str(), std::move(arguments));
             });
     };
     wrapper->items.emplace("register_parser_adapter", bind_extension("parser_adapter"));
@@ -4649,12 +4644,12 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     wrapper->items.emplace("register_trigger_type", bind_extension("trigger_type"));
     wrapper->items.emplace("register_report_view", bind_extension("report_view"));
     wrapper->items.emplace("register_timer", bind_extension("timer"));
-    wrapper->items.emplace(
-        "register_data_source",
-        make_host_callable("ctx.register_data_source",
-                           [runtime](std::vector<emma_value> arguments) {
-                               return register_data_source_impl(runtime, std::move(arguments));
-                           }));
+    wrapper->items.emplace("register_data_source",
+                           make_host_callable("ctx.register_data_source",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return register_data_source_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
 
     // engine 句柄族 (int64 opaque handle)
     wrapper->items.emplace(
@@ -4681,25 +4676,23 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
             "has",
             make_host_callable("ctx.engine.has", [runtime](std::vector<emma_value> arguments) {
                 const std::string name = require_string(arguments, 0, "ctx.engine.has");
-                void* engine = sao::plugins::loader::sao_plugins_ctx_get_engine(
-                    runtime->context, name.c_str());
+                void* engine = sao::plugins::loader::sao_plugins_ctx_get_engine(runtime->context,
+                                                                                name.c_str());
                 return emma_value(engine != nullptr);
             }));
         // 反射引擎面 (binding_engine.h): engine.list() 目录枚举,
         // engine.on(channel, cb) 通用回调, catalog 每一条目一个命名
         // callable; 命名冲突时既有成员优先 (fail-closed 不覆盖)。
         engine_dict->items.emplace(
-            "list", make_host_callable("ctx.engine.list",
-                                       [runtime](std::vector<emma_value> arguments) {
-                                           return engine_list_impl(runtime, std::move(arguments));
-                                       }));
+            "list",
+            make_host_callable("ctx.engine.list", [runtime](std::vector<emma_value> arguments) {
+                return engine_list_impl(runtime, std::move(arguments));
+            }));
         engine_dict->items.emplace(
-            "on", make_host_callable("ctx.engine.on",
-                                     [runtime](std::vector<emma_value> arguments) {
-                                         return engine_on_impl(runtime, std::move(arguments));
-                                     }));
-        const size_t engine_catalog_count =
-            sao::plugins::sdk_binding::sdk_engine_catalog_size();
+            "on", make_host_callable("ctx.engine.on", [runtime](std::vector<emma_value> arguments) {
+                return engine_on_impl(runtime, std::move(arguments));
+            }));
+        const size_t engine_catalog_count = sao::plugins::sdk_binding::sdk_engine_catalog_size();
         for (size_t index = 0; index < engine_catalog_count; ++index) {
             const auto* desc = sao::plugins::sdk_binding::sdk_engine_catalog_at(index);
             if (desc == nullptr || desc->name == nullptr)
@@ -4709,12 +4702,10 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                 continue;
             const std::string label = "ctx.engine." + member;
             engine_dict->items.emplace(
-                member,
-                make_host_callable(label.c_str(),
-                                   [runtime, desc, label](std::vector<emma_value> arguments) {
-                                       return engine_named_call(runtime, desc, label.c_str(),
-                                                                std::move(arguments));
-                                   }));
+                member, make_host_callable(label.c_str(), [runtime, desc, label](
+                                                              std::vector<emma_value> arguments) {
+                    return engine_named_call(runtime, desc, label.c_str(), std::move(arguments));
+                }));
         }
         wrapper->items.emplace("engine", emma_value(std::move(engine_dict)));
     }
@@ -4753,25 +4744,27 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
         }));
     wrapper->items.emplace(
         "ensure_requirements",
-        make_host_callable("ctx.ensure_requirements",
-                           [runtime](std::vector<emma_value> arguments) {
-                               return ensure_requirements_impl(runtime, std::move(arguments));
-                           }));
+        make_host_callable("ctx.ensure_requirements", [runtime](std::vector<emma_value> arguments) {
+            return ensure_requirements_impl(runtime, std::move(arguments));
+        }));
 
     wrapper->items.emplace(
         "set_compositor_layer_mmf_source",
-        make_host_callable("ctx.set_compositor_layer_mmf_source",
+        make_host_callable(
+            "ctx.set_compositor_layer_mmf_source",
             [context](std::vector<emma_value> arguments) -> emma_value {
                 const char* method = "ctx.set_compositor_layer_mmf_source";
                 if (arguments.size() != 2)
                     throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
                 const auto name = require_string(arguments, 0, method);
                 const auto mmf = std::holds_alternative<std::nullptr_t>(arguments[1])
-                    ? std::string{} : require_string(arguments, 1, method);
+                                     ? std::string{}
+                                     : require_string(arguments, 1, method);
                 if (name.find('\0') != std::string::npos || mmf.find('\0') != std::string::npos)
                     throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
-                const int32_t status = sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_mmf_source(
-                    context, name.c_str(), mmf.empty() ? nullptr : mmf.c_str());
+                const int32_t status =
+                    sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_mmf_source(
+                        context, name.c_str(), mmf.empty() ? nullptr : mmf.c_str());
                 if (status != SAO_OK)
                     throw_context_status(method, status);
                 return true;
@@ -4779,44 +4772,52 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     wrapper->items.emplace(
         "set_compositor_layer_shared_texture_source",
         make_host_callable("ctx.set_compositor_layer_shared_texture_source",
-            [context](std::vector<emma_value> arguments) -> emma_value {
-                const char* method = "ctx.set_compositor_layer_shared_texture_source";
-                if (arguments.size() < 2 || arguments.size() > 4)
-                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
-                const auto name = require_string(arguments, 0, method);
-                const auto handle = static_cast<uint64_t>(require_integer(arguments, 1, method));
-                const int64_t width = arguments.size() > 2 ? require_integer(arguments, 2, method) : 0;
-                const int64_t height = arguments.size() > 3 ? require_integer(arguments, 3, method) : 0;
-                if (name.find('\0') != std::string::npos || width < 0 || height < 0 ||
-                    width > std::numeric_limits<uint32_t>::max() ||
-                    height > std::numeric_limits<uint32_t>::max() ||
-                    (handle != 0 && (width == 0 || height == 0)))
-                    throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
-                const int32_t status =
-                    sao::plugins::loader::sao_plugins_ctx_set_compositor_layer_shared_texture_source(
-                        context, name.c_str(), handle, handle == 0 ? 0 : static_cast<uint32_t>(width),
-                        handle == 0 ? 0 : static_cast<uint32_t>(height));
-                if (status != SAO_OK)
-                    throw_context_status(method, status);
-                return true;
-            }));
+                           [context](std::vector<emma_value> arguments) -> emma_value {
+                               const char* method =
+                                   "ctx.set_compositor_layer_shared_texture_source";
+                               if (arguments.size() < 2 || arguments.size() > 4)
+                                   throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                               const auto name = require_string(arguments, 0, method);
+                               const auto handle =
+                                   static_cast<uint64_t>(require_integer(arguments, 1, method));
+                               const int64_t width =
+                                   arguments.size() > 2 ? require_integer(arguments, 2, method) : 0;
+                               const int64_t height =
+                                   arguments.size() > 3 ? require_integer(arguments, 3, method) : 0;
+                               if (name.find('\0') != std::string::npos || width < 0 ||
+                                   height < 0 || width > std::numeric_limits<uint32_t>::max() ||
+                                   height > std::numeric_limits<uint32_t>::max() ||
+                                   (handle != 0 && (width == 0 || height == 0)))
+                                   throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
+                               const int32_t status = sao::plugins::loader::
+                                   sao_plugins_ctx_set_compositor_layer_shared_texture_source(
+                                       context, name.c_str(), handle,
+                                       handle == 0 ? 0 : static_cast<uint32_t>(width),
+                                       handle == 0 ? 0 : static_cast<uint32_t>(height));
+                               if (status != SAO_OK)
+                                   throw_context_status(method, status);
+                               return true;
+                           }));
     wrapper->items.emplace(
         "compositor_gpu_interop_available",
-        make_host_callable("ctx.compositor_gpu_interop_available",
+        make_host_callable(
+            "ctx.compositor_gpu_interop_available",
             [context](std::vector<emma_value> arguments) -> emma_value {
                 const char* method = "ctx.compositor_gpu_interop_available";
                 if (!arguments.empty())
                     throw_context_status(method, SAO_ERR_INVALID_ARGUMENT);
                 bool available = false;
                 const int32_t status =
-                    sao::plugins::loader::sao_plugins_ctx_compositor_gpu_interop_available(context, &available);
+                    sao::plugins::loader::sao_plugins_ctx_compositor_gpu_interop_available(
+                        context, &available);
                 if (status != SAO_OK)
                     throw_context_status(method, status);
                 return available;
             }));
     wrapper->items.emplace(
         "compositor_layer_shared_texture_active",
-        make_host_callable("ctx.compositor_layer_shared_texture_active",
+        make_host_callable(
+            "ctx.compositor_layer_shared_texture_active",
             [context](std::vector<emma_value> arguments) -> emma_value {
                 const char* method = "ctx.compositor_layer_shared_texture_active";
                 if (arguments.size() != 1)
@@ -4834,45 +4835,42 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
             }));
 
     // compositor layer 族
-    wrapper->items.emplace(
-        "create_compositor_layer",
-        make_host_callable("ctx.create_compositor_layer",
-                           [runtime](std::vector<emma_value> arguments) {
-                               return create_compositor_layer_impl(runtime, std::move(arguments));
-                           }));
-    wrapper->items.emplace(
-        "upload_compositor_frame",
-        make_host_callable("ctx.upload_compositor_frame",
-                           [runtime](std::vector<emma_value> arguments) {
-                               return upload_compositor_frame_impl(runtime, std::move(arguments));
-                           }));
-    wrapper->items.emplace(
-        "set_compositor_layer_position",
-        make_host_callable(
-            "ctx.set_compositor_layer_position",
-            [runtime](std::vector<emma_value> arguments) {
-                return set_compositor_layer_position_impl(runtime, std::move(arguments));
-            }));
-    wrapper->items.emplace(
-        "set_compositor_layer_visible",
-        make_host_callable(
-            "ctx.set_compositor_layer_visible",
-            [runtime](std::vector<emma_value> arguments) {
-                return set_compositor_layer_visible_impl(runtime, std::move(arguments));
-            }));
-    wrapper->items.emplace(
-        "set_compositor_layer_input",
-        make_host_callable(
-            "ctx.set_compositor_layer_input",
-            [runtime](std::vector<emma_value> arguments) {
-                return set_compositor_layer_input_impl(runtime, std::move(arguments));
-            }));
-    wrapper->items.emplace(
-        "destroy_compositor_layer",
-        make_host_callable("ctx.destroy_compositor_layer",
-                           [runtime](std::vector<emma_value> arguments) {
-                               return destroy_compositor_layer_impl(runtime, std::move(arguments));
-                           }));
+    wrapper->items.emplace("create_compositor_layer",
+                           make_host_callable("ctx.create_compositor_layer",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return create_compositor_layer_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
+    wrapper->items.emplace("upload_compositor_frame",
+                           make_host_callable("ctx.upload_compositor_frame",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return upload_compositor_frame_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
+    wrapper->items.emplace("set_compositor_layer_position",
+                           make_host_callable("ctx.set_compositor_layer_position",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return set_compositor_layer_position_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
+    wrapper->items.emplace("set_compositor_layer_visible",
+                           make_host_callable("ctx.set_compositor_layer_visible",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return set_compositor_layer_visible_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
+    wrapper->items.emplace("set_compositor_layer_input",
+                           make_host_callable("ctx.set_compositor_layer_input",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return set_compositor_layer_input_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
+    wrapper->items.emplace("destroy_compositor_layer",
+                           make_host_callable("ctx.destroy_compositor_layer",
+                                              [runtime](std::vector<emma_value> arguments) {
+                                                  return destroy_compositor_layer_impl(
+                                                      runtime, std::move(arguments));
+                                              }));
 
     wrapper->items.emplace(
         "load_local",
@@ -4884,8 +4882,7 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
     {
         auto ui_dict = std::make_shared<emma_dict>();
         size_t ui_count = 0;
-        const char* const* ui_methods =
-            sao::plugins::script_ctx::script_ui_methods(&ui_count);
+        const char* const* ui_methods = sao::plugins::script_ctx::script_ui_methods(&ui_count);
         for (size_t index = 0; index < ui_count; ++index) {
             const std::string method(ui_methods[index]);
             ui_dict->items.emplace(
@@ -4911,8 +4908,8 @@ emma_value make_native_context(emma_plugin_runtime* runtime) {
                         }
                         json node;
                         std::string error;
-                        if (!sao::plugins::script_ctx::script_ui_build(
-                                method.c_str(), args_json, node, error)) {
+                        if (!sao::plugins::script_ctx::script_ui_build(method.c_str(), args_json,
+                                                                       node, error)) {
                             throw_context_message(("ctx.ui." + method).c_str(),
                                                   SAO_ERR_INVALID_ARGUMENT,
                                                   error.empty() ? "ui build failed" : error);
@@ -4969,14 +4966,13 @@ int32_t install_context(emma_plugin_runtime* plugin, loader_context_t* context) 
         auto native_dictionary = std::get<std::shared_ptr<emma_dict>>(native_context);
         if (dictionary == nullptr || *dictionary == nullptr)
             return SAO_ERR_INVALID_ARGUMENT;
-        constexpr std::array<std::string_view, 3> core_callables{
-            "log", "register_ui_panel", "register_menu_category"};
+        constexpr std::array<std::string_view, 3> core_callables{"log", "register_ui_panel",
+                                                                 "register_menu_category"};
         for (const auto& [name, value] : (*dictionary)->items) {
             if (name == "plugin_id" || name == "path")
                 continue;
-            const bool core =
-                std::find(core_callables.begin(), core_callables.end(), name) !=
-                core_callables.end();
+            const bool core = std::find(core_callables.begin(), core_callables.end(), name) !=
+                              core_callables.end();
             if (core) {
                 const auto* function = std::get_if<std::shared_ptr<callable>>(&value);
                 if (function == nullptr || *function == nullptr ||
@@ -5148,16 +5144,16 @@ emma_plugin_runtime::~emma_plugin_runtime() {
     for (auto& resource : resources) {
         switch (resource.kind) {
         case resource_kind::data_source:
-            if (auto bundle = std::static_pointer_cast<emma_data_source_bundle>(
-                    resource.attachment)) {
+            if (auto bundle =
+                    std::static_pointer_cast<emma_data_source_bundle>(resource.attachment)) {
                 bundle->runtime = nullptr;
                 bundle->start.reset();
                 bundle->stop.reset();
             }
             break;
         case resource_kind::compositor_input:
-            if (auto input = std::static_pointer_cast<emma_compositor_input_bundle>(
-                    resource.attachment)) {
+            if (auto input =
+                    std::static_pointer_cast<emma_compositor_input_bundle>(resource.attachment)) {
                 input->runtime = nullptr;
                 input->cursor_pos.reset();
                 input->mouse_button.reset();
@@ -5363,7 +5359,9 @@ sao_plugins_emma_call_on_enable(emma_plugin_handle_t plugin) {
             runtime.enabling = true;
             struct EnableScope {
                 emma_plugin_runtime& runtime;
-                ~EnableScope() { runtime.enabling = false; }
+                ~EnableScope() {
+                    runtime.enabling = false;
+                }
             } scope{runtime};
             int32_t status = call_named(&runtime, "on_enable", {}, nullptr, true);
             if (status == SAO_OK)
@@ -5392,9 +5390,12 @@ sao_plugins_emma_call_on_disable(emma_plugin_handle_t plugin) {
         return SAO_ERR_HANDLE_INVALID;
     try {
         return with_direct_plugin(plugin, [](emma_plugin_runtime& runtime) {
-            const int32_t status = call_named(&runtime, "on_disable", {}, nullptr, true);
+            emma_value result = nullptr;
+            const int32_t status = call_named(&runtime, "on_disable", {}, &result, true);
             if (status != SAO_OK)
                 return status;
+            if (std::holds_alternative<bool>(result) && !std::get<bool>(result))
+                return sao::plugins::loader::SAO_PLUGINS_ERR_BUSY;
             const int32_t action_status = remove_enable_action(runtime);
             const int32_t menu_status = remove_enable_menus(runtime);
             const int32_t panel_status = remove_enable_panels(runtime);

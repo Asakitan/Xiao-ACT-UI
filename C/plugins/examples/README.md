@@ -1,5 +1,13 @@
 # examples/ — 五种插件语言与运行模式示例
 
+插件作者可从原生 [指南插件入口](../../launcher/docs/html/index.html#plugin-api) 进入
+[公共 API 全集](../../launcher/docs/html/plugin-api-reference.html) 与
+[Python](../../launcher/docs/html/plugin-python.html)、[Lua](../../launcher/docs/html/plugin-lua.html)、
+[Emma](../../launcher/docs/html/plugin-emma.html)、[AngelScript](../../launcher/docs/html/plugin-angelscript.html)、
+[C#](../../launcher/docs/html/plugin-csharp.html) 各语言手册。公共页包含全部 22 个
+声明式 UI 构造器、126 个反射接口与宿主 ctx 对照，示例源码是对应运行模式的
+具体调用参考；CPython 示例保存 on_load 注入的 ctx 供后续回调使用。
+
 **不参与 build** —— 顶层 ``plugins/CMakeLists.txt`` **没有** ``add_subdirectory(examples)``。
 这些子目录只作为**运行时被 ``loader/plugin_scanner`` 扫描的骨架**, 让插件作者
 对齐目录布局。

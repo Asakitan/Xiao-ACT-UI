@@ -29,15 +29,15 @@
 #include "sao/plugins/loader/entity_provider.h"
 #include "sao/plugins/loader/loader_status.h"
 #include "sao/plugins/loader/plugin_context.h"
-#include "sao/plugins/python_host/py_host.h"
 #include "sao/plugins/python_host/py_error.h"
-#include "sao/plugins/sdk_binding/binding_common.h"
+#include "sao/plugins/python_host/py_host.h"
 #include "sao/plugins/script_ctx/menu_navigation.h"
+#include "sao/plugins/sdk_binding/binding_common.h"
 #include "sao/sdk/sao_sdk.h"
 
 #if defined(SAO_PYHOST_HAS_CTX_SURFACE)
-#include "sao/plugins/script_ctx/script_ui.h"
 #include "sao/plugins/script_ctx/runtime_bridge.h"
+#include "sao/plugins/script_ctx/script_ui.h"
 #endif
 
 #if defined(SAO_HAS_PYTHON_EMBED)
@@ -48,9 +48,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -175,24 +175,24 @@ struct PluginContextObject {
     void* opaque_handle;                      // SaoSdkContext* (borrowed)
     loader::plugin_context_t* loader_context; // loader-owned canonical ctx
     bool loader_context_lease_held;
-    PyObject* plugin_id;                      // str
-    PyObject* base_dir;                       // str
-    PyObject* assets_path;                    // str
-    PyObject* web_path;                       // str
-    PyObject* panels;                         // list[dict]
-    PyObject* hotkeys;                        // list[dict]
-    PyObject* subscriptions;                  // list[dict]
-    PyObject* published;                      // list[dict]  (emit / publish 记账)
-    PyObject* logs;                           // list[dict]  (log_info/warn/error 记账)
-    PyObject* timers;                         // list[dict]  (set_interval/timeout)
-    PyObject* notifications;                  // list[dict]  (notify 记账)
-    PyObject* settings;                       // dict[str, obj]
-    PyObject* menus;                          // list[dict]  (legacy menu categories)
-    PyObject* subscription_tokens;            // dict[str, dict]
-    PyObject* timer_tokens;                   // dict[str, dict]
-    PyObject* notification_tokens;            // dict[str, dict]
-    PyObject* engines;                        // dict[str, object]
-    PyObject* extras;                         // dict (插件塞的额外属性; ctx.engine.owner 等)
+    PyObject* plugin_id;           // str
+    PyObject* base_dir;            // str
+    PyObject* assets_path;         // str
+    PyObject* web_path;            // str
+    PyObject* panels;              // list[dict]
+    PyObject* hotkeys;             // list[dict]
+    PyObject* subscriptions;       // list[dict]
+    PyObject* published;           // list[dict]  (emit / publish 记账)
+    PyObject* logs;                // list[dict]  (log_info/warn/error 记账)
+    PyObject* timers;              // list[dict]  (set_interval/timeout)
+    PyObject* notifications;       // list[dict]  (notify 记账)
+    PyObject* settings;            // dict[str, obj]
+    PyObject* menus;               // list[dict]  (legacy menu categories)
+    PyObject* subscription_tokens; // dict[str, dict]
+    PyObject* timer_tokens;        // dict[str, dict]
+    PyObject* notification_tokens; // dict[str, dict]
+    PyObject* engines;             // dict[str, object]
+    PyObject* extras;              // dict (插件塞的额外属性; ctx.engine.owner 等)
     // 记录 Python 侧引用的 callback (subscribe / hotkey / render / on_action),
     // 让 unload 时统一 DECREF。
     PyObject* callback_refs; // list[obj]
@@ -674,8 +674,8 @@ int32_t release_native_bridges(PluginContextObject* self) {
         case Resource::Kind::event: {
             auto* bridge = static_cast<NativeEventBridge*>(resource.value);
             if (bridge->registered && self->loader_context != nullptr && bridge->token != 0) {
-                status = loader::sao_plugins_ctx_unsubscribe(
-                    self->loader_context, static_cast<uint32_t>(bridge->token));
+                status = loader::sao_plugins_ctx_unsubscribe(self->loader_context,
+                                                             static_cast<uint32_t>(bridge->token));
                 complete = loader_unregister_complete(status);
             } else if (bridge->registered && sdk != nullptr && bridge->token != 0) {
                 status = sao_sdk_unsubscribe_event(sdk, bridge->token);
@@ -719,8 +719,7 @@ int32_t release_native_bridges(PluginContextObject* self) {
             } else if (bridge->registered && sdk != nullptr && bridge->sdk_token != 0) {
                 status = sao_sdk_notify_dismiss(sdk, bridge->sdk_token);
                 complete = sdk_unregister_complete(status);
-            } else if (bridge->registered &&
-                       (bridge->uses_loader || bridge->sdk_token != 0)) {
+            } else if (bridge->registered && (bridge->uses_loader || bridge->sdk_token != 0)) {
                 status = SAO_ERR_HANDLE_INVALID;
                 complete = false;
             }
@@ -893,15 +892,19 @@ void clear_callback_ledgers(PluginContextObject* self) {
     }
 }
 
-PyObject* json_stringify(PyObject* value);
+PyObject* json_stringify(PyObject* value, bool overlay_budget = false);
 
 struct PreservePythonError {
     PyObject* type = nullptr;
     PyObject* value = nullptr;
     PyObject* traceback = nullptr;
 
-    PreservePythonError() { PyErr_Fetch(&type, &value, &traceback); }
-    ~PreservePythonError() { PyErr_Restore(type, value, traceback); }
+    PreservePythonError() {
+        PyErr_Fetch(&type, &value, &traceback);
+    }
+    ~PreservePythonError() {
+        PyErr_Restore(type, value, traceback);
+    }
     PreservePythonError(const PreservePythonError&) = delete;
     PreservePythonError& operator=(const PreservePythonError&) = delete;
 };
@@ -919,7 +922,8 @@ void log_panel_error(NativePanelBridge* bridge) noexcept {
     try {
         if (traceback != nullptr && bridge->owner != nullptr &&
             bridge->owner->loader_context != nullptr) {
-            const std::string message = "panel render failed [" + bridge->panel_id + "]: " + traceback;
+            const std::string message =
+                "panel render failed [" + bridge->panel_id + "]: " + traceback;
             loader::sao_plugins_ctx_log(bridge->owner->loader_context, message.c_str());
         }
     } catch (...) {
@@ -957,9 +961,11 @@ bool render_native_panel(NativePanelBridge* bridge, PyObject* payload) {
         return false;
     Py_ssize_t size = 0;
     const char* text = PyUnicode_AsUTF8AndSize(encoded, &size);
-    const sao_sdk_status_t status = text == nullptr ? SAO_SDK_ERR_INVALID_ARGUMENT :
-        sao_sdk_ui_set_panel_spec(bridge->sdk, bridge->panel,
-                                  reinterpret_cast<const uint8_t*>(text), static_cast<size_t>(size));
+    const sao_sdk_status_t status =
+        text == nullptr ? SAO_SDK_ERR_INVALID_ARGUMENT
+                        : sao_sdk_ui_set_panel_spec(bridge->sdk, bridge->panel,
+                                                    reinterpret_cast<const uint8_t*>(text),
+                                                    static_cast<size_t>(size));
     {
         PreservePythonError error;
         Py_DECREF(encoded);
@@ -973,8 +979,7 @@ bool render_native_panel(NativePanelBridge* bridge, PyObject* payload) {
 }
 
 void SAO_SDK_CALL native_panel_action(const char* action_key_utf8, const uint8_t* action_json,
-                                      size_t action_json_size,
-                                      void* user_data) {
+                                      size_t action_json_size, void* user_data) {
     auto* bridge = static_cast<NativePanelBridge*>(user_data);
     if (bridge == nullptr || !enter_callback(bridge->gate)) {
         return;
@@ -984,22 +989,30 @@ void SAO_SDK_CALL native_panel_action(const char* action_key_utf8, const uint8_t
     if (bridge->owner_thread != std::this_thread::get_id()) {
         PyErr_SetString(PyExc_RuntimeError, "panel action requires the owner thread");
     } else if ((action_json == nullptr && action_json_size != 0) ||
-        action_json_size > static_cast<size_t>(PY_SSIZE_T_MAX)) {
+               action_json_size > static_cast<size_t>(PY_SSIZE_T_MAX)) {
         PyErr_SetString(PyExc_ValueError, "invalid panel action JSON payload");
     } else {
         PyObject* module = PyImport_ImportModule("json");
         PyObject* loads = module == nullptr ? nullptr : PyObject_GetAttrString(module, "loads");
         Py_XDECREF(module);
-        PyObject* text = loads == nullptr ? nullptr : PyUnicode_DecodeUTF8(
-            action_json_size == 0 ? "{}" : reinterpret_cast<const char*>(action_json),
-            action_json_size == 0 ? 2 : static_cast<Py_ssize_t>(action_json_size), "strict");
+        PyObject* text =
+            loads == nullptr
+                ? nullptr
+                : PyUnicode_DecodeUTF8(
+                      action_json_size == 0 ? "{}" : reinterpret_cast<const char*>(action_json),
+                      action_json_size == 0 ? 2 : static_cast<Py_ssize_t>(action_json_size),
+                      "strict");
         body = text == nullptr ? nullptr : PyObject_CallOneArg(loads, text);
         Py_XDECREF(text);
         Py_XDECREF(loads);
     }
-    PyObject* result = body == nullptr ? nullptr :
-        (bridge->callback == nullptr ? Py_NewRef(Py_None) : PyObject_CallFunction(
-            bridge->callback, "sO", action_key_utf8 == nullptr ? "" : action_key_utf8, body));
+    PyObject* result = body == nullptr
+                           ? nullptr
+                           : (bridge->callback == nullptr
+                                  ? Py_NewRef(Py_None)
+                                  : PyObject_CallFunction(
+                                        bridge->callback, "sO",
+                                        action_key_utf8 == nullptr ? "" : action_key_utf8, body));
     if (result != nullptr)
         (void)render_native_panel(bridge, body);
     {
@@ -1184,7 +1197,7 @@ bool parse_hotkey(const char* text_utf8, uint32_t* out_key, uint32_t* out_modifi
     return *out_key != 0;
 }
 
-PyObject* json_stringify(PyObject* value) {
+PyObject* json_stringify(PyObject* value, bool overlay_budget) {
     PyObject* json_module = PyImport_ImportModule("json");
     if (json_module == nullptr)
         return nullptr;
@@ -1208,9 +1221,12 @@ PyObject* json_stringify(PyObject* value) {
             Py_DECREF(result);
             return nullptr;
         }
-        if (length <= 0 ||
-            !sdk_binding::sao_plugins_binding_validate_json_text(
-                reinterpret_cast<const uint8_t*>(text), static_cast<size_t>(length))) {
+        constexpr size_t kMaximumOverlayJsonBytes = 8U * 1024U * 1024U;
+        const bool valid = overlay_budget ? static_cast<size_t>(length) <= kMaximumOverlayJsonBytes
+                                          : sdk_binding::sao_plugins_binding_validate_json_text(
+                                                reinterpret_cast<const uint8_t*>(text),
+                                                static_cast<size_t>(length));
+        if (length <= 0 || !valid) {
             Py_DECREF(result);
             PyErr_SetString(PyExc_ValueError, "JSON exceeds the shared complexity or UTF-8 budget");
             return nullptr;
@@ -1356,7 +1372,8 @@ bool unicode_value(PyObject* value, bool required, std::string& out) {
 
 bool mapping_string(PyObject* mapping, const char* key, bool required, std::string& out) {
     PyObject* value = mapping_item(mapping, key);
-    if (value == nullptr && PyErr_Occurred()) return false;
+    if (value == nullptr && PyErr_Occurred())
+        return false;
     const bool ok = unicode_value(value, required, out);
     Py_XDECREF(value);
     return ok;
@@ -1365,7 +1382,8 @@ bool mapping_string(PyObject* mapping, const char* key, bool required, std::stri
 bool mapping_flag(PyObject* mapping, const char* key, bool fallback, bool& out) {
     PyObject* value = mapping_item(mapping, key);
     if (value == nullptr) {
-        if (PyErr_Occurred()) return false;
+        if (PyErr_Occurred())
+            return false;
         out = fallback;
         return true;
     }
@@ -1379,7 +1397,8 @@ bool mapping_flag(PyObject* mapping, const char* key, bool fallback, bool& out) 
 
 bool menu_payload(PyObject* mapping, std::string& out) {
     PyObject* encoded = mapping_item(mapping, "payload_json");
-    if (encoded == nullptr && PyErr_Occurred()) return false;
+    if (encoded == nullptr && PyErr_Occurred())
+        return false;
     if (encoded != nullptr) {
         const bool ok = unicode_value(encoded, false, out);
         Py_DECREF(encoded);
@@ -1394,7 +1413,8 @@ bool menu_payload(PyObject* mapping, std::string& out) {
     }
     PyObject* payload = mapping_item(mapping, "payload");
     if (payload == nullptr) {
-        if (PyErr_Occurred()) return false;
+        if (PyErr_Occurred())
+            return false;
         out = "{}";
         return true;
     }
@@ -1464,24 +1484,30 @@ bool build_menu_snapshot(NativeMenuBridge* bridge, const menu_nav::State* select
     bridge->building = true;
     struct BuildGuard {
         bool& active;
-        ~BuildGuard() { active = false; }
+        ~BuildGuard() {
+            active = false;
+        }
     } guard{bridge->building};
     auto navigation = selected ? *selected : bridge->navigation;
     const auto desired_path = selection ? *selection : navigation.path();
     MenuPyRef result(PyObject_CallNoArgs(bridge->builder));
-    if (!result) return false;
+    if (!result)
+        return false;
     std::vector<menu_nav::Node> tree;
     std::vector<menu_nav::Node*> tree_nodes;
     tree_nodes.reserve(kMaximumMenuRows);
     struct TreeGuard {
         std::vector<menu_nav::Node*>& nodes;
         ~TreeGuard() {
-            for (auto node = nodes.rbegin(); node != nodes.rend(); ++node) (*node)->children.clear();
+            for (auto node = nodes.rbegin(); node != nodes.rend(); ++node)
+                (*node)->children.clear();
         }
     } tree_guard{tree_nodes};
     struct Actions {
         std::unordered_map<std::string, PyObject*> values;
-        ~Actions() { clear_action_candidates(values); }
+        ~Actions() {
+            clear_action_candidates(values);
+        }
     } actions;
     for (const auto& [id, callback] : bridge->actions) {
         actions.values.emplace(id, callback);
@@ -1507,10 +1533,8 @@ bool build_menu_snapshot(NativeMenuBridge* bridge, const menu_nav::State* select
         return false;
     };
     const auto push = [&](MenuPyRef source, MenuPyRef owner, MenuPyRef builder,
-                          std::vector<menu_nav::Node>* nodes, std::string scope,
-                          bool on_path) {
-        if (ancestors.contains(source.get()) ||
-            (owner && ancestors.contains(owner.get())) ||
+                          std::vector<menu_nav::Node>* nodes, std::string scope, bool on_path) {
+        if (ancestors.contains(source.get()) || (owner && ancestors.contains(owner.get())) ||
             (builder && ancestors.contains(builder.get())))
             return fail("cyclic menu sequence, mapping or builder");
         MenuPyRef sequence;
@@ -1518,78 +1542,109 @@ bool build_menu_snapshot(NativeMenuBridge* bridge, const menu_nav::State* select
             const auto size = PySequence_Fast_GET_SIZE(source.get());
             if (size < 0 || static_cast<size_t>(size) > kMaximumMenuRows - total_nodes)
                 return fail("menu node budget exceeded");
-            sequence.reset(PyList_Check(source.get()) ? PyList_AsTuple(source.get()) : Py_NewRef(source.get()));
+            sequence.reset(PyList_Check(source.get()) ? PyList_AsTuple(source.get())
+                                                      : Py_NewRef(source.get()));
         } else {
             MenuPyRef iterator(PyObject_GetIter(source.get()));
-            if (!iterator) return false;
+            if (!iterator)
+                return false;
             sequence.reset(PyList_New(0));
-            if (!sequence) return false;
+            if (!sequence)
+                return false;
             while (true) {
                 MenuPyRef value(PyIter_Next(iterator.get()));
-                if (!value) { if (PyErr_Occurred()) return false; break; }
-                if (static_cast<size_t>(PyList_GET_SIZE(sequence.get())) >= kMaximumMenuRows - total_nodes)
+                if (!value) {
+                    if (PyErr_Occurred())
+                        return false;
+                    break;
+                }
+                if (static_cast<size_t>(PyList_GET_SIZE(sequence.get())) >=
+                    kMaximumMenuRows - total_nodes)
                     return fail("menu node budget exceeded");
-                if (PyList_Append(sequence.get(), value.get()) != 0) return false;
+                if (PyList_Append(sequence.get(), value.get()) != 0)
+                    return false;
             }
         }
-        if (!sequence) return false;
+        if (!sequence)
+            return false;
         const auto count = PySequence_Fast_GET_SIZE(sequence.get());
         if (count < 0 || static_cast<size_t>(count) > kMaximumMenuRows - total_nodes)
             return fail("menu node budget exceeded");
         total_nodes += static_cast<size_t>(count);
         nodes->reserve(static_cast<size_t>(count));
         ancestors.insert(source.get());
-        if (owner) ancestors.insert(owner.get());
-        if (builder) ancestors.insert(builder.get());
+        if (owner)
+            ancestors.insert(owner.get());
+        if (builder)
+            ancestors.insert(builder.get());
         stack.push_back({std::move(source), std::move(sequence), std::move(owner),
                          std::move(builder), nodes, std::move(scope), on_path});
         return true;
     };
-    if (!push(std::move(result), {}, MenuPyRef(Py_NewRef(bridge->builder)),
-              &tree, bridge->contribution_id, true)) return false;
+    if (!push(std::move(result), {}, MenuPyRef(Py_NewRef(bridge->builder)), &tree,
+              bridge->contribution_id, true))
+        return false;
     while (!stack.empty()) {
         auto& frame = stack.back();
         if (frame.index == PySequence_Fast_GET_SIZE(frame.sequence.get())) {
             ancestors.erase(frame.source.get());
-            if (frame.owner) ancestors.erase(frame.owner.get());
-            if (frame.builder) ancestors.erase(frame.builder.get());
+            if (frame.owner)
+                ancestors.erase(frame.owner.get());
+            if (frame.builder)
+                ancestors.erase(frame.builder.get());
             stack.pop_back();
             continue;
         }
         MenuPyRef item(Py_NewRef(PySequence_Fast_GET_ITEM(frame.sequence.get(), frame.index++)));
-        if (!PyMapping_Check(item.get())) return fail("menu rows must be mappings");
-        if (ancestors.contains(item.get())) return fail("cyclic menu mapping");
+        if (!PyMapping_Check(item.get()))
+            return fail("menu rows must be mappings");
+        if (ancestors.contains(item.get()))
+            return fail("cyclic menu mapping");
         menu_nav::Node node;
         auto& row = node.row;
         if (!mapping_string(item.get(), "label", true, row.label) ||
             !mapping_string(item.get(), "icon", false, row.icon) ||
             !menu_payload(item.get(), row.payload_json) ||
             !mapping_flag(item.get(), "keep_menu_open", false, row.keep_open) ||
-            !mapping_flag(item.get(), "close_menu_before", false, row.close_before)) return false;
+            !mapping_flag(item.get(), "close_menu_before", false, row.close_before))
+            return false;
         MenuPyRef children;
         for (const char* alias : {"children", "items", "submenu"}) {
             MenuPyRef value(mapping_item(item.get(), alias));
-            if (!value && PyErr_Occurred()) return false;
-            if (!value || value.get() == Py_None) continue;
-            if (children && children.get() != value.get()) return fail("ambiguous submenu aliases");
-            if (!children) children = std::move(value);
+            if (!value && PyErr_Occurred())
+                return false;
+            if (!value || value.get() == Py_None)
+                continue;
+            if (children && children.get() != value.get())
+                return fail("ambiguous submenu aliases");
+            if (!children)
+                children = std::move(value);
         }
         node.submenu = bool(children);
         MenuPyRef command(mapping_item(item.get(), "command"));
-        if (!command && PyErr_Occurred()) return false;
+        if (!command && PyErr_Occurred())
+            return false;
         const bool callable = command && command.get() != Py_None;
-        if (callable && !PyCallable_Check(command.get())) return fail("menu command must be callable or None");
-        if (node.submenu && callable) return fail("submenu also has a leaf command");
+        if (callable && !PyCallable_Check(command.get()))
+            return fail("menu command must be callable or None");
+        if (node.submenu && callable)
+            return fail("submenu also has a leaf command");
         bool requested = true;
-        if (!mapping_flag(item.get(), "can_activate", true, requested)) return false;
+        if (!mapping_flag(item.get(), "can_activate", true, requested))
+            return false;
         row.can_activate = requested && (node.submenu || callable);
         MenuPyRef explicit_value(mapping_item(item.get(), "action_id"));
-        if (!explicit_value && PyErr_Occurred()) return false;
-        if (!explicit_value) explicit_value.reset(mapping_item(item.get(), "id"));
-        if (!explicit_value && PyErr_Occurred()) return false;
+        if (!explicit_value && PyErr_Occurred())
+            return false;
+        if (!explicit_value)
+            explicit_value.reset(mapping_item(item.get(), "id"));
+        if (!explicit_value && PyErr_Occurred())
+            return false;
         std::string identity;
-        if (explicit_value && !unicode_value(explicit_value.get(), true, identity)) return false;
-        if (identity.starts_with(menu_nav::navigation_prefix)) return fail("reserved menu action identity");
+        if (explicit_value && !unicode_value(explicit_value.get(), true, identity))
+            return false;
+        if (identity.starts_with(menu_nav::navigation_prefix))
+            return fail("reserved menu action identity");
         if (identity.empty()) {
             const auto append_field = [&identity](std::string_view value) {
                 identity += std::to_string(value.size()) + ":";
@@ -1607,57 +1662,73 @@ bool build_menu_snapshot(NativeMenuBridge* bridge, const menu_nav::State* select
             identity += "#" + std::to_string(occurrence);
         }
         node.key = hash_suffix(identity);
-        if (!frame.keys.insert(node.key).second) return fail("duplicate sibling menu identity");
+        if (!frame.keys.insert(node.key).second)
+            return fail("duplicate sibling menu identity");
         const auto scope = hash_suffix(frame.scope + "\n" + identity);
         row.action_id = "menu-action-" + scope;
         if (callable) {
             auto [entry, inserted] = actions.values.try_emplace(row.action_id, nullptr);
             Py_XDECREF(entry->second);
             entry->second = command.release();
-            if (actions.values.size() > kMaximumRememberedActions) return fail("menu action history exceeds its budget");
+            if (actions.values.size() > kMaximumRememberedActions)
+                return fail("menu action history exceeds its budget");
         }
         total_bytes += node.key.size() + row.label.size() + row.icon.size() + row.action_id.size() +
-                       row.payload_json.size() + bridge->contribution_id.size() + bridge->name.size() + bridge->icon.size();
-        if (total_bytes > kMaximumMenuSnapshotBytes) return fail("menu snapshot exceeds its byte budget");
+                       row.payload_json.size() + bridge->contribution_id.size() +
+                       bridge->name.size() + bridge->icon.size();
+        if (total_bytes > kMaximumMenuSnapshotBytes)
+            return fail("menu snapshot exceeds its byte budget");
         const auto depth = stack.size() - 1;
-        const bool on_path = frame.selected && row.can_activate && depth < desired_path.size() && desired_path[depth] == node.key;
+        const bool on_path = frame.selected && row.can_activate && depth < desired_path.size() &&
+                             desired_path[depth] == node.key;
         frame.nodes->push_back(std::move(node));
         tree_nodes.push_back(&frame.nodes->back());
         auto* nested = &frame.nodes->back().children;
         if (children) {
             MenuPyRef builder;
             if (PyCallable_Check(children.get())) {
-                if (!on_path) continue;
-                if (ancestors.contains(children.get())) return fail("cyclic submenu builder");
+                if (!on_path)
+                    continue;
+                if (ancestors.contains(children.get()))
+                    return fail("cyclic submenu builder");
                 builder = std::move(children);
                 children.reset(PyObject_CallNoArgs(builder.get()));
-                if (!children) return false;
+                if (!children)
+                    return false;
             }
-            if (!push(std::move(children), std::move(item), std::move(builder), nested, scope, on_path)) return false;
+            if (!push(std::move(children), std::move(item), std::move(builder), nested, scope,
+                      on_path))
+                return false;
         }
     }
     std::string error;
-    if (!navigation.replace(tree, error)) return fail(error.c_str());
+    if (!navigation.replace(tree, error))
+        return fail(error.c_str());
     const auto* page = &tree;
     for (const auto& key : navigation.path()) {
-        const auto found = std::find_if(page->begin(), page->end(), [&](const auto& node) { return node.key == key; });
-        if (found == page->end()) return fail("menu navigation path is inconsistent");
+        const auto found = std::find_if(page->begin(), page->end(),
+                                        [&](const auto& node) { return node.key == key; });
+        if (found == page->end())
+            return fail("menu navigation path is inconsistent");
         page = &found->children;
     }
     std::unordered_map<std::string, std::string> navigation_keys;
     const size_t offset = navigation.path().empty() ? 0 : 1;
-    if (offset) navigation_keys.emplace(navigation.rows().front().action_id, std::string{});
+    if (offset)
+        navigation_keys.emplace(navigation.rows().front().action_id, std::string{});
     for (size_t index = 0; index < page->size(); ++index)
         if ((*page)[index].submenu)
-            navigation_keys.emplace(navigation.rows()[index + offset].action_id, (*page)[index].key);
+            navigation_keys.emplace(navigation.rows()[index + offset].action_id,
+                                    (*page)[index].key);
     std::vector<NativeMenuRow> rows;
     rows.reserve(navigation.rows().size());
     for (const auto& row : navigation.rows())
-        rows.push_back({row.label, row.icon, row.action_id, row.payload_json,
-                        row.can_activate, row.keep_open, row.close_before});
+        rows.push_back({row.label, row.icon, row.action_id, row.payload_json, row.can_activate,
+                        row.keep_open, row.close_before});
     auto revision = bridge->revision;
     if (revision == 0 || bridge->rows != rows) {
-        if (revision == (std::numeric_limits<uint64_t>::max)()) return fail("menu snapshot revision exhausted");
+        if (revision == (std::numeric_limits<uint64_t>::max)())
+            return fail("menu snapshot revision exhausted");
         ++revision;
     }
     bridge->actions.swap(actions.values);
@@ -1670,9 +1741,8 @@ bool build_menu_snapshot(NativeMenuBridge* bridge, const menu_nav::State* select
 
 #if defined(SAO_PYHOST_HAS_CONTEXT_ENTITY_PROVIDER)
 int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
-    void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes,
-    std::uint32_t* out_count, std::uint64_t* out_revision,
-    loader::entity_snapshot_content_token_t* out_content_token,
+    void* rows, std::uint32_t capacity, std::uint32_t row_stride_bytes, std::uint32_t* out_count,
+    std::uint64_t* out_revision, loader::entity_snapshot_content_token_t* out_content_token,
     std::uint32_t* out_row_stride_bytes, void* user_data) {
     if (out_count == nullptr || out_revision == nullptr || out_content_token == nullptr ||
         out_row_stride_bytes == nullptr || user_data == nullptr ||
@@ -1693,28 +1763,24 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
         }
         *out_count = static_cast<std::uint32_t>(bridge->rows.size());
         *out_revision = bridge->revision;
-        *out_content_token = bridge->revision == loader::kInvalidEntitySnapshotContentToken
-                                 ? 1
-                                 : bridge->revision;
+        *out_content_token =
+            bridge->revision == loader::kInvalidEntitySnapshotContentToken ? 1 : bridge->revision;
         *out_row_stride_bytes =
-            bridge->rows.empty()
-                ? 0
-                : static_cast<std::uint32_t>(sizeof(loader::entity_menu_row_v2));
+            bridge->rows.empty() ? 0
+                                 : static_cast<std::uint32_t>(sizeof(loader::entity_menu_row_v2));
         if (capacity < bridge->rows.size()) {
             leave_callback(bridge->gate);
             drain_retired_contexts();
             PyGILState_Release(gil);
             return SAO_ERR_BUFFER_TOO_SMALL;
         }
-        if (!bridge->rows.empty() &&
-            row_stride_bytes < sizeof(loader::entity_menu_row_v2)) {
+        if (!bridge->rows.empty() && row_stride_bytes < sizeof(loader::entity_menu_row_v2)) {
             leave_callback(bridge->gate);
             drain_retired_contexts();
             PyGILState_Release(gil);
             return loader::SAO_PLUGINS_ERR_ABI_MISMATCH;
         }
-        if (!bridge->rows.empty() &&
-            row_stride_bytes % alignof(loader::entity_menu_row_v2) != 0) {
+        if (!bridge->rows.empty() && row_stride_bytes % alignof(loader::entity_menu_row_v2) != 0) {
             leave_callback(bridge->gate);
             drain_retired_contexts();
             PyGILState_Release(gil);
@@ -1737,8 +1803,8 @@ int32_t SAO_PLUGINS_CALL native_menu_snapshot_v2(
                 static_cast<std::uint8_t>(source.close_menu_before),
                 {},
             };
-            std::memcpy(static_cast<std::byte*>(rows) + index * row_stride_bytes,
-                        &row, sizeof(row));
+            std::memcpy(static_cast<std::byte*>(rows) + index * row_stride_bytes, &row,
+                        sizeof(row));
         }
         leave_callback(bridge->gate);
         drain_retired_contexts();
@@ -1812,8 +1878,7 @@ int32_t submit_python_action_result(PyObject* value, bool none_is_decline,
         Py_ssize_t result_size = 0;
         const char* result_json = PyUnicode_AsUTF8AndSize(serialized, &result_size);
         if (result_json == nullptr || result_size < 0 ||
-            static_cast<std::size_t>(result_size) >
-                loader::kMaximumEntityActionResultJsonBytes ||
+            static_cast<std::size_t>(result_size) > loader::kMaximumEntityActionResultJsonBytes ||
             std::memchr(result_json, '\0', static_cast<std::size_t>(result_size)) != nullptr ||
             !valid_menu_json(
                 std::string_view(result_json, static_cast<std::size_t>(result_size)))) {
@@ -1827,10 +1892,10 @@ int32_t submit_python_action_result(PyObject* value, bool none_is_decline,
     return status;
 }
 
-int32_t SAO_PLUGINS_CALL native_menu_action_v2(
-    const char* action_id_utf8, const char* payload_json_utf8,
-    loader::entity_action_result_sink_v2_fn result_sink, void* result_sink_user_data,
-    void* user_data) {
+int32_t SAO_PLUGINS_CALL native_menu_action_v2(const char* action_id_utf8,
+                                               const char* payload_json_utf8,
+                                               loader::entity_action_result_sink_v2_fn result_sink,
+                                               void* result_sink_user_data, void* user_data) {
     if (action_id_utf8 == nullptr || payload_json_utf8 == nullptr || result_sink == nullptr ||
         user_data == nullptr) {
         return SAO_ERR_INVALID_ARGUMENT;
@@ -1846,31 +1911,38 @@ int32_t SAO_PLUGINS_CALL native_menu_action_v2(
         return status;
     };
     try {
-        if (bridge->building) return finish(loader::SAO_PLUGINS_ERR_BUSY);
+        if (bridge->building)
+            return finish(loader::SAO_PLUGINS_ERR_BUSY);
         auto navigation = bridge->navigation;
         const auto navigation_result = navigation.activate(action_id_utf8);
         if (navigation_result != menu_nav::NavigationResult::not_navigation) {
             if (navigation_result == menu_nav::NavigationResult::stale)
-                return finish(submit_python_action_result(Py_None, true, result_sink, result_sink_user_data));
+                return finish(
+                    submit_python_action_result(Py_None, true, result_sink, result_sink_user_data));
             const auto route = bridge->navigation_keys.find(action_id_utf8);
-            if (route == bridge->navigation_keys.end()) return finish(SAO_ERR_OS_CALL_FAILED);
+            if (route == bridge->navigation_keys.end())
+                return finish(SAO_ERR_OS_CALL_FAILED);
             auto selection = bridge->navigation.path();
             if (route->second.empty()) {
-                if (selection.empty()) return finish(SAO_ERR_OS_CALL_FAILED);
+                if (selection.empty())
+                    return finish(SAO_ERR_OS_CALL_FAILED);
                 selection.pop_back();
-            } else selection.push_back(route->second);
+            } else
+                selection.push_back(route->second);
             if (!build_menu_snapshot(bridge, &navigation, &selection)) {
                 PyErr_Clear();
                 return finish(SAO_ERR_OS_CALL_FAILED);
             }
-            return finish(submit_python_action_result(Py_None, false, result_sink, result_sink_user_data));
+            return finish(
+                submit_python_action_result(Py_None, false, result_sink, result_sink_user_data));
         }
-        const auto visible = std::find_if(bridge->rows.begin(), bridge->rows.end(),
-            [action_id_utf8](const NativeMenuRow& row) {
+        const auto visible = std::find_if(
+            bridge->rows.begin(), bridge->rows.end(), [action_id_utf8](const NativeMenuRow& row) {
                 return row.can_activate && row.action_id == action_id_utf8;
             });
         const auto found = bridge->actions.find(action_id_utf8);
-        if (visible == bridge->rows.end() || found == bridge->actions.end() || found->second == nullptr)
+        if (visible == bridge->rows.end() || found == bridge->actions.end() ||
+            found->second == nullptr)
             return finish(
                 submit_python_action_result(Py_None, true, result_sink, result_sink_user_data));
         PyObject* result = nullptr;
@@ -1913,7 +1985,8 @@ int32_t SAO_PLUGINS_CALL native_action_v2(const char* action_id_utf8, const char
     };
     try {
         if (std::string_view(action_id_utf8).starts_with(menu_nav::navigation_prefix))
-            return finish(submit_python_action_result(Py_None, true, result_sink, result_sink_user_data));
+            return finish(
+                submit_python_action_result(Py_None, true, result_sink, result_sink_user_data));
         PyObject* action = PyUnicode_FromString(action_id_utf8);
         if (action == nullptr) {
             PyErr_Clear();
@@ -2254,8 +2327,8 @@ int PluginContext_init(PluginContextObject* self, PyObject* args, PyObject* kwds
     PyObject* new_base_dir = PyUnicode_FromString(dir_);
     PyObject* new_assets = PyUnicode_FromString((dir_s + "assets").c_str());
     PyObject* new_web = PyUnicode_FromString((dir_s + "web").c_str());
-    if (new_plugin_id == nullptr || new_base_dir == nullptr ||
-        new_assets == nullptr || new_web == nullptr) {
+    if (new_plugin_id == nullptr || new_base_dir == nullptr || new_assets == nullptr ||
+        new_web == nullptr) {
         Py_XDECREF(new_plugin_id);
         Py_XDECREF(new_base_dir);
         Py_XDECREF(new_assets);
@@ -2416,7 +2489,8 @@ struct UiBuilderMethod {
     size_t required;
 };
 
-#define SAO_PY_UI_METHOD(name) {name, reinterpret_cast<PyCFunction>(ui_build), METH_VARARGS | METH_KEYWORDS, nullptr}
+#define SAO_PY_UI_METHOD(name)                                                                     \
+    {name, reinterpret_cast<PyCFunction>(ui_build), METH_VARARGS | METH_KEYWORDS, nullptr}
 UiBuilderMethod ui_builder_methods[] = {
     {SAO_PY_UI_METHOD("panel"), {"title", "children"}, 0},
     {SAO_PY_UI_METHOD("section"), {"title", "children", "accent"}, 0},
@@ -2434,8 +2508,13 @@ UiBuilderMethod ui_builder_methods[] = {
     {SAO_PY_UI_METHOD("button"), {"label", "action", "style", "payload", "disabled"}, 2},
     {SAO_PY_UI_METHOD("input"), {"id", "value", "placeholder", "input_type", "width"}, 1},
     {SAO_PY_UI_METHOD("table"), {"columns", "rows", "highlight_key", "title"}, 0},
-    {SAO_PY_UI_METHOD("canvas"), {"width", "height", "ops", "bg", "x", "y", "z", "id", "draggable"}, 2},
-    {SAO_PY_UI_METHOD("rgba_frame"), {"id", "width", "height", "frame_rgba_b64", "x", "y", "z", "draggable", "frame_key", "hit_test", "premultiplied"}, 4},
+    {SAO_PY_UI_METHOD("canvas"),
+     {"width", "height", "ops", "bg", "x", "y", "z", "id", "draggable"},
+     2},
+    {SAO_PY_UI_METHOD("rgba_frame"),
+     {"id", "width", "height", "frame_rgba_b64", "x", "y", "z", "draggable", "frame_key",
+      "hit_test", "premultiplied"},
+     4},
     {SAO_PY_UI_METHOD("rect"), {"x", "y", "w", "h", "fill", "outline", "width"}, 4},
     {SAO_PY_UI_METHOD("oval"), {"x", "y", "w", "h", "fill", "outline", "width"}, 4},
     {SAO_PY_UI_METHOD("line"), {"x1", "y1", "x2", "y2", "fill", "width"}, 4},
@@ -2448,11 +2527,13 @@ PyObject* ui_build(PyObject* method, PyObject* args, PyObject* kwargs) {
     if (entry == nullptr)
         return nullptr;
     try {
-        const size_t count = static_cast<size_t>(std::find(entry->parameters.begin(),
-            entry->parameters.end(), nullptr) - entry->parameters.begin());
+        const size_t count = static_cast<size_t>(
+            std::find(entry->parameters.begin(), entry->parameters.end(), nullptr) -
+            entry->parameters.begin());
         const size_t positional = static_cast<size_t>(PyTuple_GET_SIZE(args));
         if (positional > count) {
-            PyErr_Format(PyExc_TypeError, "ui.%s() takes at most %zu arguments", entry->definition.ml_name, count);
+            PyErr_Format(PyExc_TypeError, "ui.%s() takes at most %zu arguments",
+                         entry->definition.ml_name, count);
             return nullptr;
         }
         UiObject request(PyDict_New());
@@ -2470,14 +2551,17 @@ PyObject* ui_build(PyObject* method, PyObject* args, PyObject* kwargs) {
             const char* name = PyUnicode_AsUTF8(key);
             if (name == nullptr)
                 return nullptr;
-            const auto match = std::find_if(entry->parameters.begin(), entry->parameters.begin() + count,
+            const auto match = std::find_if(
+                entry->parameters.begin(), entry->parameters.begin() + count,
                 [name](const char* parameter) { return std::strcmp(name, parameter) == 0; });
             if (match == entry->parameters.begin() + count) {
-                PyErr_Format(PyExc_TypeError, "ui.%s() got an unexpected keyword '%s'", entry->definition.ml_name, name);
+                PyErr_Format(PyExc_TypeError, "ui.%s() got an unexpected keyword '%s'",
+                             entry->definition.ml_name, name);
                 return nullptr;
             }
             if (PyDict_GetItemString(request.get(), name) != nullptr) {
-                PyErr_Format(PyExc_TypeError, "ui.%s() got multiple values for '%s'", entry->definition.ml_name, name);
+                PyErr_Format(PyExc_TypeError, "ui.%s() got multiple values for '%s'",
+                             entry->definition.ml_name, name);
                 return nullptr;
             }
             if (PyDict_SetItem(request.get(), key, value) != 0)
@@ -2485,7 +2569,8 @@ PyObject* ui_build(PyObject* method, PyObject* args, PyObject* kwargs) {
         }
         for (size_t index = 0; index < entry->required; ++index) {
             if (PyDict_GetItemString(request.get(), entry->parameters[index]) == nullptr) {
-                PyErr_Format(PyExc_TypeError, "ui.%s() missing argument '%s'", entry->definition.ml_name, entry->parameters[index]);
+                PyErr_Format(PyExc_TypeError, "ui.%s() missing argument '%s'",
+                             entry->definition.ml_name, entry->parameters[index]);
                 return nullptr;
             }
         }
@@ -2499,7 +2584,8 @@ PyObject* ui_build(PyObject* method, PyObject* args, PyObject* kwargs) {
         const auto input = nlohmann::json::parse(text, text + length);
         nlohmann::json node;
         std::string error;
-        if (!sao::plugins::script_ctx::script_ui_build(entry->definition.ml_name, input, node, error)) {
+        if (!sao::plugins::script_ctx::script_ui_build(entry->definition.ml_name, input, node,
+                                                       error)) {
             PyErr_SetString(PyExc_ValueError, error.c_str());
             return nullptr;
         }
@@ -2508,7 +2594,8 @@ PyObject* ui_build(PyObject* method, PyObject* args, PyObject* kwargs) {
         UiObject loads(json ? PyObject_GetAttrString(json.get(), "loads") : nullptr);
         if (!loads)
             return nullptr;
-        UiObject serialized(PyUnicode_DecodeUTF8(output.data(), static_cast<Py_ssize_t>(output.size()), "strict"));
+        UiObject serialized(
+            PyUnicode_DecodeUTF8(output.data(), static_cast<Py_ssize_t>(output.size()), "strict"));
         return serialized ? PyObject_CallOneArg(loads.get(), serialized.get()) : nullptr;
     } catch (const std::bad_alloc&) {
         return PyErr_NoMemory();
@@ -2535,7 +2622,8 @@ PyObject* PluginContext_get_ui_attr(PluginContextObject* self, void*) {
         if (!method)
             return nullptr;
         UiObject callable(PyCFunction_NewEx(&entry.definition, method.get(), nullptr));
-        if (!callable || PyObject_SetAttrString(builder.get(), entry.definition.ml_name, callable.get()) != 0)
+        if (!callable ||
+            PyObject_SetAttrString(builder.get(), entry.definition.ml_name, callable.get()) != 0)
             return nullptr;
     }
     if (PyDict_SetItemString(self->extras, "ui", builder.get()) != 0)
@@ -2583,7 +2671,6 @@ PyObject* PluginContext_get_owner_attr(PluginContextObject* self, void*) {
     }
     return owner;
 }
-
 
 PyGetSetDef PluginContext_getset[] = {
     {"plugin_id", reinterpret_cast<getter>(PluginContext_get_plugin_id_attr), nullptr, nullptr,
@@ -2685,9 +2772,11 @@ PyObject* PluginContext_register_ui_panel(PluginContextObject* self, PyObject* a
         bridge->panel_id = panel_id;
         bridge->owner_thread = std::this_thread::get_id();
         const sao_sdk_status_t rc = sao_sdk_ui_register_panel(
-            ctx, panel_id, panel_id, render == Py_None ? reinterpret_cast<const uint8_t*>(json_utf8) : nullptr,
+            ctx, panel_id, panel_id,
+            render == Py_None ? reinterpret_cast<const uint8_t*>(json_utf8) : nullptr,
             render == Py_None ? std::strlen(json_utf8) : 0,
-            bridge->callback == nullptr && bridge->render == nullptr ? nullptr : native_panel_action,
+            bridge->callback == nullptr && bridge->render == nullptr ? nullptr
+                                                                     : native_panel_action,
             bridge.get(), &native_panel);
         Py_DECREF(json);
         if (rc != SAO_SDK_OK) {
@@ -3324,7 +3413,9 @@ PyObject* PluginContext_request_redraw_native(PluginContextObject* self, PyObjec
         return nullptr;
     bool matched = false;
     PyObject* payload = PyDict_New();
-    if (payload == nullptr || !set_dict_item_steal(payload, "reason", PyUnicode_FromString(reason == nullptr ? "" : reason))) {
+    if (payload == nullptr ||
+        !set_dict_item_steal(payload, "reason",
+                             PyUnicode_FromString(reason == nullptr ? "" : reason))) {
         Py_XDECREF(payload);
         return nullptr;
     }
@@ -3353,6 +3444,161 @@ PyObject* PluginContext_request_redraw_native(PluginContextObject* self, PyObjec
     }
     Py_RETURN_NONE;
 }
+
+PyObject* PluginContext_set_overlay(PluginContextObject* self, PyObject* args) {
+    if (!require_active_context(self))
+        return nullptr;
+    const char* surface = nullptr;
+    PyObject* spec = nullptr;
+    if (!PyArg_ParseTuple(args, "sO", &surface, &spec))
+        return nullptr;
+    if (self->loader_context == nullptr)
+        return status_error("set_overlay", loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    PyObject* encoded = json_stringify(spec, true);
+    if (encoded == nullptr)
+        return nullptr;
+    Py_ssize_t size = 0;
+    const char* text = PyUnicode_AsUTF8AndSize(encoded, &size);
+    int32_t status = text == nullptr
+                         ? SAO_ERR_INVALID_ARGUMENT
+                         : loader::sao_plugins_ctx_set_overlay(self->loader_context, surface, text);
+    {
+        PreservePythonError error;
+        Py_DECREF(encoded);
+    }
+    if (status != SAO_OK)
+        return status_error("set_overlay", status);
+    Py_RETURN_TRUE;
+}
+
+PyObject* PluginContext_clear_overlay(PluginContextObject* self, PyObject* args) {
+    if (!require_active_context(self))
+        return nullptr;
+    const char* surface = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &surface))
+        return nullptr;
+    if (self->loader_context == nullptr)
+        return status_error("clear_overlay", loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+    const int32_t status = loader::sao_plugins_ctx_clear_overlay(self->loader_context, surface);
+    if (status != SAO_OK)
+        return status_error("clear_overlay", status);
+    Py_RETURN_TRUE;
+}
+
+PyObject* PluginContext_engine_call(PluginContextObject* self, PyObject* args, PyObject* kwds) {
+    if (!require_active_context(self))
+        return nullptr;
+    static const char* names[] = {"name", "args", "callback_channel", nullptr};
+    const char* name = nullptr;
+    PyObject* call_args = Py_None;
+    const char* callback_channel = nullptr;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|Oz", const_cast<char**>(names), &name,
+                                     &call_args, &callback_channel)) {
+        return nullptr;
+    }
+    if (!PyDict_Check(call_args) && call_args != Py_None) {
+        PyErr_SetString(PyExc_TypeError, "engine_call args must be a dict");
+        return nullptr;
+    }
+    SaoSdkContext* sdk = native_context(self);
+    if (sdk == nullptr)
+        return status_error("engine_call", loader::SAO_PLUGINS_ERR_UNSUPPORTED);
+
+    try {
+        nlohmann::ordered_json envelope = nlohmann::ordered_json::object();
+        envelope["name"] = name;
+        if (call_args == Py_None) {
+            envelope["args"] = nlohmann::ordered_json::object();
+        } else {
+            PyObject* encoded = json_stringify(call_args);
+            if (encoded == nullptr)
+                return nullptr;
+            Py_ssize_t size = 0;
+            const char* text = PyUnicode_AsUTF8AndSize(encoded, &size);
+            if (text == nullptr) {
+                PreservePythonError error;
+                Py_DECREF(encoded);
+                return nullptr;
+            }
+            try {
+                envelope["args"] = nlohmann::json::parse(text, text + size);
+            } catch (...) {
+                PreservePythonError error;
+                Py_DECREF(encoded);
+                throw;
+            }
+            Py_DECREF(encoded);
+            if (!envelope["args"].is_object()) {
+                PyErr_SetString(PyExc_TypeError, "engine_call args must encode an object");
+                return nullptr;
+            }
+        }
+        if (callback_channel != nullptr && callback_channel[0] != '\0')
+            envelope["callback_channel"] = callback_channel;
+        const std::string payload = envelope.dump();
+        const size_t output_capacity = sdk_binding::kMaximumBindingJsonBytes + 1U;
+        std::unique_ptr<char[]> output{new (std::nothrow) char[output_capacity]};
+        if (!output)
+            return PyErr_NoMemory();
+        output[0] = '\0';
+        size_t required = 0;
+        sdk_binding::sdk_context_call_request request{};
+        request.args_json_utf8 = payload.data();
+        request.args_size = payload.size();
+        request.out_result_json_utf8 = output.get();
+        request.out_capacity = output_capacity;
+        request.out_required = &required;
+        const int32_t status = sdk_binding::sao_plugins_sdk_context_dispatch(
+            sdk, sdk_binding::sdk_method_id::method_engine_call, &request);
+        if (status != SAO_OK)
+            return status_error("engine_call", status);
+        if (required <= 1 || required > output_capacity || output[required - 1] != '\0') {
+            PyErr_SetString(PyExc_RuntimeError, "engine_call returned an invalid result size");
+            return nullptr;
+        }
+        const auto response =
+            nlohmann::json::parse(output.get(), output.get() + required - 1, nullptr, false);
+        const auto status_node = response.is_discarded() || !response.is_object()
+                                     ? response.end()
+                                     : response.find("status");
+        const auto result_node = response.is_discarded() || !response.is_object()
+                                     ? response.end()
+                                     : response.find("result");
+        if (response.is_discarded() || !response.is_object() || status_node == response.end() ||
+            result_node == response.end() ||
+            (!status_node->is_number_integer() && !status_node->is_number_unsigned())) {
+            PyErr_SetString(PyExc_RuntimeError, "engine_call returned a malformed envelope");
+            return nullptr;
+        }
+        int64_t inner_status = 0;
+        if (status_node->is_number_unsigned()) {
+            const uint64_t unsigned_status = status_node->get<uint64_t>();
+            if (unsigned_status > static_cast<uint64_t>((std::numeric_limits<int32_t>::max)())) {
+                PyErr_SetString(PyExc_RuntimeError, "engine_call returned an invalid status");
+                return nullptr;
+            }
+            inner_status = static_cast<int64_t>(unsigned_status);
+        } else {
+            inner_status = status_node->get<int64_t>();
+        }
+        if (inner_status < (std::numeric_limits<int32_t>::min)() ||
+            inner_status > (std::numeric_limits<int32_t>::max)()) {
+            PyErr_SetString(PyExc_RuntimeError, "engine_call returned an invalid status");
+            return nullptr;
+        }
+        if (inner_status != 0)
+            return status_error("engine_call", static_cast<int32_t>(inner_status));
+        const std::string result_text = result_node->dump();
+        return parse_action_payload(result_text.c_str());
+    } catch (const nlohmann::json::exception& error) {
+        PyErr_Format(PyExc_ValueError, "engine_call JSON error: %s", error.what());
+        return nullptr;
+    } catch (...) {
+        PyErr_SetString(PyExc_RuntimeError, "engine_call failed");
+        return nullptr;
+    }
+}
+
 PyObject* PluginContext_get_setting(PluginContextObject* self, PyObject* args) {
     const char* key = nullptr;
     PyObject* default_val = Py_None;
@@ -3541,8 +3787,12 @@ PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) tr
     if (root == nullptr)
         return nullptr;
     std::wstring root_path;
-    try { root_path.assign(root, static_cast<size_t>(root_length)); }
-    catch (...) { PyMem_Free(root); throw; }
+    try {
+        root_path.assign(root, static_cast<size_t>(root_length));
+    } catch (...) {
+        PyMem_Free(root);
+        throw;
+    }
     PyMem_Free(root);
     if (root_path.find(L'\0') != std::wstring::npos) {
         PyErr_SetString(PyExc_ValueError, "load_local: embedded NUL in plugin root (status -1)");
@@ -3553,8 +3803,8 @@ PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) tr
     std::string diagnostic;
     int32_t status = SAO_OK;
 #if defined(SAO_PYHOST_HAS_CTX_SURFACE)
-    status = script_ctx::runtime_bridge_resolve_local(root_path.c_str(), rel,
-                                                     &absolute, &exists, &diagnostic);
+    status = script_ctx::runtime_bridge_resolve_local(root_path.c_str(), rel, &absolute, &exists,
+                                                      &diagnostic);
 #else
     const auto relative = std::filesystem::u8path(rel);
     const auto base = std::filesystem::weakly_canonical(root_path);
@@ -3575,8 +3825,8 @@ PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) tr
     }
 #endif
     if (status != SAO_OK) {
-        PyErr_Format(PyExc_RuntimeError, "load_local failed with status %d: %s",
-                     status, diagnostic.c_str());
+        PyErr_Format(PyExc_RuntimeError, "load_local failed with status %d: %s", status,
+                     diagnostic.c_str());
         return nullptr;
     }
     if (!exists)
@@ -3604,7 +3854,8 @@ PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) tr
 #endif
         if (script) {
             if (self->loader_context != nullptr)
-                loader::sao_plugins_ctx_log(self->loader_context,
+                loader::sao_plugins_ctx_log(
+                    self->loader_context,
                     "load_local: unsupported foreign script module in CPython; no proxy adapter");
             Py_RETURN_NONE;
         }
@@ -3697,8 +3948,8 @@ PyObject* PluginContext_load_local(PluginContextObject* self, PyObject* args) tr
     Py_DECREF(res);
     return mod;
 } catch (const std::exception& error) {
-    PyErr_Format(PyExc_RuntimeError, "load_local failed with status %d: %s",
-                 SAO_ERR_OS_CALL_FAILED, error.what());
+    PyErr_Format(PyExc_RuntimeError, "load_local failed with status %d: %s", SAO_ERR_OS_CALL_FAILED,
+                 error.what());
     return nullptr;
 } catch (...) {
     PyErr_SetString(PyExc_RuntimeError, "load_local: internal error (status -20)");
@@ -3740,7 +3991,8 @@ PyObject* PluginContext_open_window(PluginContextObject* self, PyObject* args, P
         }
         if (!rendered)
             return nullptr;
-        return explicit_status(sao_sdk_panel_open(panel->sdk, panel->panel, width, height), panel_id);
+        return explicit_status(sao_sdk_panel_open(panel->sdk, panel->panel, width, height),
+                               panel_id);
     }
     const int32_t status =
         self->loader_context == nullptr
@@ -3884,12 +4136,11 @@ PyObject* PluginContext_register_menu_surface(PluginContextObject* self, PyObjec
     if (!hooks.empty())
         metadata["hooks"] = std::move(hooks);
     const std::string metadata_text = metadata.dump();
-    const int32_t status =
-        self->loader_context == nullptr
-            ? loader::SAO_PLUGINS_ERR_UNSUPPORTED
-            : loader::sao_plugins_ctx_register_menu_surface(
-                  self->loader_context, surface_id, metadata_text.c_str(),
-                  static_cast<float>(priority));
+    const int32_t status = self->loader_context == nullptr
+                               ? loader::SAO_PLUGINS_ERR_UNSUPPORTED
+                               : loader::sao_plugins_ctx_register_menu_surface(
+                                     self->loader_context, surface_id, metadata_text.c_str(),
+                                     static_cast<float>(priority));
     if (status != SAO_OK)
         return status_error("menu surface registration", status);
     return PyUnicode_FromString(surface_id);
@@ -4202,13 +4453,17 @@ PyObject* PluginContext_ensure_requirements(PluginContextObject* self, PyObject*
 }
 
 bool compositor_uint(PyObject* value, uint64_t maximum, uint64_t& out) {
-    if (!value) { out = 0; return true; }
+    if (!value) {
+        out = 0;
+        return true;
+    }
     if (!PyLong_Check(value) || PyBool_Check(value)) {
         PyErr_SetString(PyExc_TypeError, "texture handle and dimensions must be integers");
         return false;
     }
     out = PyLong_AsUnsignedLongLong(value);
-    if (PyErr_Occurred()) return false;
+    if (PyErr_Occurred())
+        return false;
     if (out > maximum) {
         PyErr_SetString(PyExc_OverflowError, "texture integer is out of range");
         return false;
@@ -4217,71 +4472,94 @@ bool compositor_uint(PyObject* value, uint64_t maximum, uint64_t& out) {
 }
 
 PyObject* PluginContext_set_compositor_layer_mmf_source(PluginContextObject* self, PyObject* args,
-                                                       PyObject* kwds) {
-    if (!require_active_context(self)) return nullptr;
+                                                        PyObject* kwds) {
+    if (!require_active_context(self))
+        return nullptr;
     static const char* names[] = {"name", "mmf", nullptr};
     const char* name = nullptr;
     const char* mmf = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ss", const_cast<char**>(names), &name, &mmf)) return nullptr;
-    const auto status = loader::sao_plugins_ctx_set_compositor_layer_mmf_source(self->loader_context, name, mmf);
-    if (status != SAO_OK) return status_error("compositor MMF source", status);
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ss", const_cast<char**>(names), &name, &mmf))
+        return nullptr;
+    const auto status =
+        loader::sao_plugins_ctx_set_compositor_layer_mmf_source(self->loader_context, name, mmf);
+    if (status != SAO_OK)
+        return status_error("compositor MMF source", status);
     Py_RETURN_TRUE;
 }
 
-PyObject* PluginContext_set_compositor_layer_shared_texture_source(PluginContextObject* self, PyObject* args,
-                                                                  PyObject* kwds) {
-    if (!require_active_context(self)) return nullptr;
+PyObject* PluginContext_set_compositor_layer_shared_texture_source(PluginContextObject* self,
+                                                                   PyObject* args, PyObject* kwds) {
+    if (!require_active_context(self))
+        return nullptr;
     static const char* names[] = {"name", "handle", "width", "height", nullptr};
     const char* name = nullptr;
     PyObject* handle_object = nullptr;
     PyObject* width_object = nullptr;
     PyObject* height_object = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO|OO", const_cast<char**>(names),
-                                    &name, &handle_object, &width_object, &height_object)) return nullptr;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO|OO", const_cast<char**>(names), &name,
+                                     &handle_object, &width_object, &height_object))
+        return nullptr;
     uint64_t handle = 0, width = 0, height = 0;
     if (!compositor_uint(handle_object, (std::numeric_limits<uint64_t>::max)(), handle) ||
         !compositor_uint(width_object, (std::numeric_limits<uint32_t>::max)(), width) ||
-        !compositor_uint(height_object, (std::numeric_limits<uint32_t>::max)(), height)) return nullptr;
-    if ((handle != 0 && (width == 0 || height == 0)) || (handle == 0 && (width != 0 || height != 0))) {
-        PyErr_SetString(PyExc_ValueError, "texture source needs positive dimensions; clear uses handle=width=height=0");
+        !compositor_uint(height_object, (std::numeric_limits<uint32_t>::max)(), height))
+        return nullptr;
+    if ((handle != 0 && (width == 0 || height == 0)) ||
+        (handle == 0 && (width != 0 || height != 0))) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "texture source needs positive dimensions; clear uses handle=width=height=0");
         return nullptr;
     }
     const auto status = loader::sao_plugins_ctx_set_compositor_layer_shared_texture_source(
-        self->loader_context, name, handle, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-    if (status != SAO_OK) return status_error("compositor shared texture source", status);
+        self->loader_context, name, handle, static_cast<uint32_t>(width),
+        static_cast<uint32_t>(height));
+    if (status != SAO_OK)
+        return status_error("compositor shared texture source", status);
     Py_RETURN_TRUE;
 }
 
 PyObject* PluginContext_compositor_gpu_interop_available(PluginContextObject* self, PyObject*) {
-    if (!require_active_context(self)) return nullptr;
+    if (!require_active_context(self))
+        return nullptr;
     bool available = false;
-    const auto status = loader::sao_plugins_ctx_compositor_gpu_interop_available(self->loader_context, &available);
-    if (status != SAO_OK) return status_error("compositor GPU interop query", status);
+    const auto status =
+        loader::sao_plugins_ctx_compositor_gpu_interop_available(self->loader_context, &available);
+    if (status != SAO_OK)
+        return status_error("compositor GPU interop query", status);
     return PyBool_FromLong(available);
 }
 
-PyObject* PluginContext_compositor_layer_shared_texture_active(PluginContextObject* self, PyObject* args,
-                                                             PyObject* kwds) {
-    if (!require_active_context(self)) return nullptr;
+PyObject* PluginContext_compositor_layer_shared_texture_active(PluginContextObject* self,
+                                                               PyObject* args, PyObject* kwds) {
+    if (!require_active_context(self))
+        return nullptr;
     static const char* names[] = {"name", nullptr};
     const char* name = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", const_cast<char**>(names), &name)) return nullptr;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", const_cast<char**>(names), &name))
+        return nullptr;
     bool active = false;
-    const auto status = loader::sao_plugins_ctx_compositor_layer_shared_texture_active(self->loader_context, name, &active);
-    if (status != SAO_OK) return status_error("compositor shared texture query", status);
+    const auto status = loader::sao_plugins_ctx_compositor_layer_shared_texture_active(
+        self->loader_context, name, &active);
+    if (status != SAO_OK)
+        return status_error("compositor shared texture query", status);
     return PyBool_FromLong(active);
 }
 
 // ── PyMethodDef 表 ──────────────────────────────────────────
 
 PyMethodDef PluginContext_methods[] = {
-    {"set_compositor_layer_mmf_source", reinterpret_cast<PyCFunction>(PluginContext_set_compositor_layer_mmf_source),
+    {"set_compositor_layer_mmf_source",
+     reinterpret_cast<PyCFunction>(PluginContext_set_compositor_layer_mmf_source),
      METH_VARARGS | METH_KEYWORDS, "Set a compositor MMF source."},
-    {"set_compositor_layer_shared_texture_source", reinterpret_cast<PyCFunction>(PluginContext_set_compositor_layer_shared_texture_source),
+    {"set_compositor_layer_shared_texture_source",
+     reinterpret_cast<PyCFunction>(PluginContext_set_compositor_layer_shared_texture_source),
      METH_VARARGS | METH_KEYWORDS, "Set or clear a shared texture source."},
-    {"compositor_gpu_interop_available", reinterpret_cast<PyCFunction>(PluginContext_compositor_gpu_interop_available),
-     METH_NOARGS, "Query compositor GPU interop."},
-    {"compositor_layer_shared_texture_active", reinterpret_cast<PyCFunction>(PluginContext_compositor_layer_shared_texture_active),
+    {"compositor_gpu_interop_available",
+     reinterpret_cast<PyCFunction>(PluginContext_compositor_gpu_interop_available), METH_NOARGS,
+     "Query compositor GPU interop."},
+    {"compositor_layer_shared_texture_active",
+     reinterpret_cast<PyCFunction>(PluginContext_compositor_layer_shared_texture_active),
      METH_VARARGS | METH_KEYWORDS, "Query a layer shared texture source."},
     // 核心 8 SDK 函数 (spec 明列):
     {"register_ui_panel", reinterpret_cast<PyCFunction>(PluginContext_register_ui_panel),
@@ -4324,6 +4602,12 @@ PyMethodDef PluginContext_methods[] = {
      "Dismiss the current notification."},
     {"request_redraw", reinterpret_cast<PyCFunction>(PluginContext_request_redraw_native),
      METH_VARARGS, "Request UI redraw."},
+    {"set_overlay", reinterpret_cast<PyCFunction>(PluginContext_set_overlay), METH_VARARGS,
+     "Replace an owner-scoped overlay surface."},
+    {"clear_overlay", reinterpret_cast<PyCFunction>(PluginContext_clear_overlay), METH_VARARGS,
+     "Clear an owner-scoped overlay surface."},
+    {"engine_call", reinterpret_cast<PyCFunction>(PluginContext_engine_call),
+     METH_VARARGS | METH_KEYWORDS, "Call the reflective native engine surface."},
     {"get_setting", reinterpret_cast<PyCFunction>(PluginContext_get_setting), METH_VARARGS,
      "Get a setting."},
     {"set_setting", reinterpret_cast<PyCFunction>(PluginContext_set_setting), METH_VARARGS,
@@ -4589,34 +4873,33 @@ extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL sao_plugins_pyhost_register_
         PyObject* runtime_mod = PyModule_New("act_platform.runtime");
         if (runtime_mod != nullptr) {
             PyObject* globals = PyModule_GetDict(runtime_mod);
-            const char* runtime_src =
-                "import types\n"
-                "def ensure_act_event_bus(owner):\n"
-                "    bus = getattr(owner, '_event_bus', None)\n"
-                "    if bus is None:\n"
-                "        bus = types.SimpleNamespace()\n"
-                "        bus.subscribe = lambda *a, **kw: None\n"
-                "        bus.unsubscribe = lambda *a, **kw: None\n"
-                "        bus.publish = lambda *a, **kw: None\n"
-                "        bus.emit = lambda *a, **kw: None\n"
-                "        try:\n"
-                "            setattr(owner, '_event_bus', bus)\n"
-                "        except Exception:\n"
-                "            pass\n"
-                "    return bus\n"
-                "\n"
-                "def ensure_act_plugin_manager(owner, load=False):\n"
-                "    pm = getattr(owner, '_plugin_manager', None)\n"
-                "    if pm is None:\n"
-                "        pm = types.SimpleNamespace()\n"
-                "        pm.get_plugin = lambda name: None\n"
-                "        pm.list_plugins = lambda: []\n"
-                "        pm.register = lambda *a, **kw: None\n"
-                "        try:\n"
-                "            setattr(owner, '_plugin_manager', pm)\n"
-                "        except Exception:\n"
-                "            pass\n"
-                "    return pm\n";
+            const char* runtime_src = "import types\n"
+                                      "def ensure_act_event_bus(owner):\n"
+                                      "    bus = getattr(owner, '_event_bus', None)\n"
+                                      "    if bus is None:\n"
+                                      "        bus = types.SimpleNamespace()\n"
+                                      "        bus.subscribe = lambda *a, **kw: None\n"
+                                      "        bus.unsubscribe = lambda *a, **kw: None\n"
+                                      "        bus.publish = lambda *a, **kw: None\n"
+                                      "        bus.emit = lambda *a, **kw: None\n"
+                                      "        try:\n"
+                                      "            setattr(owner, '_event_bus', bus)\n"
+                                      "        except Exception:\n"
+                                      "            pass\n"
+                                      "    return bus\n"
+                                      "\n"
+                                      "def ensure_act_plugin_manager(owner, load=False):\n"
+                                      "    pm = getattr(owner, '_plugin_manager', None)\n"
+                                      "    if pm is None:\n"
+                                      "        pm = types.SimpleNamespace()\n"
+                                      "        pm.get_plugin = lambda name: None\n"
+                                      "        pm.list_plugins = lambda: []\n"
+                                      "        pm.register = lambda *a, **kw: None\n"
+                                      "        try:\n"
+                                      "            setattr(owner, '_plugin_manager', pm)\n"
+                                      "        except Exception:\n"
+                                      "            pass\n"
+                                      "    return pm\n";
             PyObject* res = PyRun_String(runtime_src, Py_file_input, globals, globals);
             if (res != nullptr) {
                 Py_DECREF(res);
@@ -4717,8 +5000,61 @@ sao_plugins_pyhost_ctx_try_teardown_native(void* pyobject) {
     }
 }
 
-extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
-sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context) {
+namespace {
+
+bool bounded_identity_length(const char* value, size_t maximum, size_t& length) noexcept {
+    if (value == nullptr)
+        return false;
+    length = 0;
+    while (length <= maximum && value[length] != '\0')
+        ++length;
+    return length != 0 && length <= maximum;
+}
+
+bool generated_helper_identity_matches(const char* loader_id, const char* physical_id) noexcept {
+    constexpr std::string_view prefix = "sao_cp_helper_";
+    constexpr std::string_view hex = "0123456789abcdef";
+    constexpr size_t maximum_owner_bytes = 64U * 1024U;
+    size_t owner_size = 0;
+    if (!bounded_identity_length(loader_id, maximum_owner_bytes, owner_size))
+        return false;
+    const size_t expected_size = prefix.size() + owner_size * 2U + 54U;
+    size_t physical_size = 0;
+    if (!bounded_identity_length(physical_id, expected_size, physical_size) ||
+        physical_size != expected_size ||
+        std::memcmp(physical_id, prefix.data(), prefix.size()) != 0) {
+        return false;
+    }
+    size_t offset = prefix.size();
+    for (size_t index = 0; index < owner_size; ++index) {
+        const unsigned char byte = static_cast<unsigned char>(loader_id[index]);
+        if (physical_id[offset++] != hex[byte >> 4U] ||
+            physical_id[offset++] != hex[byte & 0x0fU]) {
+            return false;
+        }
+    }
+    const auto consume_word = [&](char marker, bool require_nonzero) {
+        if (offset + 18U > physical_size || physical_id[offset++] != '_' ||
+            physical_id[offset++] != marker) {
+            return false;
+        }
+        bool nonzero = false;
+        for (size_t index = 0; index < 16U; ++index) {
+            const char digit = physical_id[offset++];
+            if (hex.find(digit) == std::string_view::npos)
+                return false;
+            nonzero = nonzero || digit != '0';
+        }
+        return !require_nonzero || nonzero;
+    };
+    return consume_word('g', true) && consume_word('p', false) && consume_word('i', true) &&
+           offset == physical_size;
+}
+
+} // namespace
+
+int32_t bind_loader_context(void* pyobject, void* loader_context,
+                            const char* module_identity) noexcept {
     auto* canonical = static_cast<loader::plugin_context_t*>(loader_context);
     bool lease_held = false;
     try {
@@ -4747,7 +5083,14 @@ sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context)
             loader::plugin_context_release_host_lease(canonical);
             return SAO_ERR_INVALID_ARGUMENT;
         }
-        if (loader_plugin_id == nullptr || std::strcmp(loader_plugin_id, python_plugin_id) != 0) {
+        const bool identity_matches =
+            module_identity != nullptr
+                ? module_identity[0] != '\0' && loader_plugin_id != nullptr &&
+                      generated_helper_identity_matches(loader_plugin_id, module_identity) &&
+                      std::strcmp(module_identity, python_plugin_id) == 0
+                : loader_plugin_id != nullptr &&
+                      std::strcmp(loader_plugin_id, python_plugin_id) == 0;
+        if (!identity_matches) {
             loader::plugin_context_release_host_lease(canonical);
             return SAO_ERR_INVALID_ARGUMENT;
         }
@@ -4759,6 +5102,17 @@ sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context)
             loader::plugin_context_release_host_lease(canonical);
         return SAO_ERR_OS_CALL_FAILED;
     }
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_ctx_bind_loader_context(void* pyobject, void* loader_context) {
+    return bind_loader_context(pyobject, loader_context, nullptr);
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_ctx_bind_loader_context_module(void* pyobject, void* loader_context,
+                                                  const char* module_id_utf8) {
+    return bind_loader_context(pyobject, loader_context, module_id_utf8);
 }
 
 int32_t pyhost_ctx_begin_enable_resources(void* pyobject, uint64_t* out_checkpoint) noexcept {
@@ -4900,6 +5254,12 @@ sao_plugins_pyhost_ctx_try_teardown_native(void* /*pyobject*/) {
 
 extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
 sao_plugins_pyhost_ctx_bind_loader_context(void* /*pyobject*/, void* /*loader_context*/) {
+    return SAO_ERR_NOT_IMPLEMENTED;
+}
+
+extern "C" SAO_PLUGINS_API int32_t SAO_PLUGINS_CALL
+sao_plugins_pyhost_ctx_bind_loader_context_module(void* /*pyobject*/, void* /*loader_context*/,
+                                                  const char* /*module_id_utf8*/) {
     return SAO_ERR_NOT_IMPLEMENTED;
 }
 
